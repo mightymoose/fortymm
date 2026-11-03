@@ -10,22 +10,31 @@ end a key's life on its device, but what it signed still verifies. A device
 that registers its key again, with a fresh proof, is back, so the key is
 live again. Revoking says the device was compromised: the key verifies
 nothing more, and nothing brings it back.
-
-This module is the only writer of signed_out_at and revoked_at.
 """
 
 import unicodedata
 from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import Final
 
-from sqlalchemy import ColumnElement, case, func, null, select, update
+from sqlalchemy import (
+    ColumnElement,
+    and_,
+    case,
+    func,
+    literal,
+    null,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
-from fortymm_api.accounts import AccountId
-from fortymm_api.models import SigningKey
+from fortymm_api.accounts import AccountId, Email
+from fortymm_api.models import Account, Player, PlayerManager, SigningKey
 from fortymm_api.services.sessions import (
     end_session,
     lock_account_for_write,
@@ -39,6 +48,13 @@ from fortymm_api.signing_keys import InvalidKey, KeyId, SigningPublicKey
 LIVE_KEY_LIMIT: Final = 20
 # The CHECK label_length repeats it.
 LABEL_MAX_LENGTH: Final = 50
+KEY_PAGE_SIZE: Final = 50
+
+
+class KeyState(StrEnum):
+    LIVE = "live"
+    SIGNED_OUT = "signed_out"
+    REVOKED = "revoked"
 
 
 @dataclass(frozen=True)
@@ -64,6 +80,37 @@ class VerificationKey:
     signed_out_at: datetime | None
 
 
+@dataclass(frozen=True)
+class KeyAccount:
+    id: AccountId
+    email: Email | None
+    display_name: str | None
+
+
+@dataclass(frozen=True)
+class Revocation:
+    at: datetime
+    by: AccountId
+    by_email: Email | None
+
+
+@dataclass(frozen=True)
+class AdminSigningKey:
+    id: KeyId
+    label: str
+    created_at: datetime
+    state: KeyState
+    signed_out_at: datetime | None
+    revocation: Revocation | None
+    account: KeyAccount
+
+
+@dataclass(frozen=True)
+class KeyPage:
+    keys: list[AdminSigningKey]
+    has_more: bool
+
+
 class InvalidDeviceLabel(Exception):
     """The label is empty, longer than LABEL_MAX_LENGTH after trimming, or
     holds a control character. `create_app()` answers 422."""
@@ -86,6 +133,10 @@ class KeyRegisteredElsewhere(Exception):
 
 class SigningKeyNotFound(Exception):
     """The account owns no key with the id. `create_app()` answers 404."""
+
+
+class UnknownSigningKey(Exception):
+    """No key has the id. `create_app()` answers 404."""
 
 
 def register_key(
@@ -175,15 +226,26 @@ def revoke_key(session: Session, account: AccountId, key: KeyId) -> AccountSigni
     account owns the key, so another account's key looks like no key.
     """
     lock_account_for_write(session, account)
-    row = session.scalar(
-        update(SigningKey)
-        .where(SigningKey.id == key, SigningKey.account_id == account)
-        .values(revoked_at=func.coalesce(SigningKey.revoked_at, func.now()))
-        .returning(SigningKey)
+    row = _revoke(
+        session, (SigningKey.id == key) & (SigningKey.account_id == account), account
     )
     if row is None:
         raise SigningKeyNotFound
     return _account_key(row)
+
+
+def find_keys(session: Session, search: str = "") -> KeyPage:
+    found = _admin_keys(session, search=search, limit=KEY_PAGE_SIZE + 1)
+    return KeyPage(found[:KEY_PAGE_SIZE], has_more=len(found) > KEY_PAGE_SIZE)
+
+
+def revoke_any_key(session: Session, actor: AccountId, key: KeyId) -> AdminSigningKey:
+    # No lock on the key's account: an administrator doesn't write as it, and
+    # the UPDATE's row lock already takes turns with adoption moving the key.
+    lock_account_for_write(session, actor)
+    if _revoke(session, SigningKey.id == key, actor) is None:
+        raise UnknownSigningKey
+    return _admin_keys(session, key=key)[0]
 
 
 def sign_out_device(session: Session, token: str | None, key: KeyId | None) -> None:
@@ -240,8 +302,112 @@ def _device_label(label: str) -> str:
     return label
 
 
+def _state() -> ColumnElement[str]:
+    return case(
+        (SigningKey.revoked_at.is_not(None), KeyState.REVOKED.value),
+        (SigningKey.signed_out_at.is_not(None), KeyState.SIGNED_OUT.value),
+        else_=KeyState.LIVE.value,
+    )
+
+
 def _live() -> ColumnElement[bool]:
-    return SigningKey.signed_out_at.is_(None) & SigningKey.revoked_at.is_(None)
+    return _state() == KeyState.LIVE.value
+
+
+def _revoke(
+    session: Session, which: ColumnElement[bool], by: AccountId
+) -> SigningKey | None:
+    """SET reads the row as it was before the update, so a revoked key keeps
+    its first time and its first revoker together."""
+    return session.scalar(
+        update(SigningKey)
+        .where(which)
+        .values(
+            revoked_at=func.coalesce(SigningKey.revoked_at, func.now()),
+            revoked_by=case(
+                (
+                    SigningKey.revoked_at.is_(None),
+                    literal(by, SigningKey.revoked_by.type),
+                ),
+                else_=SigningKey.revoked_by,
+            ),
+        )
+        .returning(SigningKey)
+    )
+
+
+def _admin_keys(
+    session: Session,
+    *,
+    search: str = "",
+    key: KeyId | None = None,
+    limit: int | None = None,
+) -> list[AdminSigningKey]:
+    where: list[ColumnElement[bool]] = []
+    if text := search.strip().lower():
+        where.append(
+            or_(
+                func.strpos(Account.email, text) > 0,
+                func.strpos(func.lower(Player.display_name), text) > 0,
+            )
+        )
+    if key is not None:
+        where.append(SigningKey.id == key)
+    revoker = aliased(Account)
+    query = (
+        select(
+            SigningKey.id,
+            SigningKey.label,
+            SigningKey.created_at,
+            _state(),
+            SigningKey.signed_out_at,
+            SigningKey.revoked_at,
+            SigningKey.revoked_by,
+            revoker.email,
+            Account.id,
+            Account.email,
+            Player.display_name,
+        )
+        .join(Account, Account.id == SigningKey.account_id)
+        .outerjoin(
+            PlayerManager,
+            and_(
+                PlayerManager.account_id == Account.id,
+                PlayerManager.relationship == "self",
+            ),
+        )
+        .outerjoin(Player, Player.id == PlayerManager.player_id)
+        .outerjoin(revoker, revoker.id == SigningKey.revoked_by)
+        .where(*where)
+        .order_by(SigningKey.created_at.desc(), SigningKey.id.desc())
+        .limit(limit)
+    )
+    return [
+        AdminSigningKey(
+            id,
+            label,
+            created_at,
+            KeyState(state),
+            signed_out_at,
+            None
+            if revoked_at is None or revoked_by is None
+            else Revocation(revoked_at, revoked_by, revoked_by_email),
+            KeyAccount(account_id, email, display_name),
+        )
+        for (
+            id,
+            label,
+            created_at,
+            state,
+            signed_out_at,
+            revoked_at,
+            revoked_by,
+            revoked_by_email,
+            account_id,
+            email,
+            display_name,
+        ) in session.execute(query)
+    ]
 
 
 def _past_the_cap(account: AccountId, keeping: KeyId) -> ColumnElement[bool]:

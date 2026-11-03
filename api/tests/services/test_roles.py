@@ -529,6 +529,7 @@ def test_lists_permissions_by_key_with_the_roles_that_grant_them(
         ("account_roles.manage", True, 1),
         ("admin.view", True, 2),
         ("roles.manage", True, 1),
+        ("signing_keys.revoke", True, 1),
     ]
 
 

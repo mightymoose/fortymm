@@ -514,6 +514,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/signing-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Signing Keys
+         * @description List every account's signing keys, guests' too, newest first, with
+         *     each key's account and who revoked it. Needs `admin.view`.
+         *
+         *     `search` keeps the keys whose account's email or player name contains
+         *     it, whatever its case. The list holds at most 50. `meta.has_more` says
+         *     that more match.
+         */
+        get: operations["admin_signing_keys"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/signing-keys/{key_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Any Signing Key
+         * @description Revoke any account's signing key. Needs `signing_keys.revoke`.
+         *
+         *     The key verifies nothing from now on, not even what it signed before.
+         *     Results already accepted stay. The key's account stays signed in, and
+         *     its device makes a new key at its next registration. Revoking a revoked
+         *     key changes nothing.
+         */
+        post: operations["revoke_any_signing_key"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -642,6 +692,18 @@ export interface components {
             data: components["schemas"]["AdminAccount"][];
             meta: components["schemas"]["AdminAccountsMeta"];
         };
+        /** AdminKeyAccount */
+        AdminKeyAccount: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Email */
+            email: string | null;
+            /** Display Name */
+            display_name: string | null;
+        };
         /** AdminPermission */
         AdminPermission: {
             /** Key */
@@ -686,6 +748,52 @@ export interface components {
         AdminRolesResponse: {
             /** Data */
             data: components["schemas"]["AdminRole"][];
+        };
+        /** AdminSigningKey */
+        AdminSigningKey: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            state: components["schemas"]["KeyState"];
+            /**
+             * Signed Out At
+             * Format: date-time
+             */
+            signed_out_at: string | null;
+            /**
+             * Revoked At
+             * Format: date-time
+             */
+            revoked_at: string | null;
+            /**
+             * Revoked By
+             * Format: uuid
+             */
+            revoked_by: string | null;
+            /** Revoked By Email */
+            revoked_by_email: string | null;
+            account: components["schemas"]["AdminKeyAccount"];
+        };
+        /** AdminSigningKeyResponse */
+        AdminSigningKeyResponse: {
+            data: components["schemas"]["AdminSigningKey"];
+        };
+        /** AdminSigningKeysMeta */
+        AdminSigningKeysMeta: {
+            /** Has More */
+            has_more: boolean;
+        };
+        /** AdminSigningKeysResponse */
+        AdminSigningKeysResponse: {
+            /** Data */
+            data: components["schemas"]["AdminSigningKey"][];
+            meta: components["schemas"]["AdminSigningKeysMeta"];
         };
         /**
          * Answer
@@ -768,6 +876,11 @@ export interface components {
              */
             database: "ok";
         };
+        /**
+         * KeyState
+         * @enum {string}
+         */
+        KeyState: "live" | "signed_out" | "revoked";
         /** LogoutData */
         LogoutData: {
             /** Logout Url */
@@ -2158,6 +2271,122 @@ export interface operations {
             };
             /** @description The change would leave no account with `account_roles.manage`, so nobody could grant a role again */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The request's Content-Type isn't application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_signing_keys: {
+        parameters: {
+            query?: {
+                search?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSigningKeysResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_any_signing_key: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSigningKeyResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description No key has this id */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

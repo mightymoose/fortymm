@@ -373,6 +373,10 @@ class SigningKey(Base):
         CheckConstraint("octet_length(public_key) = 75", name="public_key_length"),
         CheckConstraint("label = btrim(label) AND label <> ''", name="label_trimmed"),
         CheckConstraint("char_length(label) <= 50", name="label_length"),
+        CheckConstraint(
+            "(revoked_at IS NULL) = (revoked_by IS NULL)",
+            name="revoked_by_with_revoked_at",
+        ),
     )
 
     # The RFC 9679 thumbprint of public_key: the kid every signature cites.
@@ -390,3 +394,6 @@ class SigningKey(Base):
     )
     signed_out_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_by: Mapped[AccountId | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="RESTRICT")
+    )

@@ -21,17 +21,26 @@ from fortymm_api.services.sessions import (
     start_session,
 )
 from fortymm_api.services.signing_keys import (
+    KEY_PAGE_SIZE,
     LABEL_MAX_LENGTH,
     LIVE_KEY_LIMIT,
     AccountSigningKey,
+    AdminSigningKey,
     InvalidDeviceLabel,
     InvalidProof,
     InvalidPublicKey,
+    KeyAccount,
+    KeyPage,
     KeyRegisteredElsewhere,
+    KeyState,
+    Revocation,
     SigningKeyNotFound,
+    UnknownSigningKey,
     VerificationKey,
     account_keys,
+    find_keys,
     register_key,
+    revoke_any_key,
     revoke_key,
     sign_out_device,
     verification_keys,
@@ -51,10 +60,25 @@ def in_transaction[T](database: Engine, work: Callable[[Session], T]) -> T:
         return work(session)
 
 
-def guest(database: Engine) -> AccountId:
-    return in_transaction(
-        database, lambda session: start_session(session, None, ANN).account.id
-    )
+def guest(database: Engine, name: str | None = None) -> AccountId:
+    def start(session: Session) -> AccountId:
+        if name is None:
+            return start_session(session, None, ANN).account.id
+        return start_session(
+            session, None, ANN, new_display_name=lambda: name
+        ).account.id
+
+    return in_transaction(database, start)
+
+
+def player_account(database: Engine, email: str, name: str) -> AccountId:
+    account = guest(database, name)
+    with database.begin() as connection:
+        connection.execute(
+            text("UPDATE accounts SET email = :email WHERE id = :id"),
+            {"email": email, "id": account},
+        )
+    return account
 
 
 def verified(database: Engine, email: str) -> AccountId:
@@ -692,3 +716,289 @@ def test_a_write_as_an_adopted_account_is_refused(migrated_database: Engine) -> 
         revoke(migrated_database, guest_account, kid)
 
     assert [k.id for k in keys_of(migrated_database, bob)] == [kid]
+
+
+def found(database: Engine, search: str = "") -> KeyPage:
+    return in_transaction(database, lambda session: find_keys(session, search))
+
+
+def revoke_any(database: Engine, actor: AccountId, kid: KeyId) -> AdminSigningKey:
+    return in_transaction(database, lambda session: revoke_any_key(session, actor, kid))
+
+
+def test_lists_every_accounts_keys_newest_first_with_their_accounts(
+    migrated_database: Engine,
+) -> None:
+    ann = player_account(migrated_database, "ann@example.com", "excited egret 387")
+    visitor = guest(migrated_database, "brave badger 214")
+    anns = register(migrated_database, ann, key(1), "Ann's iPhone")
+    guests = register(migrated_database, visitor, key(2), "Web browser")
+    created(migrated_database, anns.id, days_ago=1)
+    [anns] = keys_of(migrated_database, ann)
+
+    assert found(migrated_database) == KeyPage(
+        [
+            AdminSigningKey(
+                guests.id,
+                "Web browser",
+                guests.created_at,
+                KeyState.LIVE,
+                None,
+                None,
+                KeyAccount(visitor, None, "brave badger 214"),
+            ),
+            AdminSigningKey(
+                anns.id,
+                "Ann's iPhone",
+                anns.created_at,
+                KeyState.LIVE,
+                None,
+                None,
+                KeyAccount(ann, Email("ann@example.com"), "excited egret 387"),
+            ),
+        ],
+        has_more=False,
+    )
+
+
+def test_each_key_has_its_state_and_revoked_wins_over_signed_out(
+    migrated_database: Engine,
+) -> None:
+    account = guest(migrated_database)
+    kept, signed_out, revoked = (
+        register(migrated_database, account, key(n)).id for n in (1, 2, 3)
+    )
+    token = session_token(migrated_database, account)
+    sign_out(migrated_database, token, signed_out)
+    sign_out(migrated_database, session_token(migrated_database, account), revoked)
+    revoke(migrated_database, account, revoked)
+
+    states = {k.id: k.state for k in found(migrated_database).keys}
+
+    assert states == {
+        kept: KeyState.LIVE,
+        signed_out: KeyState.SIGNED_OUT,
+        revoked: KeyState.REVOKED,
+    }
+
+
+def test_finds_keys_by_part_of_the_accounts_email_whatever_its_case(
+    migrated_database: Engine,
+) -> None:
+    ann = player_account(migrated_database, "ann@example.com", "excited egret 387")
+    bob = player_account(migrated_database, "bob@example.com", "brave badger 214")
+    anns = register(migrated_database, ann, key(1)).id
+    register(migrated_database, bob, key(2))
+
+    assert [k.id for k in found(migrated_database, " ANN@ ").keys] == [anns]
+
+
+def test_finds_a_guests_keys_by_part_of_its_players_name_whatever_its_case(
+    migrated_database: Engine,
+) -> None:
+    visitor = guest(migrated_database, "excited egret 387")
+    other = guest(migrated_database, "brave badger 214")
+    visitors = register(migrated_database, visitor, key(1)).id
+    register(migrated_database, other, key(2))
+
+    assert [k.id for k in found(migrated_database, "Egret").keys] == [visitors]
+
+
+def test_a_search_takes_percent_and_underscore_literally(
+    migrated_database: Engine,
+) -> None:
+    ann = player_account(migrated_database, "ann_1@example.com", "excited egret 387")
+    bob = player_account(migrated_database, "bob@example.com", "brave badger 214")
+    anns = register(migrated_database, ann, key(1)).id
+    register(migrated_database, bob, key(2))
+
+    assert [k.id for k in found(migrated_database, "_").keys] == [anns]
+    assert found(migrated_database, "%").keys == []
+
+
+def test_an_empty_search_keeps_guests_keys(migrated_database: Engine) -> None:
+    visitor = guest(migrated_database)
+    kid = register(migrated_database, visitor, key(1)).id
+
+    for search in ("", "   "):
+        assert [k.id for k in found(migrated_database, search).keys] == [kid]
+
+
+def test_the_list_holds_at_most_50_and_says_more_match(
+    migrated_database: Engine,
+) -> None:
+    accounts = [guest(migrated_database) for _ in range(3)]
+    kids = [
+        register(migrated_database, accounts[n % 3], key(n)).id
+        for n in range(KEY_PAGE_SIZE)
+    ]
+    for days_ago, kid in enumerate(kids):
+        created(migrated_database, kid, days_ago=days_ago + 1)
+
+    page = found(migrated_database)
+    assert [k.id for k in page.keys] == kids
+    assert not page.has_more
+
+    newest = register(migrated_database, accounts[0], key(KEY_PAGE_SIZE)).id
+    page = found(migrated_database)
+    assert [k.id for k in page.keys] == [newest, *kids[:-1]]
+    assert page.has_more
+
+
+def test_an_administrator_revokes_another_accounts_key(
+    migrated_database: Engine,
+) -> None:
+    boss = verified(migrated_database, "boss@fortymm.com")
+    ann = player_account(migrated_database, "ann@example.com", "excited egret 387")
+    kid = register(migrated_database, ann, key(1)).id
+
+    revoked = revoke_any(migrated_database, boss, kid)
+
+    assert revoked.state == KeyState.REVOKED
+    assert revoked.revocation is not None
+    assert revoked.revocation.by == boss
+    assert revoked.revocation.by_email == "boss@fortymm.com"
+    assert revoked.account == KeyAccount(
+        ann, Email("ann@example.com"), "excited egret 387"
+    )
+    assert verifying(migrated_database, kid) == {}
+    assert found(migrated_database).keys == [revoked]
+
+
+def test_an_administrator_revokes_a_guests_signed_out_key(
+    migrated_database: Engine,
+) -> None:
+    boss = verified(migrated_database, "boss@fortymm.com")
+    visitor = guest(migrated_database, "excited egret 387")
+    kid = register(migrated_database, visitor, key(1)).id
+    token = session_token(migrated_database, visitor)
+    sign_out(migrated_database, token, kid)
+    [signed_out] = keys_of(migrated_database, visitor)
+    other_token = session_token(migrated_database, visitor)
+
+    revoked = revoke_any(migrated_database, boss, kid)
+
+    assert revoked.account == KeyAccount(visitor, None, "excited egret 387")
+    assert revoked.signed_out_at == signed_out.signed_out_at
+    assert revoked.state == KeyState.REVOKED
+    assert signed_in(migrated_database, other_token)
+
+
+def test_the_first_revoke_keeps_its_time_and_revoker(
+    migrated_database: Engine,
+) -> None:
+    boss = verified(migrated_database, "boss@fortymm.com")
+    other_boss = verified(migrated_database, "other@fortymm.com")
+    ann = player_account(migrated_database, "ann@example.com", "excited egret 387")
+    by_owner, by_admin = (register(migrated_database, ann, key(n)).id for n in (1, 2))
+
+    owners = revoke(migrated_database, ann, by_owner)
+    admins = revoke_any(migrated_database, boss, by_admin)
+    assert owners.revoked_at is not None
+    assert admins.revocation is not None
+
+    assert revoke_any(migrated_database, boss, by_owner).revocation == Revocation(
+        owners.revoked_at, ann, Email("ann@example.com")
+    )
+    assert revoke_any(migrated_database, other_boss, by_admin) == admins
+    assert revoke(migrated_database, ann, by_admin).revoked_at == admins.revocation.at
+    assert {k.id: k.revocation for k in found(migrated_database).keys} == {
+        by_owner: Revocation(owners.revoked_at, ann, Email("ann@example.com")),
+        by_admin: admins.revocation,
+    }
+
+
+def test_revoking_an_unknown_kid_raises_unknown_signing_key(
+    migrated_database: Engine,
+) -> None:
+    boss = verified(migrated_database, "boss@fortymm.com")
+    account = guest(migrated_database)
+    kept = register(migrated_database, account, key(1))
+
+    with pytest.raises(UnknownSigningKey):
+        revoke_any(migrated_database, boss, key(2).public_key.kid)
+
+    assert keys_of(migrated_database, account) == [kept]
+
+
+def test_the_owner_revoke_records_the_owner_as_the_revoker(
+    migrated_database: Engine,
+) -> None:
+    visitor = guest(migrated_database)
+    kid = register(migrated_database, visitor, key(1)).id
+
+    revoked = revoke(migrated_database, visitor, kid)
+
+    assert revoked.revoked_at is not None
+    [listed] = found(migrated_database).keys
+    assert listed.revocation == Revocation(revoked.revoked_at, visitor, None)
+
+
+def test_a_key_revoked_by_an_administrator_stays_revoked_when_registered_again(
+    migrated_database: Engine,
+) -> None:
+    boss = verified(migrated_database, "boss@fortymm.com")
+    account = guest(migrated_database)
+    kid = register(migrated_database, account, key(1)).id
+    revoked = revoke_any(migrated_database, boss, kid)
+
+    again = register(migrated_database, account, key(1))
+
+    assert again.revoked_at is not None
+    assert found(migrated_database).keys == [revoked]
+
+
+def test_an_admin_revoke_does_not_lock_the_keys_account(
+    migrated_database: Engine,
+) -> None:
+    boss = verified(migrated_database, "boss@fortymm.com")
+    account = guest(migrated_database)
+    kid = register(migrated_database, account, key(1)).id
+
+    def revoke_without_waiting(session: Session) -> AdminSigningKey:
+        session.execute(text("SET LOCAL lock_timeout = '2s'"))
+        return revoke_any_key(session, boss, kid)
+
+    with sessionmaker(migrated_database).begin() as holder:
+        holder.execute(
+            text("SELECT FROM accounts WHERE id = :id FOR UPDATE"), {"id": account}
+        )
+        revoked = in_transaction(migrated_database, revoke_without_waiting)
+
+    assert revoked.state == KeyState.REVOKED
+
+
+def test_an_admin_revoke_that_waits_for_an_adoption_names_the_adopting_account(
+    migrated_database: Engine,
+) -> None:
+    boss = verified(migrated_database, "boss@fortymm.com")
+    bob = verified(migrated_database, "bob@example.com")
+    visitor = guest(migrated_database)
+    kid = register(migrated_database, visitor, key(1)).id
+
+    _, waiter = wait_behind(
+        migrated_database,
+        lambda session: adopt_guest(session, visitor, bob),
+        lambda session: revoke_any_key(session, boss, kid),
+    )
+
+    revoked = waiter.result()
+    assert revoked.account.id == bob
+    assert revoked.revocation is not None
+    assert revoked.revocation.by == boss
+
+
+def test_adoption_moves_a_guests_own_revocation_with_its_keys(
+    migrated_database: Engine,
+) -> None:
+    bob = verified(migrated_database, "bob@example.com")
+    visitor = guest(migrated_database)
+    kid = register(migrated_database, visitor, key(1)).id
+    revoke(migrated_database, visitor, kid)
+
+    in_transaction(migrated_database, lambda s: adopt_guest(s, visitor, bob))
+
+    [moved] = found(migrated_database).keys
+    assert moved.account.id == bob
+    assert moved.revocation is not None
+    assert moved.revocation.by == bob

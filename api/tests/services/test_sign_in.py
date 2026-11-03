@@ -1002,11 +1002,7 @@ def test_the_first_administrator_claims_their_role_at_sign_in(
         identity("auth0|moose", "mightymoose@fortymm.com"),
     )
 
-    assert resume(migrated_database, signed_in_token).permissions == {
-        Permission.ADMIN_VIEW,
-        Permission.ROLES_MANAGE,
-        Permission.ACCOUNT_ROLES_MANAGE,
-    }
+    assert resume(migrated_database, signed_in_token).permissions == set(Permission)
     # Claimed once, so a later revoke sticks.
     assert count(migrated_database, "SELECT count(*) FROM email_role_grants") == 0
 

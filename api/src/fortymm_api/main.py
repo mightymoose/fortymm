@@ -36,6 +36,7 @@ from fortymm_api.services.signing_keys import (
     InvalidPublicKey,
     KeyRegisteredElsewhere,
     SigningKeyNotFound,
+    UnknownSigningKey,
 )
 from fortymm_api.v1.auth import SignInUnavailable
 from fortymm_api.v1.errors import Error, ErrorsResponse, retry_after_seconds
@@ -73,6 +74,7 @@ SIGNING_KEY_ERRORS: dict[type[Exception], tuple[int, str]] = {
     ),
     KeyRegisteredElsewhere: (409, "Another account registered this key"),
     SigningKeyNotFound: (404, "The account has no key with this id"),
+    UnknownSigningKey: (404, "No key has this id"),
 }
 AUTH0_SETTINGS = ("AUTH0_DOMAIN", "AUTH0_CLIENT_ID", "AUTH0_CLIENT_SECRET")
 

@@ -26,6 +26,7 @@ OWNERSHIP_RULES: dict[tuple[str, str], OwnershipRule] = {
     ("player_managers", "adopted_from"): OwnershipRule.NAMES_ADOPTION_SOURCE,
     ("sessions", "account_id"): OwnershipRule.REVOKED_ON_GUEST_CONVERSION,
     ("signing_keys", "account_id"): OwnershipRule.MOVES_ON_ADOPT,
+    ("signing_keys", "revoked_by"): OwnershipRule.MOVES_ON_ADOPT,
     ("identities", "account_id"): OwnershipRule.GUEST_HAS_NONE,
     # Only a verified account holds a role, so only one grants a role.
     ("account_roles", "account_id"): OwnershipRule.GUEST_HAS_NONE,

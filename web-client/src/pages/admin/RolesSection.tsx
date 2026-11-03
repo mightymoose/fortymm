@@ -245,6 +245,7 @@ function DeleteRole({ role, onClose }: { role: AdminRole; onClose: () => void })
     <ConfirmDialog
       title={`Delete ${role.name}?`}
       confirmLabel="Delete role"
+      busyLabel="Deleting…"
       onConfirm={async () => {
         await remove.mutateAsync(role.id)
         showToast('Role deleted')

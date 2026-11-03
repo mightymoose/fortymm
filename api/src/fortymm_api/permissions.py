@@ -17,3 +17,4 @@ class Permission(StrEnum):
     ADMIN_VIEW = "admin.view"
     ROLES_MANAGE = "roles.manage"
     ACCOUNT_ROLES_MANAGE = "account_roles.manage"
+    SIGNING_KEYS_REVOKE = "signing_keys.revoke"

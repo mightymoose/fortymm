@@ -71,6 +71,12 @@ export const server = setupServer(
       meta: { has_more: false },
     }),
   ),
+  http.get(`${API_BASE_URL}/v1/admin/signing-keys`, () =>
+    HttpResponse.json<components['schemas']['AdminSigningKeysResponse']>({
+      data: [],
+      meta: { has_more: false },
+    }),
+  ),
 )
 
 // Records each signing key registration, and answers them with `answers` in
@@ -280,15 +286,22 @@ export function mockVerifiedAccount(
 type AdminPermission = components['schemas']['AdminPermission']
 type AdminRole = components['schemas']['AdminRole']
 type AdminAccount = components['schemas']['AdminAccount']
+type AdminSigningKey = components['schemas']['AdminSigningKey']
 // The admin lists the mock API holds. It counts each permission's roles and
 // each role's accounts itself.
 export type AdminState = {
   permissions: Omit<AdminPermission, 'role_count'>[]
   roles: Omit<AdminRole, 'account_count'>[]
   accounts: AdminAccount[]
+  signingKeys: AdminSigningKey[]
 }
 // A list, or one account's page, such as `accounts/<id>`.
-export type AdminList = 'permissions' | 'roles' | 'accounts' | `accounts/${string}`
+export type AdminList =
+  | 'permissions'
+  | 'roles'
+  | 'accounts'
+  | 'signing-keys'
+  | `accounts/${string}`
 
 // The built-in permissions and the Administrator role, as the migration
 // makes them.
@@ -296,21 +309,23 @@ export const builtInPermissions: AdminState['permissions'] = [
   { key: 'account_roles.manage', description: 'Set which roles an account holds.', built_in: true },
   { key: 'admin.view', description: 'See the admin page.', built_in: true },
   { key: 'roles.manage', description: 'Edit roles and permissions.', built_in: true },
+  { key: 'signing_keys.revoke', description: 'Revoke any account’s signing key.', built_in: true },
 ]
 export const administrator: AdminState['roles'][number] = {
   id: 'a0d1f2e3-4b5c-4d6e-8f70-81920a1b2c3d',
   name: 'Administrator',
   description: 'Everything on the admin page.',
-  permissions: ['account_roles.manage', 'admin.view', 'roles.manage'],
+  permissions: ['account_roles.manage', 'admin.view', 'roles.manage', 'signing_keys.revoke'],
 }
 
 // Signs the mock API in as the verified account `accounts[0]`, and answers
-// the admin routes as the API does, from `state`, an account's page too. The session's permissions
-// come from the account's roles, so a write can change them. Writes refuse
-// as the API does: a taken name or key, a built-in permission, and any
-// change that leaves no account with `account_roles.manage`. Returns the
-// state, which a test can change as another tab would, and the writes it
-// received.
+// the admin routes as the API does, from `state`, an account's page and the
+// signing keys too. The session's permissions come from the account's roles,
+// so a write can change them. Writes refuse as the API does: a taken name or
+// key, a built-in permission, any change that leaves no account with
+// `account_roles.manage`, and a revoke without `signing_keys.revoke` or of an
+// unknown key. Returns the state, which a test can change as another tab
+// would, and the writes it received.
 export function mockAdmin(initial: AdminState) {
   const state: AdminState = structuredClone(initial)
   const writes: { method: string; path: string; body: unknown }[] = []
@@ -403,9 +418,38 @@ export function mockAdmin(initial: AdminState) {
       if (request.headers.get('Content-Type') !== 'application/json') {
         return refuse(415, 'The request body must be JSON')
       }
-      const body: unknown = request.method === 'DELETE' ? null : await request.clone().json()
-      writes.push({ method: request.method, path, body })
+      const text = await request.clone().text()
+      writes.push({ method: request.method, path, body: text ? JSON.parse(text) : null })
     }),
+    http.get(`${API_BASE_URL}/v1/admin/signing-keys`, ({ request }) => {
+      const search = new URL(request.url).searchParams.get('search')?.toLowerCase() ?? ''
+      const found = state.signingKeys.filter(({ account }) =>
+        [account.email, account.display_name].some((text) => text?.toLowerCase().includes(search)),
+      )
+      return HttpResponse.json<components['schemas']['AdminSigningKeysResponse']>({
+        data: found.slice(0, 50),
+        meta: { has_more: found.length > 50 },
+      })
+    }),
+    http.post<{ id: string }>(
+      `${API_BASE_URL}/v1/admin/signing-keys/:id/revoke`,
+      ({ params }) => {
+        if (!grants(self().role_ids).has('signing_keys.revoke')) {
+          return refuse(403, "You don't have permission to do this")
+        }
+        const key = state.signingKeys.find((found) => found.id === params.id)
+        if (!key) return refuse(404, 'No key has this id')
+        if (key.state !== 'revoked') {
+          Object.assign(key, {
+            state: 'revoked',
+            revoked_at: new Date().toISOString(),
+            revoked_by: self().id,
+            revoked_by_email: self().email,
+          })
+        }
+        return HttpResponse.json<components['schemas']['AdminSigningKeyResponse']>({ data: key })
+      },
+    ),
     http.post<never, components['schemas']['NewPermissionRequest']>(
       `${API_BASE_URL}/v1/admin/permissions`,
       async ({ request }) => {
