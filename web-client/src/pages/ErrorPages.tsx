@@ -58,6 +58,7 @@ function note(failure: Failure): ReactNode {
       )
     case 'rate-limited':
       return failure.retryAt && <RetryTime at={failure.retryAt} />
+    case 'no-signing-key':
     case 'broken':
       return null
   }

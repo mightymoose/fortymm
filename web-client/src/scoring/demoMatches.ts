@@ -6,8 +6,12 @@ import type { BestOf, Side } from './board'
 export type MatchPlayer = { id: string; name: string }
 
 export type Match = {
+  // In the URL.
   id: string
+  // The id a signed result names.
+  uuid: string
   bestOf: BestOf
+  rated: boolean
   // Their order fixes the order of each game's points.
   players: [MatchPlayer, MatchPlayer]
 }
@@ -26,9 +30,21 @@ const SPECTATED: [MatchPlayer, MatchPlayer] = [
 export function demoMatch(id: string, self: MatchPlayer): Match {
   switch (id) {
     case 'demo':
-      return { id, bestOf: 5, players: [self, OPPONENT] }
+      return {
+        id,
+        uuid: '3b7e9f2a-6c41-4d8e-b5a0-1f9c2d7e4a63',
+        bestOf: 5,
+        rated: false,
+        players: [self, OPPONENT],
+      }
     case 'demo-spectator':
-      return { id, bestOf: 5, players: SPECTATED }
+      return {
+        id,
+        uuid: 'd5a1c8e4-2f7b-4b93-8e06-7c4f1a9b3e25',
+        bestOf: 5,
+        rated: false,
+        players: SPECTATED,
+      }
     default:
       throw notFound()
   }

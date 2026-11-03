@@ -66,6 +66,17 @@
 
 .score-result{display:flex;flex-direction:column;align-items:flex-start;gap:var(--s-3)}
 
+/* The waiting page (AwaitingValidation.tsx): the result, then its QR code
+   and link. The link is long, so it breaks anywhere. */
+.validation-summary{display:flex;flex-direction:column;gap:var(--s-2)}
+.validation-summary p{margin:0;font:500 var(--text-lg)/var(--lh-snug) var(--font-ui);color:var(--fg-1)}
+.validation-games{margin:0;padding-left:var(--s-5);color:var(--fg-2)}
+.validation-share{display:flex;flex-direction:column;align-items:flex-start;gap:var(--s-3)}
+.qr-code{display:block;width:min(100%,320px);aspect-ratio:1;border-radius:var(--r-md)}
+.validation-link{max-width:100%;font-size:var(--text-sm);overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
+.validation-link-skeleton{width:min(100%,480px);height:calc(var(--text-sm) * 3)}
+.validation-back{align-self:flex-start}
+
 /* The testing tools, set apart from the match by a rule above them. */
 .score-testing{display:flex;flex-direction:column;gap:var(--s-3);margin-top:var(--s-6);padding-top:var(--s-6);border-top:1px solid var(--border-subtle)}
 .score-testing__title{margin:0;font:600 var(--text-md)/var(--lh-snug) var(--font-ui);color:var(--fg-2)}
