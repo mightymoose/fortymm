@@ -584,7 +584,7 @@ checks (#182). No route reads a result yet.
   append every multi-signature vector's last signature byte for byte.
 - `test_every_two_signature_qr_text_fits_version_16_at_level_m` holds the
   QR budget, 656 alphanumeric characters. The longest two-signature vector
-  is 614. The web client checks the vectors in #184. The iOS app's
+  is 614. The web client checks the vectors. The iOS app's
   `FortyMMTests` checks them too, and its workflow runs when the file
   changes (see ios-client).
 - To add a Python dependency, run `docker compose run --rm --no-deps -T api
@@ -676,8 +676,8 @@ reads a result yet (#188).
 - A sign-in that switches accounts doesn't sign out the old account's key.
   The device re-registers its key with a proof for the new account, and
   reads 200 if adoption moved the key there, or 409 if another account owns
-  it. Then it makes a new key. The iOS app does this (see ios-client), and
-  the web client will in #184.
+  it. Then it makes a new key. Both clients do this (see web-client and
+  ios-client).
 - `tests/services/test_signing_keys.py` tests the rules,
   `tests/test_account_signing_keys.py` the routes' HTTP work, and
   `tests/test_signing_key_type.py` the key type and the proof.
