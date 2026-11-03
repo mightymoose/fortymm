@@ -3,7 +3,6 @@ import 'fake-indexeddb/auto'
 import { IDBFactory } from 'fake-indexeddb'
 import { cleanup } from '@testing-library/react'
 import { afterAll, afterEach, beforeAll } from 'vitest'
-import { dropRequestsInFlight } from './scoring/demoServer'
 import { server } from './test/server'
 
 // jsdom doesn't implement scrollTo, which the router calls on navigation.
@@ -40,8 +39,6 @@ afterEach(() => {
   server.resetHandlers()
   // The saved session, and the sidebar's choice, must not leak between tests.
   localStorage.clear()
-  // Nor may a scratchpad change still on its way to the demo server.
-  dropRequestsInFlight()
   // Nor may the signing key. A new IndexedDB, rather than a deleted
   // database, also keeps a registration still in flight out of the next test.
   globalThis.indexedDB = new IDBFactory()
