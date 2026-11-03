@@ -1,4 +1,5 @@
 import { notFound } from '@tanstack/react-router'
+import type { MatchResult } from '../signing/result'
 import type { BestOf, Side } from './board'
 
 // The matches the scoring page can open until the API has matches.
@@ -48,6 +49,26 @@ export function demoMatch(id: string, self: MatchPlayer): Match {
     default:
       throw notFound()
   }
+}
+
+// The match a result names, as this device knows it. Each device builds the
+// demo match with its own player first, so a result from another device
+// names that device's player and OPPONENT. The viewer stands in for
+// OPPONENT unless the result already names the viewer. A result for
+// another match gives null.
+export function matchFor(id: string, self: MatchPlayer, result: MatchResult | null): Match | null {
+  const match = demoMatch(id, self)
+  if (!result) return match
+  if (result.match !== match.uuid) return null
+  const ids = result.players.includes(self.id)
+    ? result.players
+    : result.players.map((playerId) => (id === 'demo' && playerId === OPPONENT.id ? self.id : playerId))
+  const known = [self, OPPONENT, ...SPECTATED]
+  const players = ids.map((playerId, side) => ({
+    id: playerId,
+    name: known.find((player) => player.id === playerId)?.name ?? `Player ${side + 1}`,
+  }))
+  return { ...match, players: [players[0], players[1]] }
 }
 
 export function viewerOf(match: Match, playerId: string): Viewer {
