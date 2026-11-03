@@ -106,6 +106,18 @@ export function pendingChanges(matchId: string): readonly Change[] {
   return read(storageKey(matchId)).outbox
 }
 
+// The ids of the matches whose outbox has changes, sorted and joined by
+// spaces, so useSyncExternalStore gets an equal value while they don't
+// change.
+export function matchesWithChanges(): string {
+  const prefix = storageKey('')
+  return allKeys()
+    .filter((key) => key.startsWith(prefix) && read(key).outbox.length > 0)
+    .map((key) => key.slice(prefix.length))
+    .sort()
+    .join(' ')
+}
+
 // The server took `id`, or refused it for good, so it leaves the outbox.
 export function markSent(matchId: string, id: string): void {
   const key = storageKey(matchId)
@@ -122,6 +134,33 @@ export function readBoard(key: string): Board {
 
 export function writeBoard(key: string, board: Board): void {
   store(key, { ...board, outbox: [] })
+}
+
+// Deletes every record whose key `matches`. Only the scoring page's testing
+// panel uses it, to start a demo match over.
+export function forgetRecords(matches: (key: string) => boolean): void {
+  for (const key of allKeys().filter(matches)) {
+    memory.delete(key)
+    try {
+      localStorage.removeItem(key)
+    } catch {
+      // It was only in memory.
+    }
+  }
+  for (const listener of listeners) listener()
+}
+
+function allKeys(): string[] {
+  const keys = new Set(memory.keys())
+  try {
+    for (let index = 0; index < localStorage.length; index++) {
+      const key = localStorage.key(index)
+      if (key !== null) keys.add(key)
+    }
+  } catch {
+    // Only this tab's memory, then.
+  }
+  return [...keys]
 }
 
 const listeners = new Set<() => void>()

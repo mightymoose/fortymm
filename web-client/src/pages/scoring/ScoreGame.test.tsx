@@ -1,6 +1,8 @@
-import { cleanup, screen, within } from '@testing-library/react'
+import { cleanup, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
+import { serverKey } from '../../scoring/demoServer'
+import { pendingChanges, readBoard } from '../../scoring/scratchpad'
 import { ErrorPage } from '../../test/pages/ErrorPage'
 import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
 
@@ -94,13 +96,63 @@ describe('ScoreGame', () => {
 
     expect(page.slotScore(1)).toBe('11–9')
     expect(page.slotSync(1)).toBe('Not synced')
-    expect(screen.getByText(/^You’re offline\./)).toBeInTheDocument()
+    expect(screen.getByText('Offline. Saved on this device.')).toBeInTheDocument()
     expect(page.serverScore(1)).toBeNull()
 
     await page.reconnect()
 
     expect(page.serverScore(1)).toEqual([11, 9])
     expect(page.slotSync(1)).toBe('Synced')
+  })
+
+  it('syncs a score saved offline after the scoring page has closed', async () => {
+    const page = await ScoreGamePage.render()
+    await page.switchNetwork('offline')
+    await page.enter({ [ME]: '11', [OPPONENT]: '5' })
+    await page.save()
+    expect(page.serverScore(1)).toBeNull()
+
+    await page.router.navigate({ to: '/' })
+
+    await waitFor(() => expect(readBoard(serverKey('demo')).games[1]?.points).toEqual([11, 5]))
+    expect(pendingChanges('demo')).toEqual([])
+  })
+
+  it('switches the demo network from the testing panel', async () => {
+    const page = await ScoreGamePage.render()
+
+    await userEvent.click(screen.getByRole('radio', { name: 'Offline' }))
+    await page.settle()
+
+    expect(page.href).toBe('/matches/demo/scores/game/1/edit?network=offline')
+    expect(screen.getByRole('radio', { name: 'Offline' })).toHaveAttribute('aria-checked', 'true')
+
+    await userEvent.click(screen.getByRole('radio', { name: 'Normal' }))
+    await page.settle()
+
+    expect(page.href).toBe('/matches/demo/scores/game/1/edit')
+  })
+
+  it('resets the match on the device and the server', async () => {
+    const page = await ScoreGamePage.render()
+    await saveGame(page, 1, '11', '2')
+    await saveGame(page, 2, '11', '3')
+
+    await page.click('Reset match')
+
+    expect(page.href).toBe('/matches/demo/scores/game/1/edit')
+    expect([1, 2].map((game) => page.slotScore(game))).toEqual(['–', '–'])
+    expect(page.serverScore(1)).toBeNull()
+  })
+
+  it('clears every demo match and saved copy', async () => {
+    const page = await ScoreGamePage.render()
+    await saveGame(page, 1, '11', '2')
+
+    await page.click('Clear everything')
+
+    expect(Object.keys(localStorage).filter((key) => /^fortymm-(scratchpad|demo-server|match):/.test(key))).toEqual([])
+    expect(page.slotScore(1)).toBe('–')
   })
 
   it('opens a match it loaded before with no signal', async () => {

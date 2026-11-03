@@ -976,9 +976,17 @@ it to `src/routes/`.
   change first, one at a time. A change that can't get through waits,
   with a backoff from 2 to 30 seconds, and goes as soon as the browser
   fires `online`. A 4xx drops the change, since sending it again can't
-  help. Each game in the strip says `Syncing`, `Not synced` while the
-  outbox waits, or `Synced` for a moment once it lands. A note under the
-  strip says when the device is offline. Only the open page syncs today.
+  help. `useAppSync()` runs in `Root`, on every page, for each match
+  whose outbox has changes, so a score saved with no signal syncs once
+  the device is back online, even after the scoring page has closed.
+  Each game in the strip shows its state as a badge in its corner and a
+  tint on its edge, so the cell never changes size: a dot while it
+  syncs, amber while the outbox waits, and green for a moment once it
+  lands. Screen readers hear `Syncing`, `Not synced` or `Synced`. The
+  strip's header line says when the device is offline, or else where
+  the match was decided. That line, and the line beside the buttons
+  that holds the score hint or "Saved by", keep their height, so saving
+  and typing don't move the page.
 - `src/scoring/demoServer.ts` stands in for the API's match routes, with
   its own board under `fortymm-demo-server:<matchId>`. The page loads the
   match through it in a `QueryBoundary`, with a skeleton, and keeps the
@@ -986,7 +994,10 @@ it to `src/routes/`.
   reach the server opens that copy. Each call waits, then may fail, as
   the page's `network` search param says: `normal` (300ms), `slow`
   (2.5s), `flaky` (every second request answers 503), `offline` (no
-  response) or `broken` (500).
+  response) or `broken` (500). A Testing panel at the bottom of the
+  page (`TestingPanel.tsx`) switches the network, resets the match on
+  the device and the server, or clears every demo match and saved copy.
+  It goes when the API has matches.
 - `design-system.tsx`: a public page. Public pages go directly in
   `src/routes/`. They make no request and never show the loading screen.
   The design system page has no `AppShell`, and no page links to it.

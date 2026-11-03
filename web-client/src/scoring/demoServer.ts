@@ -1,7 +1,7 @@
 import { queryOptions } from '@tanstack/react-query'
 import { ApiError, ApiUnreachable, classifyFailure } from '../api/errors'
 import { demoMatch, type Match, type MatchPlayer } from './demoMatches'
-import { applyChange, readBoard, writeBoard, type Change } from './scratchpad'
+import { applyChange, forgetRecords, readBoard, storageKey, writeBoard, type Change } from './scratchpad'
 
 // Stands in for the API's match routes until they exist. It keeps its own
 // board per match, apart from the scratchpad on the device, and takes the
@@ -98,4 +98,16 @@ export function matchQuery(id: string, self: MatchPlayer, network: Network) {
     },
     staleTime: Infinity,
   })
+}
+
+// Starts the match over: its scratchpad, its outbox and the server's board.
+export function resetMatch(matchId: string): void {
+  const keys = [storageKey(matchId), serverKey(matchId)]
+  forgetRecords((key) => keys.includes(key))
+}
+
+// Deletes every demo match's scratchpad, server board and saved copy.
+export function clearEverything(): void {
+  const prefixes = [storageKey(''), serverKey(''), matchKey('')]
+  forgetRecords((key) => prefixes.some((prefix) => key.startsWith(prefix)))
 }

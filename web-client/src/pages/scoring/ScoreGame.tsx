@@ -34,6 +34,7 @@ import {
   type Submitted,
 } from '../../scoring/scratchpad'
 import { useSync, type SyncStatus } from '../../scoring/sync'
+import { TestingPanel } from './TestingPanel'
 import './scoring.css'
 
 const ROUTE = '/_authenticated/matches/$matchId/scores/game/$gameNumber/edit'
@@ -85,6 +86,7 @@ export function ScoreGame() {
         <QueryBoundary skeleton={<ScoreSkeleton />}>
           <ScoreBoard gameNumber={gameNumber} />
         </QueryBoundary>
+        <TestingPanel />
       </main>
     </div>
   )
@@ -169,7 +171,17 @@ function GameStrip({
   const decider = deciderGame(slots, match.bestOf)
   return (
     <nav className="score-strip-wrap" aria-label="Games" aria-busy={sync.kind === 'sending' || undefined}>
-      <p className="score-strip__label">Games</p>
+      {/* One line that always holds its height, so a note never moves the
+          page when it comes or goes. */}
+      <div className="score-strip__head">
+        <p className="score-strip__label">Games</p>
+        {sync.kind === 'waiting' && unsynced.size > 0 ? (
+          <SyncWaiting reason={sync.reason} />
+        ) : (
+          decider !== null &&
+          decider < match.bestOf && <p className="score-strip__note">Match decided after game {decider}</p>
+        )}
+      </div>
       <ol className="score-strip">
         {slots.map((points, index) => (
           <GameSlot
@@ -185,23 +197,14 @@ function GameStrip({
           />
         ))}
       </ol>
-      {decider !== null && decider < match.bestOf && (
-        <p className="fm-help">Match decided after game {decider}</p>
-      )}
-      {sync.kind === 'waiting' && unsynced.size > 0 && <SyncWaiting reason={sync.reason} />}
     </nav>
   )
 }
 
 function SyncWaiting({ reason }: { reason: 'offline' | 'failed' }) {
   return (
-    <p className="fm-notice score-sync-note" role="status">
-      <Icon name="info" />
-      <span>
-        {reason === 'offline'
-          ? 'You’re offline. Your scores are saved on this device and sync when you’re back online.'
-          : 'Couldn’t sync your scores. They’re saved on this device, and we’ll keep trying.'}
-      </span>
+    <p className="score-strip__note score-strip__note--waiting" role="status">
+      {reason === 'offline' ? 'Offline. Saved on this device.' : 'Not synced yet. Saved on this device.'}
     </p>
   )
 }
@@ -241,6 +244,7 @@ function GameSlot({
   const state = unsynced ? (waiting ? 'waiting' : 'syncing') : justSynced ? 'synced' : null
   const classes = ['score-slot']
   if (after) classes.push('score-slot--after')
+  if (state) classes.push(`score-slot--${state}`)
   return (
     <li>
       <Link
@@ -253,12 +257,16 @@ function GameSlot({
         <span className="score-slot__label">Game {game}</span>{' '}
         <span className="score-slot__pts">{points ? <SlotScore points={points} sides={sides} /> : '–'}</span>
         {state && (
-          <span className={`score-slot__sync score-slot__sync--${state}`}>
-            {' '}
-            {state === 'synced' && <Icon name="check" />}
-            {state === 'waiting' && <Icon name="alert" />}
-            {state === 'syncing' ? 'Syncing' : state === 'waiting' ? 'Not synced' : 'Synced'}
-          </span>
+          <>
+            {/* Pinned in the corner, so the cell keeps its size. */}
+            <span className="score-slot__badge" aria-hidden="true">
+              {state === 'synced' && <Icon name="check" />}
+              {state === 'waiting' && <Icon name="alert" />}
+            </span>
+            <span className="score-slot__sync fm-sr">
+              {state === 'syncing' ? 'Syncing' : state === 'waiting' ? 'Not synced' : 'Synced'}
+            </span>
+          </>
         )}
       </Link>
     </li>
@@ -310,9 +318,9 @@ function ScorePad({
         return null
       case 'partial':
         return (
-          <p className="fm-help" id={feedbackId}>
+          <span className="fm-help" id={feedbackId}>
             Enter both scores to save the game.
-          </p>
+          </span>
         )
       case 'malformed':
         return <FieldError id={feedbackId}>Enter each score as a whole number, up to 99.</FieldError>
@@ -396,10 +404,15 @@ function ScorePad({
         </div>
         {side(sides[1])}
       </section>
-      {message}
-      {!frozen && (
+      {frozen ? (
+        message
+      ) : (
         <div className="score-actions">
-          <p className="fm-help score-actions__note">{saved ? `Saved by ${saved.savedBy.name}` : ''}</p>
+          {/* The hint or the reason takes the place of "Saved by", in a line
+              that keeps its height, so typing doesn't move the buttons. */}
+          <div className="score-actions__note">
+            {message ?? (saved && <span className="fm-help">Saved by {saved.savedBy.name}</span>)}
+          </div>
           <div className="score-actions__buttons">
             {saved && (
               <Button variant="ghost" onClick={() => clearGame(match.id, gameNumber)}>

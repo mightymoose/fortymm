@@ -1,7 +1,7 @@
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { ApiError, classifyFailure } from '../api/errors'
 import { sendChange, type Network } from './demoServer'
-import { markSent, pendingChanges, subscribe } from './scratchpad'
+import { markSent, matchesWithChanges, pendingChanges, subscribe } from './scratchpad'
 
 // Sends a match's outbox to the server in the background, oldest change
 // first, one at a time, so the server applies them in the order they were
@@ -122,6 +122,34 @@ function start(matchId: string, network: Network): () => void {
     current.users -= 1
     if (current.users === 0) current.stop()
   }
+}
+
+// Syncs every match that has unsent changes, whichever page is open, until
+// its outbox is empty. Root runs it, so a score saved with no signal syncs
+// once the device is back online, even after the scoring page has closed.
+export function useAppSync(network: Network): void {
+  const pending = useSyncExternalStore(subscribe, matchesWithChanges)
+  const running = useRef(new Map<string, () => void>())
+  useEffect(() => {
+    const ids = new Set(pending === '' ? [] : pending.split(' '))
+    for (const [id, stop] of running.current) {
+      if (!ids.has(id)) {
+        stop()
+        running.current.delete(id)
+      }
+    }
+    for (const id of ids) {
+      if (!running.current.has(id)) running.current.set(id, start(id, network))
+    }
+  }, [pending, network])
+  // A new network restarts every sync, which sends at once.
+  useEffect(() => {
+    const syncs = running.current
+    return () => {
+      for (const stop of syncs.values()) stop()
+      syncs.clear()
+    }
+  }, [network])
 }
 
 // Syncs the match's outbox while the calling component is mounted, through
