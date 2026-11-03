@@ -98,6 +98,32 @@ describe('ScoreGame', () => {
     await waitFor(() => expect(page.slotSyncMarks(1)).toEqual({ sending: false, stuck: false }))
   })
 
+  it('sends a stuck score and the edit made after it in order, so the edit wins', async () => {
+    const page = await ScoreGamePage.render()
+    await page.switchNetwork('broken')
+    await page.enter({ [ME]: '11', [OPPONENT]: '8' })
+    await page.save()
+    await page.goToGame(1)
+    await page.enter({ [ME]: '11', [OPPONENT]: '9' })
+    await page.save()
+
+    expect(pendingChanges('demo').map((change) => change.kind === 'save' && change.points)).toEqual([
+      [11, 8],
+      [11, 9],
+    ])
+    expect(page.slotScore(1)).toBe('11–9')
+
+    const shown = new Set<string>()
+    const watch = setInterval(() => shown.add(page.slotScore(1)), 20)
+    await page.router.navigate({ to: '.', search: {} })
+    await waitFor(() => expect(pendingChanges('demo')).toEqual([]))
+    await page.settle()
+    clearInterval(watch)
+
+    expect(page.serverScore(1)).toEqual([11, 9])
+    expect([...shown]).toEqual(['11–9'])
+  })
+
   it('sends nothing while the browser knows it is offline, and syncs when it comes back', async () => {
     const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
     const page = await ScoreGamePage.render()
