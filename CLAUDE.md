@@ -1020,10 +1020,10 @@ it to `src/routes/`.
 - The URL's fragment holds the match's scores, as base64url
   (`src/scoring/fragment.ts`). It is empty, a bare payload of
   `encodePayload()` (a draft nobody approved yet), or a COSE_Sign
-  envelope, the same bytes a result link carries. The URL is the only
-  state, so a reload shows the same games, any scoring URL can be shared,
-  and two tabs don't share edits. The games are an ordered list with no
-  gaps. Game N opens only once game N-1 has a score.
+  envelope, the same bytes a result link carries. The URL is the
+  scorer's truth, so a reload shows the same games and any scoring URL
+  can be shared. The games are an ordered list with no gaps. Game N opens
+  only once game N-1 has a score.
 - Each scoring route's loader reads the fragment once with
   `readFragment()`, and the page trusts the loader's data. The CBOR codec
   decodes the bytes, and `fragmentResultSchema()`, a zod schema built per
@@ -1063,6 +1063,60 @@ it to `src/routes/`.
   moves on at once. It pushes when the game number changes and replaces
   when it stays. Nothing about saving waits on the network. Clear game
   shows only on the last game with a score, and removes it.
+- Each save, and each submit, also syncs the board in the background
+  (`src/scoring/sync.ts`), so spectators and tournament directors can
+  watch the match. Sync is best effort. It never holds up or fails a
+  save. The board is a snapshot, the fragment's text, with no outbox of
+  changes. `src/scoring/boards.ts` keeps, per match and in memory only,
+  the newest board this tab saved that the server hasn't taken
+  (`pending`), and the last one the server took or this tab pulled
+  (`synced`). A newer save replaces an unsent one, and a reload forgets
+  it. Each match sends one board at a time, so a late older copy from
+  this tab can't land after a newer one. Across tabs and devices the
+  last write wins.
+- A match's sync is a state machine of `idle`, `sending`,
+  `waitingRetry`, `waitingOnline`, `pulling` and `stopped`, with why the
+  last send got stuck kept beside it. `nextStep()` picks what an idle
+  sync does. While the browser knows it's offline (`navigator.onLine`,
+  or the demo's `offline`), it sends nothing and waits for `online`. A
+  board that can't get through waits, with a backoff of 2, 4, 8, 15 and
+  then 30 seconds, and goes as soon as the browser fires `online`. A 4xx
+  other than 429 drops the board. `useAppSync()` runs in `Root`, on every
+  page, for each match with a board to send, so it still goes after the
+  person leaves the scoring page. A sync stops when its last holder lets
+  go, and a response that lands after that changes nothing.
+- Only the scoring edit page pulls the server's board, and only while
+  this tab has nothing to send. It pulls when the page opens, after each
+  board the server takes, and every 5 seconds while the page is visible.
+  A pulled board that `readFragment()` can't read, or that doesn't fit
+  the match, is ignored. `adopts()` decides whether the page takes it,
+  with a replace, on the same game or the last one that can open. The
+  page follows the server while its fragment is empty or is the board it
+  last synced. So two tabs on one match converge while idle. A board
+  from a link, such as one that Edit scores opens, gives way only to a
+  board issued later, so opening it never undoes it.
+- `src/scoring/demoServer.ts` stands in for the API's match routes. It
+  keeps the latest board per match under `fortymm-demo-server:<matchId>`,
+  with `putBoard()` and `fetchBoard()`. Each call waits, then may fail,
+  as the demo network says: `normal` (300ms), `slow` (2.5s), `flaky`
+  (every second request on that network answers 503), `offline` (each
+  request fails at once) or `broken` (500). The network is in
+  `localStorage` under `fortymm-demo-network`, and each request reads it.
+  A switch to any network but `offline` fires `online`, as a connection
+  that came back does. Tests set it with `setDemoNetwork()`.
+- A Testing panel at the bottom of the edit page (`TestingPanel.tsx`)
+  switches the network. Reset match clears the server's board and this
+  tab's unsent one, and opens game 1 with no hash. Clear everything does
+  that for every demo match and sets the network back to `normal`. Both
+  drop the demo server's requests in flight, so a late one can't bring
+  back what they cleared. The panel goes when the API has matches.
+- The strip shows each game's sync while this tab has a board to send.
+  A game is unsynced when its points differ from the `synced` board. It
+  shows a dot while the board is on its way, a dashed amber edge and
+  label after a send that didn't get through, and green for 1.2 seconds
+  once it lands. Screen readers hear `Syncing`, `Not synced` or
+  `Synced`. The strip's header line says when the device is offline.
+  The marks never change a cell's size, and the line keeps its height.
 - When a player's press would leave a `decided` board, the button reads
   Submit result, and the line beside it says who wins. Submit drops any
   signatures, signs the games with the typed score with this browser's
@@ -1302,8 +1356,9 @@ environment). `web-client/src/setupTests.ts` loads the jest-dom matchers,
 starts the mock API, and cleans up rendered components and `localStorage`
 after each test, so a saved session doesn't leak into the next test. It
 loads `fake-indexeddb`, and gives each test a new `IDBFactory`, so a
-signing key, or a registration still in flight, doesn't leak either. Tests
-live next to the code as `*.test.tsx`.
+signing key, or a registration still in flight, doesn't leak either. It
+also drops the demo server's requests in flight and forgets every unsent
+board. Tests live next to the code as `*.test.tsx`.
 
 Tests go through page objects in `web-client/src/test/pages/`. A static async
 `render()` renders the app's router at the page's path (via
@@ -1374,7 +1429,11 @@ the notices and the URL's fragment. A press waits until the URL changes
 or an alert shows, because a save hashes the result it corrects first.
 `href` includes the fragment, and `close()` unmounts the page, so a test
 renders `href` again as a reload does. `waitForKey()` waits for this
-browser's signing key before a submit.
+browser's signing key before a submit. `settle()` also waits until the
+strip isn't `aria-busy`, so the sync has stopped sending and pulling.
+`switchNetwork()` sets the demo network, `otherDeviceSyncs()` puts
+another device's board on the demo server, `serverBoard` reads it, and
+`slotSync()` reads what a screen reader hears about a game's sync.
 `AwaitingValidationPage` wraps the router after a submit, or renders the
 submission page at a path with its envelope, and finds its link, QR code
 and the link back to the scores.
