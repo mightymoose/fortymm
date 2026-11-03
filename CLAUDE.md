@@ -971,10 +971,11 @@ it to `src/routes/`.
 - `matches/$matchId/scores/game/$gameNumber/edit.tsx`: the page
   `ScoreGame` (`src/pages/scoring/`), a match's scoring scratchpad, with
   the wordmark, a link to Home and no `AppShell`. It edits one game. The
-  route's loader reads the match from `demoMatch()`
-  (`src/scoring/demoMatches.ts`), because the API has no matches yet.
-  `demo` is a best of 5 between the session's player and `brave badger
-  214`. In `demo-spectator`, two other players play, so the viewer is a
+  match comes from `demoMatch()` (`src/scoring/demoMatches.ts`), because
+  the API has no matches yet. `demo` is a best of 5 between the session's
+  player and `brave badger 214`. The page works out the match from the
+  session on each render, not in the loader, because a saved account can
+  stand in for the session until the API answers with another player. In `demo-spectator`, two other players play, so the viewer is a
   spectator. Any other id throws `notFound()`. A game number that isn't
   a whole number from 1 to the match's `bestOf` goes to game 1, with a
   replace. One pad holds a big score input per player and the games

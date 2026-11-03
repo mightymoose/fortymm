@@ -3,8 +3,10 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { serverKey, setDemoNetwork } from '../../scoring/demoServer'
 import { markSent, pendingChanges, readBoard, saveGame as saveOnDevice, storageKey, writeBoard } from '../../scoring/scratchpad'
+import { saveAccount } from '../../api/savedSession'
 import { ErrorPage } from '../../test/pages/ErrorPage'
 import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
+import { holdSession, sessionResponse } from '../../test/server'
 
 const ME = 'excited egret 387'
 const OPPONENT = 'brave badger 214'
@@ -25,6 +27,21 @@ describe('ScoreGame', () => {
     expect(page.sides).toEqual([ME, OPPONENT])
     expect(page.tally).toBe('0–0')
     expect(page.slot(1)).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('puts the session’s player on the left when it differs from the saved account', async () => {
+    const account = sessionResponse.data.account
+    saveAccount({
+      ...account,
+      player: { id: 'c5a1f0e2-0000-4000-8000-0000000000aa', display_name: 'old otter 111' },
+    })
+    const session = holdSession()
+
+    const page = await ScoreGamePage.render()
+    expect(page.sides).toEqual(['old otter 111', OPPONENT])
+
+    await session.respond(Response.json(sessionResponse))
+    await waitFor(() => expect(page.sides).toEqual([ME, OPPONENT]))
   })
 
   it('focuses the left score when a game opens', async () => {

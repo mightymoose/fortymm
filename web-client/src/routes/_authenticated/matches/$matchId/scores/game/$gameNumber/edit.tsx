@@ -4,8 +4,9 @@ import { ScoreGame } from '../../../../../../../pages/scoring/ScoreGame'
 import { demoMatch } from '../../../../../../../scoring/demoMatches'
 
 // A game number that isn't one of the match's games goes to game 1. The
-// match comes with the route, so the page draws at once, with or without a
-// connection.
+// page works out the match from the session itself, because a saved
+// account can stand in for the session until the API answers with another
+// player.
 export const Route = createFileRoute('/_authenticated/matches/$matchId/scores/game/$gameNumber/edit')({
   loader: async ({ context: { api, queryClient }, params }) => {
     const account = await queryClient.ensureQueryData(sessionQuery(api))
@@ -19,7 +20,7 @@ export const Route = createFileRoute('/_authenticated/matches/$matchId/scores/ga
         replace: true,
       })
     }
-    return { match, gameNumber }
+    return { gameNumber }
   },
   component: ScoreGame,
 })
