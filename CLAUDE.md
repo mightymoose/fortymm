@@ -987,14 +987,16 @@ it to `src/routes/`.
   decider step back, under "Match decided after game N", and stay
   editable. Below 880px the two sides stay side by side and the buttons
   split the width, with Save or Submit on the right.
-- `matches/$matchId/score-validations/new.tsx`: the page `AwaitingValidation`
+- `matches/$matchId/scores/submission.tsx`: the page `AwaitingValidation`
   (`src/pages/matches/`), where a submitted result lands, with the
   scratchpad's frame. It says which player must confirm, and shows the
   games and the winner. Then it shows the signed result as a QR code
   (`QrCode` in `src/components/`, the `FMR1:` text at level M) and as a
-  link. The link is same-origin `/r#` and the envelope in base64url, so it
-  opens in dev and on a Preview, and it is the format's
-  `https://fortymm.com/r#` link in production. Copy link copies it.
+  link. The link is same-origin
+  `/matches/<matchId>/scores/approvals/new#` and the envelope in
+  base64url, so it opens in dev and on a Preview. It isn't the format's
+  `https://fortymm.com/r#` link, and the app has no `/r` page. Copy link
+  copies it.
   `signedResultOf()` (`src/scoring/signedResult.ts`) builds the result
   from the match and the submission, and `signedResultQuery()` signs it
   with this browser's key, in its own `QueryBoundary`. With no key, the
@@ -1004,12 +1006,28 @@ it to `src/routes/`.
   isn't submitted by the session's player goes to its game 1, with a
   replace. A demo match has a fixed `uuid` for the result, and is
   unrated.
-- `r.tsx`: a public page, with component `ResultLink`
-  (`src/pages/results/`). It decodes the link's fragment alone and lists
-  what the result holds: the match, best of, rated, the player ids, the
-  games, the ending, what it replaces, when it was issued, each
-  signature's side and kid, and the result hash. It makes no request and
-  checks no signature, so it says the result isn't validated. A missing
+- `matches/$matchId/scores/approvals/new.tsx`: the page `AcceptResult`
+  (`src/pages/matches/`), which the link opens, with the scratchpad's
+  frame. It works offline and makes no request of its own. Until matches
+  come from the API, every viewer stands in as the player whose side
+  hasn't signed, or once both have, the side that signed last. It shows
+  only what the link's payload, the session and this device's scratchpad
+  say, and never reads `demoMatch()`. "Review match score" heads it, then
+  the outcome for the viewer, such as "Your opponent reported that you
+  lost 3–1. Do these scores look right?" One `.fm-games` table follows:
+  a row for You, then one for Your opponent, each game's points, then
+  Won. A row shows the player's username beside its role only if this
+  device already has it: the session's player, or a player who saved a
+  game of the match here. Nothing fetches one. Below 880px the username
+  drops under the role, so a best of 7 fits a phone. A retirement counts
+  only the finished games. Under the table are best of, rated, when the
+  opponent reported it and whether it corrects another. The page never
+  says "sign". Approve result appends this browser's signature
+  (`appendSignature()`) and replaces the URL's fragment with the new
+  envelope, so the page says "Approved on this device" from the link
+  alone, after a reload too. Nothing sends or keeps the approved result
+  yet (#195). Edit scores goes to the match's game 1. It checks no
+  signature. With no key, it says the browser can't sign yet. A missing
   or malformed fragment shows "This link isn’t a FortyMM result".
 - Anyone who can open the match can save any game, in any order. The
   only check is that the game's score is legal (`parseGameScore()` in
@@ -1353,9 +1371,10 @@ by default. It types scores, saves them, switches the demo network and
 reads the strip, the tally, the feedback and the result. `close()`
 unmounts the page, so a test can render it again as a reload does.
 `AwaitingValidationPage` wraps the router after a submit, or renders the
-validation page directly, and finds its link and QR code.
-`ResultLinkPage` renders `/r` with a link's fragment, such as a vector's,
-and reads each listed value by its term.
+submission page directly, and finds its link and QR code.
+`AcceptResultPage` renders a link's path and fragment, approves the
+result or goes to edit the scores, and reads the game scores table, the
+approval status and the URL's fragment.
 
 `HomePage.render({ path })` renders the app at another path, such as one
 with a query. `homePage.href` is the router's current path and query, so a

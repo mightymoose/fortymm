@@ -8,7 +8,7 @@ import { signWithDeviceKey, takeKey } from '../../signing/deviceKey'
 import { hex } from '../../signing/bytes'
 import { decodeEnvelope } from '../../signing/envelope'
 import { decodePayload } from '../../signing/result'
-import { envelopeFromText, LINK_PREFIX } from '../../signing/text'
+import { fromBase64url } from '../../signing/text'
 
 const ME = 'excited egret 387'
 const OPPONENT = 'brave badger 214'
@@ -29,7 +29,7 @@ describe('AwaitingValidation', () => {
   it('shows the submitted result after a submit', async () => {
     const page = await submitThreeNil()
 
-    expect(page.href).toBe('/matches/demo/score-validations/new')
+    expect(page.href).toBe('/matches/demo/scores/submission')
     expect(page.heading).toHaveTextContent('Waiting for validation')
     expect(page.text).toContain(`${OPPONENT} confirms the result`)
     expect(page.result).toHaveTextContent(`${ME} wins 3–0`)
@@ -41,8 +41,9 @@ describe('AwaitingValidation', () => {
 
     const link = await page.findLink()
     expect(page.qrCode).toBeInTheDocument()
-    const fragment = link.getAttribute('href')!.replace(/^\/r#/, '')
-    const { payload, signatures } = decodeEnvelope(envelopeFromText(LINK_PREFIX + fragment))
+    const [path, fragment] = link.getAttribute('href')!.split('#')
+    expect(path).toBe('/matches/demo/scores/approvals/new')
+    const { payload, signatures } = decodeEnvelope(fromBase64url(fragment))
     const { result } = decodePayload(payload)
     expect(result).toMatchObject({
       match: match.uuid,

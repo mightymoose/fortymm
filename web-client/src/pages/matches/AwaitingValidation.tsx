@@ -1,5 +1,5 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
-import { Link, Navigate, useLoaderData } from '@tanstack/react-router'
+import { Link, Navigate, useLoaderData, useRouter } from '@tanstack/react-router'
 import { Button } from '../../components/Button'
 import { Icon } from '../../components/Icon'
 import { QrCode } from '../../components/QrCode'
@@ -14,7 +14,7 @@ import { base64url, qrText } from '../../signing/text'
 import { gamesWon, PATH, shown, sidesFor } from '../scoring/sides'
 import '../scoring/scoring.css'
 
-const ROUTE = '/_authenticated/matches/$matchId/score-validations/new'
+const ROUTE = '/_authenticated/matches/$matchId/scores/submission'
 
 // Where a player lands after submitting a result. The other player confirms
 // it from the QR code or the link, which carry the result this device
@@ -78,7 +78,11 @@ function SignedResult({ match, submission }: { match: Match; submission: Submitt
   const { data: envelope } = useSuspenseQuery(signedResultQuery(match, submission))
   const showToast = useToast()
   // Same-origin, so it opens on a Preview and in dev as it does on fortymm.com.
-  const path = `/r#${base64url(envelope)}`
+  const path = useRouter().buildLocation({
+    to: '/matches/$matchId/scores/approvals/new',
+    params: { matchId: match.id },
+    hash: base64url(envelope),
+  }).href
   const url = new URL(path, window.location.origin).href
   return (
     <section className="validation-share" aria-label="Signed result">
