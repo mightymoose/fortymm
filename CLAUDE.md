@@ -490,7 +490,8 @@ routes, under `/v1/admin`.
   letters, digits and `_`, joined by dots, such as `games.record`, at most
   64 characters. The key never changes, because code checks it by key.
 - The built-in permissions are the ones the code checks: `admin.view`,
-  `roles.manage` and `account_roles.manage`. They are the members of
+  `roles.manage`, `account_roles.manage` and `signing_keys.revoke`. They
+  are the members of
   `Permission` in `permissions.py`, and their rows have `built_in` set. A
   test fails if the two differ, so a new check in code needs a migration
   that adds its row. Nobody can delete a built-in permission (409).
@@ -519,13 +520,18 @@ routes, under `/v1/admin`.
 - The migration makes the role `Administrator`, with the built-in
   permissions. It grants it to `mightymoose@fortymm.com`: to the account
   if one exists, or else as an email grant. In dev, signing in through the
-  mock as that email makes an administrator.
+  mock as that email makes an administrator. The migration that added
+  `signing_keys.revoke` granted it to every role that granted
+  `account_roles.manage`, which could already grant itself anything.
 - `GET /v1/admin/accounts` lists verified accounts by email, at most 50,
   with `meta.has_more`. `email` filters by a case-insensitive substring.
   `GET /v1/admin/accounts/{account_id}` is the account's page in one
   request: its email, player, `created_at`, `last_seen_at`, and every role
   by name with `held`. It answers 404 for a guest. `PUT
   /v1/admin/accounts/{account_id}/roles` sets the exact set of roles.
+- `GET /v1/admin/signing-keys` and `POST
+  /v1/admin/signing-keys/{key_id}/revoke` are the admin's view of the
+  signing keys (see Signing keys).
 
 ### Leagues
 
@@ -606,16 +612,20 @@ reads a result yet (#188).
   `account_id` is `ON DELETE RESTRICT`, because a key attributes results to
   its account, and `MOVES_ON_ADOPT`. `label` is trimmed and at most 50
   characters. `tests/test_schema.py` ties `LABEL_MAX_LENGTH` to the CHECK.
-  `revoked_at` is only ever set, never cleared. `signed_out_at` is set by
-  a sign-out or the cap, and cleared when the device registers the key
-  again, unless the key is revoked. A live key has neither. No column
-  says "live". The service derives it.
+  `revoked_at` is only ever set, never cleared. `revoked_by` names the
+  account that revoked the key: its own, or an administrator's.
+  `CHECK ((revoked_at IS NULL) = (revoked_by IS NULL))` keeps the two
+  together. It is `MOVES_ON_ADOPT`, so a guest's own revoke moves with its
+  keys. `signed_out_at` is set by a sign-out or the cap, and cleared when
+  the device registers the key again, unless the key is revoked. A live
+  key has neither. No column says "live". `_state()` in the service is the
+  one rule: revoked wins over signed out, which wins over live.
 - The service is the only writer of the table. Its surface is
-  `register_key()`, `account_keys()`, `revoke_key()`, `sign_out_device()`
-  and `verification_keys()`. Its refusals are `InvalidDeviceLabel`,
-  `InvalidPublicKey` and `InvalidProof` (422), `KeyRegisteredElsewhere`
-  (409) and `SigningKeyNotFound` (404), mapped in `main.py`'s
-  `SIGNING_KEY_ERRORS`.
+  `register_key()`, `account_keys()`, `revoke_key()`, `find_keys()`,
+  `revoke_any_key()`, `sign_out_device()` and `verification_keys()`. Its
+  refusals are `InvalidDeviceLabel`, `InvalidPublicKey` and `InvalidProof`
+  (422), `KeyRegisteredElsewhere` (409), and `SigningKeyNotFound` and
+  `UnknownSigningKey` (404), mapped in `main.py`'s `SIGNING_KEY_ERRORS`.
 - A device registers with `POST /v1/account/signing-keys` and a body of
   `public_key`, `proof` and `label`. Every byte field in this API's JSON is
   lowercase hex, through `HexBytes` in `v1/types.py`. A string that isn't
@@ -661,9 +671,24 @@ reads a result yet (#188).
   other order, a logout that overlaps an adoption deadlocks with it. A
   signed-out key still verifies what it signed.
 - `POST /v1/account/signing-keys/{kid}/revoke` reports a device
-  compromised. It sets `revoked_at`, and a second call keeps the first
-  time. A signed-out key can be revoked. It answers 404 for a key the
-  account doesn't own, so another account's key looks like no key.
+  compromised. It sets `revoked_at` and `revoked_by`, and a second call
+  keeps the first time and revoker. A signed-out key can be revoked. It
+  answers 404 for a key the account doesn't own, so another account's key
+  looks like no key.
+- An administrator sees and revokes any account's key, a guest's too,
+  under `/v1/admin`. `GET /v1/admin/signing-keys` (`admin.view`) lists
+  every key, newest first, at most 50, with `meta.has_more`. Each has its
+  `state`, `revoked_by` with `revoked_by_email`, and its account's `id`,
+  `email` and self player's `display_name`. `search` keeps the keys whose
+  account's email or player name contains it, whatever its case. Empty
+  text leaves the filter out, so guests, whose email is NULL, stay. `POST
+  /v1/admin/signing-keys/{key_id}/revoke` (`signing_keys.revoke`) revokes
+  the key as the administrator, through the same writer as the owner's
+  revoke, so the first time and revoker stick. It answers 404 "No key has
+  this id" for an unknown kid. It locks the administrator's account, not
+  the key's, so a key that adoption just moved still revokes. A revoke
+  ends no session. The device finds out at its next registration and
+  makes a new key.
 - Adoption moves the guest's keys to the target account, as it moves every
   other `MOVES_ON_ADOPT` column. It doesn't trim. The target's next
   registration does.
@@ -903,13 +928,21 @@ it to `src/routes/`.
   with `admin.view`. `route.tsx` has no component. Its loader reads the
   session and sends any other account to `/`.
 - `_shell/admin/index.tsx`: the page `Admin`. It has a tab each for roles,
-  permissions and accounts. The `tab` search param names the open tab
-  (`src/pages/admin/tabs.ts`), and a tab change replaces it. `Tabs` is
+  permissions, accounts and signing keys. The `tab` search param names the
+  open tab (`src/pages/admin/tabs.ts`), and a tab change replaces it.
+  `Admin.tsx` keeps each tab's label and panel in a `Record` of the tab
+  ids, so a tab without a panel fails `tsc`. `Tabs` is
   `lazy` there, so a tab loads its lists when it opens. Each tab's list has
   its own `QueryBoundary` with a table skeleton. `roles.manage` shows the
   controls that add, edit and delete roles and permissions. A built-in
   permission has no Delete. The accounts tab searches by email, says when
   it shows only the first 50, and links each email to the account's page.
+  The signing keys tab (`SigningKeysSection`) lists every account's keys,
+  searched by email or player name, each with its account (linked, or
+  "Guest"), registration and state from the API's `state`. With
+  `signing_keys.revoke`, a key that isn't revoked has Revoke…, which opens
+  a `ConfirmDialog` that says what a revoke does. `ConfirmDialog` takes
+  its busy label from the caller.
 - `_shell/admin/accounts/$accountId.tsx`: the page `AccountAdmin`, one
   account's admin page. A breadcrumb links back to Administration and to
   `/admin?tab=accounts`. The account loads in its own `QueryBoundary`,
@@ -1158,9 +1191,11 @@ renders again, as a quick double click can.
 API does. The session's `permissions` come from that account's roles, so
 a write can change them. It counts each permission's roles and each
 role's accounts. It refuses a taken role name or permission key, a
-built-in permission's delete, and any write that leaves no account with
-`account_roles.manage`, with the API's titles. It answers 415 to a write
-without a JSON `Content-Type`. It returns the `state`, which a test changes
+built-in permission's delete, any write that leaves no account with
+`account_roles.manage`, and a revoke without `signing_keys.revoke` or of an
+unknown key, with the API's titles. Its `signingKeys` are every account's
+keys, guests' too. It answers 415 to a write without a JSON
+`Content-Type`, a bodyless `POST` too. It returns the `state`, which a test changes
 as another tab would, and the `writes` it got. `builtInPermissions` and
 `administrator` are the rows the migration makes. It also answers an
 account's page. `holdAdmin(list)` holds a list's responses, and
