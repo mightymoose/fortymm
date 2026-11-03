@@ -944,8 +944,10 @@ it to `src/routes/`.
   214`. In `demo-spectator`, two other players play, so the viewer is a
   spectator. Any other id throws `notFound()`. A game number that isn't
   a whole number from 1 to the match's `bestOf` goes to game 1, with a
-  replace. The header shows both players and the games tally, the
-  viewer's player on the left. Swap sides flips the page only. A strip
+  replace. It is laid out like fortymm-real's score entry: one pad with
+  a big score input per player and the games tally between them, the
+  viewer's player on the left, then the actions. The pad is a form, so
+  Enter saves a legal score. A strip
   links to each game, with its score in mono and the game winner's
   points bold. Games after the decider step back, under "Match decided
   after game N", and stay editable.

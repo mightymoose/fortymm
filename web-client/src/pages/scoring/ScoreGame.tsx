@@ -36,8 +36,8 @@ import './scoring.css'
 const ROUTE = '/_authenticated/matches/$matchId/scores/game/$gameNumber/edit'
 const PATH = '/matches/$matchId/scores/game/$gameNumber/edit'
 
-// The two sides as the page shows them, left then right. Swapping changes
-// only the page, never the order the points are stored in.
+// The two sides as the page shows them, left then right: the viewer's side
+// first when they play. The points stay stored in the match's order.
 type Sides = [Side, Side]
 
 function other(side: Side): Side {
@@ -65,13 +65,13 @@ export function ScoreGame() {
   const me: Scorer = { playerId: account.player.id, name: account.player.display_name }
   const viewer = viewerOf(match, me.playerId)
   const pad = useScratchpad(match.id)
-  const [left, setLeft] = useState<Side>(viewer.role === 'player' ? viewer.side : 0)
+  const left: Side = viewer.role === 'player' ? viewer.side : 0
   const sides: Sides = [left, other(left)]
   const slots = slotsOf(pad, match.bestOf)
   const saved = pad.games[gameNumber]
 
   return (
-    <div className="score">
+    <div className="score-page">
       <header className="score-top">
         <Wordmark />
         <Link to="/" className="fm-btn fm-btn--ghost fm-btn--sm">
@@ -80,20 +80,7 @@ export function ScoreGame() {
         </Link>
       </header>
       <main className="score-content">
-        <section className="score-match" aria-label="Match">
-          <div className="score-players">
-            <PlayerName name={match.players[sides[0]].name} />
-            <p className="score-tally">
-              <span className="fm-sr">Games </span>
-              {shown(tally(slots), sides)}
-            </p>
-            <PlayerName name={match.players[sides[1]].name} end />
-          </div>
-          <Button variant="ghost" size="sm" onClick={() => setLeft(other(left))}>
-            Swap sides
-          </Button>
-        </section>
-        <GameStrip match={match} slots={slots} current={gameNumber} sides={sides} />
+        <h1 className="score-title">Game {gameNumber}</h1>
         <ScorePad
           key={`${gameNumber}:${saved?.points.join('-') ?? ''}`}
           match={match}
@@ -104,18 +91,10 @@ export function ScoreGame() {
           frozen={pad.submission.phase === 'submitted'}
           me={me}
         />
+        <GameStrip match={match} slots={slots} current={gameNumber} sides={sides} />
         <Result match={match} submission={pad.submission} viewer={viewer} slots={slots} sides={sides} me={me} />
       </main>
     </div>
-  )
-}
-
-function PlayerName({ name, end = false }: { name: string; end?: boolean }) {
-  return (
-    <p className={end ? 'score-player score-player--end' : 'score-player'}>
-      <PlayerAvatar name={name} />
-      <span className="score-player__name">{name}</span>
-    </p>
   )
 }
 
@@ -133,6 +112,7 @@ function GameStrip({
   const decider = deciderGame(slots, match.bestOf)
   return (
     <nav className="score-strip-wrap" aria-label="Games">
+      <p className="score-strip__label">Games</p>
       <ol className="score-strip">
         {slots.map((points, index) => {
           const game = index + 1
@@ -237,48 +217,72 @@ function ScorePad({
     if (clearGame(match.id, gameNumber)) showToast(`Game ${gameNumber} cleared.`)
   }
 
-  return (
-    <section className="score-pad" aria-labelledby={`${feedbackId}-title`}>
-      <h1 className="h3 score-pad__title" id={`${feedbackId}-title`}>
-        Game {gameNumber}
-      </h1>
-      <div className="fm-scorepad">
-        {sides.map((side) => (
-          <label key={side} className="fm-scorepad__side">
-            <span className="fm-scorepad__name">{match.players[side].name}</span>
-            <input
-              className="fm-input fm-input--num score-input"
-              inputMode="numeric"
-              autoComplete="off"
-              maxLength={3}
-              value={draft[side]}
-              disabled={frozen}
-              aria-invalid={invalid || undefined}
-              aria-describedby={message ? feedbackId : undefined}
-              onChange={(event) => {
-                const next: [string, string] = [...draft]
-                next[side] = event.target.value
-                setDraft(next)
-              }}
-            />
-          </label>
-        ))}
+  const side = (side: Side) => {
+    const name = match.players[side].name
+    return (
+      <div className="score-side">
+        <p className="score-player">
+          <PlayerAvatar name={name} />
+          <span className="score-player__name">{name}</span>
+        </p>
+        <input
+          className="score-input"
+          inputMode="numeric"
+          autoComplete="off"
+          placeholder="0"
+          maxLength={3}
+          value={draft[side]}
+          disabled={frozen}
+          aria-label={name}
+          aria-invalid={invalid || undefined}
+          aria-describedby={message ? feedbackId : undefined}
+          onChange={(event) => {
+            const next: [string, string] = [...draft]
+            next[side] = event.target.value
+            setDraft(next)
+          }}
+        />
       </div>
+    )
+  }
+
+  return (
+    <form
+      className="score-entry"
+      noValidate
+      onSubmit={(event) => {
+        event.preventDefault()
+        save()
+      }}
+    >
+      <section className="score-pad" aria-label="Match">
+        {side(sides[0])}
+        <div className="score-mid">
+          <span className="score-mid__vs">vs</span>
+          <p className="score-tally">
+            <span className="fm-sr">Games </span>
+            {shown(tally(slots), sides)}
+          </p>
+        </div>
+        {side(sides[1])}
+      </section>
       {message}
-      {saved && <p className="fm-help">Saved by {saved.savedBy.name}</p>}
       {!frozen && (
-        <div className="score-pad__actions">
-          <Button variant="primary" disabled={entry.kind !== 'legal'} onClick={save}>
-            Save game {gameNumber}
-          </Button>
-          {saved && (
-            <Button variant="ghost" onClick={clear}>
-              Clear game
+        <div className="score-actions">
+          <p className="fm-help score-actions__note">{saved ? `Saved by ${saved.savedBy.name}` : ''}</p>
+          <div className="score-actions__buttons">
+            {saved && (
+              <Button variant="ghost" onClick={clear}>
+                Clear game
+              </Button>
+            )}
+            <Button type="submit" variant="primary" disabled={entry.kind !== 'legal'}>
+              Save game {gameNumber}
             </Button>
-          )}
+          </div>
         </div>
       )}
-    </section>
+    </form>
   )
 }
 

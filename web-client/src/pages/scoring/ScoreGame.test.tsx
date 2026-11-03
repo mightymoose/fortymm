@@ -1,4 +1,5 @@
 import { within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { ErrorPage } from '../../test/pages/ErrorPage'
 import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
@@ -22,6 +23,26 @@ describe('ScoreGame', () => {
     expect(page.sides).toEqual([ME, OPPONENT])
     expect(page.tally).toBe('0–0')
     expect(page.slot(1)).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('saves a legal game when Enter is pressed in a score', async () => {
+    const page = await ScoreGamePage.render()
+
+    await page.enter({ [ME]: '11', [OPPONENT]: '6' })
+    await userEvent.type(page.input(OPPONENT), '{Enter}')
+
+    expect(page.slotScore(1)).toBe('11–6')
+    expect(page.href).toBe('/matches/demo/scores/game/2/edit')
+  })
+
+  it('saves nothing when Enter is pressed on an illegal score', async () => {
+    const page = await ScoreGamePage.render()
+
+    await page.enter({ [ME]: '11', [OPPONENT]: '10' })
+    await userEvent.type(page.input(OPPONENT), '{Enter}')
+
+    expect(page.slotScore(1)).toBe('–')
+    expect(page.href).toBe('/matches/demo/scores/game/1/edit')
   })
 
   it('saves a legal game, shows it in the strip and moves to the next game', async () => {
@@ -71,16 +92,6 @@ describe('ScoreGame', () => {
     expect(page.tally).toBe('2–0')
   })
 
-  it('swaps sides on the page only', async () => {
-    const page = await ScoreGamePage.render()
-    await saveGame(page, 1, '11', '4')
-
-    await page.click('Swap sides')
-
-    expect(page.sides).toEqual([OPPONENT, ME])
-    expect(page.slotScore(1)).toBe('4–11')
-    expect(page.tally).toBe('0–1')
-  })
 
   it('names the games entered after the decider in the review', async () => {
     const page = await ScoreGamePage.render()
