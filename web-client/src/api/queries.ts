@@ -3,6 +3,7 @@ import type { ApiClient } from './client'
 import type { components } from './schema'
 import { ApiError, ApiUnreachable, classifyFailure } from './errors'
 import { forgetAccount, saveAccount, savedAccount, type SessionAccount } from './savedSession'
+import { registerDeviceKey, takeKey } from '../signing/deviceKey'
 
 // Retries a network error or a 5xx only, which can pass. A 4xx comes back the
 // same. A retry after a lost POST /v1/session response can leave one unused
@@ -73,6 +74,8 @@ export function sessionQuery(api: ApiClient) {
         api.POST('/v1/session', { headers: JSON_HEADERS }),
       ).then(({ data }) => {
         saveAccount(data.account)
+        // Not awaited, so the key never holds up the loading screen.
+        void registerDeviceKey(api, data.account.id)
         return data.account
       })
       const saved = savedAccount()
@@ -124,13 +127,23 @@ function raceSession(request: Promise<SessionAccount>): Promise<SessionOutcome> 
 
 // Ends the visitor's session, and returns the identity provider's logout
 // page, which the browser follows to end the provider's session too. It
+// deletes this browser's signing key and signs it out on the API, so the
+// next account gets a new one. A failed logout puts the key back. It
 // forgets the saved account, so an offline load after it doesn't show the
 // account that signed out.
 export async function logout(api: ApiClient): Promise<string> {
+  const key = await takeKey()
   const data = await send(
     'POST /v1/auth/logout',
-    api.POST('/v1/auth/logout', { headers: JSON_HEADERS }),
-  )
+    api.POST(
+      '/v1/auth/logout',
+      key.id ? { body: { signing_key_id: key.id } } : { headers: JSON_HEADERS },
+    ),
+  ).catch(async (error: unknown) => {
+    await key.restore()
+    throw error
+  })
+  await key.release()
   forgetAccount()
   return data.data.logout_url
 }

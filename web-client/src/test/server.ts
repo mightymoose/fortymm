@@ -29,6 +29,23 @@ export const logoutResponse: components['schemas']['LogoutResponse'] = {
   },
 }
 
+type RegisterKeyRequest = components['schemas']['RegisterKeyRequest']
+// How the mock API answers a signing key registration: the key is the
+// account's and live, the account's and revoked, or another account's.
+export type KeyAnswer = 'live' | 'revoked' | 'taken'
+
+function signingKeyResponse(answer: 'live' | 'revoked'): components['schemas']['SigningKeyResponse'] {
+  return {
+    data: {
+      id: '77517e3498d560ace130b511db2f41114abccf80abb69e82ef0d343c39b26755',
+      label: 'Web browser',
+      created_at: '2026-11-02T09:30:00Z',
+      signed_out_at: null,
+      revoked_at: answer === 'revoked' ? '2026-11-02T09:31:00Z' : null,
+    },
+  }
+}
+
 // The mock API for unit tests, started in setupTests.ts. Tests override a
 // handler for themselves with `server.use()`.
 export const server = setupServer(
@@ -36,6 +53,9 @@ export const server = setupServer(
     HttpResponse.json(sessionResponse),
   ),
   http.post(`${API_BASE_URL}/v1/auth/logout`, () => HttpResponse.json(logoutResponse)),
+  http.post(`${API_BASE_URL}/v1/account/signing-keys`, () =>
+    HttpResponse.json(signingKeyResponse('live')),
+  ),
   http.get(`${API_BASE_URL}/v1/account/players`, () =>
     HttpResponse.json<components['schemas']['AccountPlayersResponse']>({ data: [] }),
   ),
@@ -52,6 +72,37 @@ export const server = setupServer(
     }),
   ),
 )
+
+// Records each signing key registration, and answers them with `answers` in
+// order, then `live`. With `hold`, each answer waits until the test calls
+// release().
+export function mockSigningKeys(answers: KeyAnswer[] = [], { hold = false } = {}) {
+  const registrations: RegisterKeyRequest[] = []
+  const pending: (() => void)[] = []
+  server.use(
+    http.post<never, RegisterKeyRequest>(
+      `${API_BASE_URL}/v1/account/signing-keys`,
+      async ({ request }) => {
+        registrations.push(await request.json())
+        if (hold) await new Promise<void>((resolve) => pending.push(resolve))
+        const answer = answers.shift() ?? 'live'
+        if (answer === 'taken') {
+          return HttpResponse.json(
+            { errors: [{ status: '409', title: 'Another account registered this key' }] },
+            { status: 409 },
+          )
+        }
+        return HttpResponse.json(signingKeyResponse(answer))
+      },
+    ),
+  )
+  return {
+    registrations,
+    async release(): Promise<void> {
+      await act(async () => pending.splice(0).forEach((resolve) => resolve()))
+    },
+  }
+}
 
 // Holds the mock API's session responses until the test sends them.
 export function holdSession() {

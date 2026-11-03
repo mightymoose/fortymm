@@ -150,7 +150,9 @@ describe('UserMenu', () => {
     expect(signingOut).toHaveAttribute('aria-disabled', 'true')
     await userEvent.click(signingOut)
     await act(async () => answer(HttpResponse.json(logoutResponse)))
-    expect(leavePage).toHaveBeenCalledExactlyOnceWith(logoutResponse.data.logout_url)
+    await vi.waitFor(() =>
+      expect(leavePage).toHaveBeenCalledExactlyOnceWith(logoutResponse.data.logout_url),
+    )
   })
 
   it('says when signing out failed, and keeps the menu open', async () => {
