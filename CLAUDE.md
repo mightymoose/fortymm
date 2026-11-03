@@ -992,14 +992,20 @@ it to `src/routes/`.
   that holds the score hint or "Saved by", keep their height, so saving
   and typing don't move the page.
 - `src/scoring/demoServer.ts` stands in for the API's match routes, with
-  its own board under `fortymm-demo-server:<matchId>`. The page loads the
-  match through it in a `QueryBoundary`, with a skeleton, and keeps the
-  last match it loaded in `fortymm-match:<matchId>`, so a load that can't
-  reach the server opens that copy. Each call waits, then may fail, as
-  the page's `network` search param says: `normal` (300ms), `slow`
-  (2.5s), `flaky` (every second request answers 503), `offline` (the
-  browser knows it's offline, so each request fails at once) or `broken`
-  (500). A Testing panel at the bottom of the
+  its own board under `fortymm-demo-server:<matchId>`. It takes the
+  outbox's changes and answers `fetchBoard()`. Each call waits, then may
+  fail, as the page's `network` search param says: `normal` (300ms),
+  `slow` (2.5s), `flaky` (every second request answers 503), `offline`
+  (the browser knows it's offline, so each request fails at once) or
+  `broken` (500).
+- The page has no loading or error state. The match comes with the
+  route, and the board comes from this device, so the page draws at once
+  with or without a connection. With nothing saved it shows an empty
+  board. Once the outbox is empty, sync pulls the server's board, so
+  the page shows what other devices synced. `receiveBoard()` takes it as
+  the base and applies the unsent changes on top again, so a pull never
+  undoes what was entered here. A pull that fails leaves the device's
+  board, and the next sync pulls again. A Testing panel at the bottom of the
   page (`TestingPanel.tsx`) switches the network, resets the match on
   the device and the server, or clears every demo match and saved copy.
   It goes when the API has matches.

@@ -1,5 +1,5 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
-import { Link, useLoaderData, useNavigate, useParams, useRouteContext, useSearch } from '@tanstack/react-router'
+import { Link, useLoaderData, useNavigate, useRouteContext, useSearch } from '@tanstack/react-router'
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { sessionQuery } from '../../api/queries'
 import { Button } from '../../components/Button'
@@ -7,7 +7,6 @@ import { closeDialog } from '../../components/closeDialog'
 import { FieldError } from '../../components/FieldError'
 import { Icon } from '../../components/Icon'
 import { PlayerAvatar } from '../../components/PlayerAvatar'
-import { QueryBoundary } from '../../components/QueryBoundary'
 import { Sheet } from '../../components/Sheet'
 import { Wordmark } from '../../components/Wordmark'
 import {
@@ -20,7 +19,7 @@ import {
   type Side,
 } from '../../scoring/board'
 import { viewerOf, type Match, type Viewer } from '../../scoring/demoMatches'
-import { matchQuery, parseNetwork } from '../../scoring/demoServer'
+import { parseNetwork } from '../../scoring/demoServer'
 import {
   clearGame,
   reopen,
@@ -83,34 +82,23 @@ export function ScoreGame() {
       </header>
       <main className="score-content">
         <h1 className="score-title">Game {gameNumber}</h1>
-        <QueryBoundary skeleton={<ScoreSkeleton />}>
-          <ScoreBoard gameNumber={gameNumber} />
-        </QueryBoundary>
+        <ScoreBoard gameNumber={gameNumber} />
         <TestingPanel />
       </main>
     </div>
   )
 }
 
-function ScoreSkeleton() {
-  return (
-    <div className="score-skeleton" aria-busy="true" aria-label="Loading the match">
-      <div className="fm-skeleton score-skeleton__pad" aria-hidden="true" />
-      <div className="fm-skeleton score-skeleton__button" aria-hidden="true" />
-      <div className="fm-skeleton score-skeleton__strip" aria-hidden="true" />
-    </div>
-  )
-}
-
+// It reads the board from this device, never waiting on the network, and
+// pulls the server's board in the background (see sync.ts). So it has no
+// loading or error state of its own: with no connection and nothing saved,
+// the board is empty.
 function ScoreBoard({ gameNumber }: { gameNumber: number }) {
-  const { matchId } = useParams({ from: ROUTE })
+  const { match } = useLoaderData({ from: ROUTE })
   const { api } = useRouteContext({ from: '__root__' })
   const network = parseNetwork(useSearch({ from: ROUTE }).network)
   const { data: account } = useSuspenseQuery(sessionQuery(api))
   const me: Scorer = { playerId: account.player.id, name: account.player.display_name }
-  const { data: match } = useSuspenseQuery(
-    matchQuery(matchId, { id: me.playerId, name: me.name }, network),
-  )
   const sync = useSync(match.id, network)
   const viewer = viewerOf(match, me.playerId)
   const pad = useScratchpad(match.id)

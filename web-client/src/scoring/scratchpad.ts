@@ -3,7 +3,8 @@ import { checkGame, type GamePoints, type Side } from './board'
 
 // A match's scratchpad on this device: the board as this device last saw
 // it, and the changes made here that the server hasn't taken yet. Saving
-// never waits on the network. `sync.ts` sends the outbox in the background.
+// never waits on the network. `sync.ts` sends the outbox and pulls the
+// server's board in the background.
 // It lives in localStorage, one record per match, so it survives a reload
 // with no signal and tabs on one match stay in step.
 
@@ -116,6 +117,15 @@ export function matchesWithChanges(): string {
     .map((key) => key.slice(prefix.length))
     .sort()
     .join(' ')
+}
+
+// Takes the server's board as the base, with this device's unsent changes
+// applied on top again, so a pull never undoes what was entered here.
+export function receiveBoard(matchId: string, server: Board): void {
+  const key = storageKey(matchId)
+  const pad = read(key)
+  const board = pad.outbox.reduce<Board>((board, change) => applyChange(board, change) ?? board, server)
+  store(key, { ...board, outbox: pad.outbox })
 }
 
 // The server took `id`, or refused it for good, so it leaves the outbox.

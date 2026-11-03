@@ -5,6 +5,8 @@ import {
   clearGame,
   markSent,
   pendingChanges,
+  readBoard,
+  receiveBoard,
   reopen,
   saveGame,
   slotsOf,
@@ -92,5 +94,16 @@ describe('scratchpad', () => {
       submission: { phase: 'submitted', by: ann.playerId, games: [[11, 2]], winner: 0, submittedAt: 'now' },
     })
     expect(applyChange(submitted!, { id: 'c', kind: 'clear', game: 1 })).toBeNull()
+  })
+
+  it('takes a pulled board with the unsent changes on top', () => {
+    saveGame('m6', 1, [11, 9], ann)
+    receiveBoard('m6', {
+      games: { 1: { points: [11, 2], savedBy: ann }, 2: { points: [3, 11], savedBy: ann } },
+      submission: { phase: 'open' },
+    })
+
+    expect(slotsOf(readBoard(storageKey('m6')), 3)).toEqual([[11, 9], [3, 11], null])
+    expect(pendingChanges('m6')).toHaveLength(1)
   })
 })

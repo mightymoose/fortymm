@@ -1,7 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { ApiError, classifyFailure } from '../api/errors'
-import { knownOffline, sendChange, type Network } from './demoServer'
-import { markSent, matchesWithChanges, pendingChanges, subscribe } from './scratchpad'
+import { fetchBoard, knownOffline, sendChange, type Network } from './demoServer'
+import { markSent, matchesWithChanges, pendingChanges, receiveBoard, subscribe } from './scratchpad'
 
 // Sends a match's outbox to the server in the background, oldest change
 // first, one at a time, so the server applies them in the order they were
@@ -9,7 +9,10 @@ import { markSent, matchesWithChanges, pendingChanges, subscribe } from './scrat
 // `online`. A change the server can't take now waits, and the outbox tries
 // again after a backoff or as soon as the browser is back online. A change it
 // refuses for good (a 4xx) leaves the outbox, since sending it again can't
-// help.
+// help. Once the outbox is empty, it pulls the server's board, so the page
+// shows what other devices synced. It pulls after sending, never during, so
+// the board it gets has every change this device sent. A pull that fails
+// leaves the device's board as it is, and the next sync pulls again.
 
 export type SyncStatus =
   | { kind: 'idle' }
@@ -24,6 +27,8 @@ type Engine = {
   running: boolean
   failures: number
   retry: ReturnType<typeof setTimeout> | null
+  // The server's board may have changed since the last pull.
+  pull: boolean
   users: number
   stop: () => void
 }
@@ -47,20 +52,34 @@ async function run(matchId: string, engine: Engine): Promise<void> {
   try {
     for (;;) {
       const [next] = pendingChanges(matchId)
-      if (!next || engine.users === 0) {
+      if (engine.users === 0) {
         setStatus(engine, IDLE)
         return
       }
-      // Sending can't work, so it waits for the browser's `online` event,
-      // with no retry timer.
-      if (knownOffline(engine.network)) {
-        setStatus(engine, { kind: 'waiting', reason: 'offline' })
+      // Neither sending nor pulling can work, so it waits for the browser's
+      // `online` event, with no retry timer.
+      if ((next || engine.pull) && knownOffline(engine.network)) {
+        setStatus(engine, next ? { kind: 'waiting', reason: 'offline' } : IDLE)
+        return
+      }
+      if (!next) {
+        if (engine.pull) {
+          setStatus(engine, { kind: 'sending' })
+          try {
+            receiveBoard(matchId, await fetchBoard(matchId, engine.network))
+            engine.pull = false
+          } catch {
+            // The device's board stands until the next pull.
+          }
+        }
+        setStatus(engine, IDLE)
         return
       }
       setStatus(engine, { kind: 'sending' })
       try {
         await sendChange(matchId, next, engine.network)
         engine.failures = 0
+        engine.pull = true
         markSent(matchId, next.id)
       } catch (error) {
         if (!retryable(error)) {
@@ -83,9 +102,10 @@ async function run(matchId: string, engine: Engine): Promise<void> {
   }
 }
 
-// Sends now rather than at the next retry, as when the browser comes back
-// online or a new change is queued.
+// Syncs now rather than at the next retry, as when the browser comes back
+// online or the page opens, and pulls the server's board.
 function kick(matchId: string, engine: Engine): void {
+  engine.pull = true
   if (engine.retry) {
     clearTimeout(engine.retry)
     engine.retry = null
@@ -102,6 +122,7 @@ function start(matchId: string, network: Network): () => void {
       running: false,
       failures: 0,
       retry: null,
+      pull: true,
       users: 0,
       stop: () => {},
     }

@@ -4,8 +4,9 @@ import { ScoreGame } from '../../../../../../../pages/scoring/ScoreGame'
 import { demoMatch } from '../../../../../../../scoring/demoMatches'
 import { parseNetwork, type Network } from '../../../../../../../scoring/demoServer'
 
-// A game number that isn't one of the match's games goes to game 1. The page
-// loads the match itself, through the network that `network` names.
+// A game number that isn't one of the match's games goes to game 1. The
+// match comes with the route, so the page draws at once, with or without a
+// connection, and pulls the server's board in the background.
 export const Route = createFileRoute('/_authenticated/matches/$matchId/scores/game/$gameNumber/edit')({
   validateSearch: (search: Record<string, unknown>): { network?: Network } =>
     search.network === undefined ? {} : { network: parseNetwork(search.network) },
@@ -21,7 +22,7 @@ export const Route = createFileRoute('/_authenticated/matches/$matchId/scores/ga
         replace: true,
       })
     }
-    return { gameNumber }
+    return { match, gameNumber }
   },
   component: ScoreGame,
 })

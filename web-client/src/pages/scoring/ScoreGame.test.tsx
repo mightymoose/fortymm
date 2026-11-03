@@ -1,8 +1,8 @@
-import { cleanup, screen, waitFor, within } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { serverKey } from '../../scoring/demoServer'
-import { pendingChanges, readBoard } from '../../scoring/scratchpad'
+import { markSent, pendingChanges, readBoard, saveGame as saveOnDevice, writeBoard } from '../../scoring/scratchpad'
 import { ErrorPage } from '../../test/pages/ErrorPage'
 import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
 
@@ -47,28 +47,6 @@ describe('ScoreGame', () => {
     expect(page.slotScore(1)).toBe('11–4')
     expect(page.heading).toHaveTextContent('Game 2')
     expect(page.input(ME)).toHaveFocus()
-  })
-
-  it('shows the match loading, then the pad', async () => {
-    const page = await ScoreGamePage.render(undefined, { settle: false })
-
-    expect(screen.getByLabelText('Loading the match')).toBeInTheDocument()
-
-    await page.settle()
-
-    expect(page.input(ME)).toBeInTheDocument()
-  })
-
-  it('says when the match cannot load, and loads it on Try again', async () => {
-    const page = await ScoreGamePage.render('/matches/demo/scores/game/1/edit?network=offline')
-
-    expect(await screen.findByRole('alert', {}, { timeout: 3000 })).toHaveTextContent('Can’t reach FortyMM')
-
-    await page.reconnect()
-    await userEvent.click(screen.getByRole('button', { name: 'Try again' }))
-    await page.settle()
-
-    expect(page.input(ME)).toBeInTheDocument()
   })
 
   it('moves on as soon as a game is saved, and syncs it in the background', async () => {
@@ -172,13 +150,34 @@ describe('ScoreGame', () => {
     expect(page.slotScore(1)).toBe('–')
   })
 
-  it('opens a match it loaded before with no signal', async () => {
-    await ScoreGamePage.render()
-    cleanup()
+  it('shows the scores another device synced', async () => {
+    writeBoard(serverKey('demo'), {
+      games: { 2: { points: [4, 11], savedBy: { playerId: 'someone', name: 'calm crane 552' } } },
+      submission: { phase: 'open' },
+    })
 
+    const page = await ScoreGamePage.render()
+
+    expect(page.slotScore(2)).toBe('4–11')
+  })
+
+  it('keeps the board on this device when the server fails', async () => {
+    saveOnDevice('demo', 1, [11, 5], { playerId: 'someone', name: 'calm crane 552' })
+    for (const change of pendingChanges('demo')) markSent('demo', change.id)
+
+    const page = await ScoreGamePage.render('/matches/demo/scores/game/1/edit?network=broken')
+    await new Promise((resolve) => setTimeout(resolve, 600))
+
+    expect(page.slotScore(1)).toBe('11–5')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('opens an empty board with no connection and nothing saved', async () => {
     const page = await ScoreGamePage.render('/matches/demo/scores/game/1/edit?network=offline')
 
-    expect(page.input(ME)).toBeInTheDocument()
+    expect(page.input(ME)).toHaveFocus()
+    expect([1, 2, 3, 4, 5].map((game) => page.slotScore(game))).toEqual(['–', '–', '–', '–', '–'])
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('saves a legal game when Enter is pressed in a score', async () => {

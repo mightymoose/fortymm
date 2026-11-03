@@ -63,7 +63,7 @@ export function TestingPanel() {
       </div>
       <p className="fm-help">
         Reset match empties this match’s games and its server copy. Clear everything does that for
-        every demo match, and forgets the matches saved for offline.
+        every demo match.
       </p>
     </section>
   )

@@ -1,14 +1,10 @@
-import { queryOptions } from '@tanstack/react-query'
-import { ApiError, ApiUnreachable, classifyFailure } from '../api/errors'
-import { shouldRetry } from '../api/queries'
-import { demoMatch, type Match, type MatchPlayer } from './demoMatches'
-import { applyChange, forgetRecords, readBoard, storageKey, writeBoard, type Change } from './scratchpad'
+import { ApiError, ApiUnreachable } from '../api/errors'
+import { applyChange, forgetRecords, readBoard, storageKey, writeBoard, type Board, type Change } from './scratchpad'
 
 // Stands in for the API's match routes until they exist. It keeps its own
 // board per match, apart from the scratchpad on the device, and takes the
 // device's changes one at a time. Each call waits and may fail the way the
-// chosen network does, so the page's loading and syncing can be seen and
-// tested. The page picks the network from its `network` search param, such
+// chosen network does, so the page's syncing can be seen and tested. The page picks the network from its `network` search param, such
 // as `?network=flaky`. `offline` plays a browser that knows it's offline:
 // each request fails at once, as fetch does then.
 
@@ -66,52 +62,9 @@ export function sendChange(matchId: string, change: Change, network: Network): P
   })
 }
 
-function matchKey(id: string): string {
-  return `fortymm-match:${id}`
-}
-
-// The match as the last load got it, so the page opens with no signal.
-function savedMatch(id: string): Match | null {
-  try {
-    const raw = localStorage.getItem(matchKey(id))
-    return raw === null ? null : (JSON.parse(raw) as Match)
-  } catch {
-    return null
-  }
-}
-
-function saveMatch(match: Match): void {
-  try {
-    localStorage.setItem(matchKey(match.id), JSON.stringify(match))
-  } catch {
-    // The page still works online without it.
-  }
-}
-
-// Loads the match, or the saved copy when the server can't be reached.
-export function matchQuery(id: string, self: MatchPlayer, network: Network) {
-  return queryOptions({
-    // The network isn't part of the key: a connection that drops or comes
-    // back doesn't make the match another one.
-    queryKey: ['demo-match', id, self.id],
-    queryFn: async () => {
-      try {
-        const match = await send(`GET /v1/matches/${id}`, network, () => demoMatch(id, self))
-        saveMatch(match)
-        return match
-      } catch (error) {
-        const saved = savedMatch(id)
-        if (saved && classifyFailure(error).kind === 'unreachable') return saved
-        throw error
-      }
-    },
-    staleTime: Infinity,
-    // With nothing saved, a browser that knows it's offline shows the error
-    // at once, rather than a skeleton that waits for a connection or retries
-    // a request that can't work.
-    networkMode: 'always',
-    retry: (failureCount, error) => !knownOffline(network) && shouldRetry(failureCount, error),
-  })
+// The server's board, with what every device has synced.
+export function fetchBoard(matchId: string, network: Network): Promise<Board> {
+  return send(`GET /v1/matches/${matchId}/board`, network, () => readBoard(serverKey(matchId)))
 }
 
 // Starts the match over: its scratchpad, its outbox and the server's board.
@@ -120,8 +73,8 @@ export function resetMatch(matchId: string): void {
   forgetRecords((key) => keys.includes(key))
 }
 
-// Deletes every demo match's scratchpad, server board and saved copy.
+// Deletes every demo match's scratchpad and server board.
 export function clearEverything(): void {
-  const prefixes = [storageKey(''), serverKey(''), matchKey('')]
+  const prefixes = [storageKey(''), serverKey('')]
   forgetRecords((key) => prefixes.some((prefix) => key.startsWith(prefix)))
 }

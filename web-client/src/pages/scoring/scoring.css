@@ -96,7 +96,3 @@
   .score-slot__pts{font-size:var(--text-sm)}
 }
 
-.score-skeleton{display:flex;flex-direction:column;gap:var(--s-4)}
-.score-skeleton__pad{height:clamp(160px,30vw,300px);border-radius:var(--r-lg)}
-.score-skeleton__button{height:40px;width:160px;align-self:flex-end;border-radius:var(--r-md)}
-.score-skeleton__strip{height:96px;border-radius:var(--r-lg)}
