@@ -935,6 +935,38 @@ it to `src/routes/`.
   who takes `admin.view` from themselves goes to `/`. `can()` in
   `src/api/permissions.ts` checks the session's permissions, by the
   built-in keys in `Permission`. The API checks every request again.
+- `matches/$matchId/scores/game/$gameNumber/edit.tsx`: the page
+  `ScoreGame` (`src/pages/scoring/`), a match's scoring scratchpad, with
+  the wordmark, a link to Home and no `AppShell`. It edits one game. The
+  route's loader reads the match from `demoMatch()`
+  (`src/scoring/demoMatches.ts`), because the API has no matches yet.
+  `demo` is a best of 5 between the session's player and `brave badger
+  214`. In `demo-spectator`, two other players play, so the viewer is a
+  spectator. Any other id throws `notFound()`. A game number that isn't
+  a whole number from 1 to the match's `bestOf` goes to game 1, with a
+  replace. The header shows both players and the games tally, the
+  viewer's player on the left. Swap sides flips the page only. A strip
+  links to each game, with its score in mono and the game winner's
+  points bold. Games after the decider step back, under "Match decided
+  after game N", and stay editable.
+- Anyone who can open the match can save any game, in any order. The
+  only check is that the game's score is legal (`parseGameScore()` in
+  `src/scoring/board.ts`). Save goes to the next empty game after it,
+  unless the match is decided. The match rules apply only at review.
+  `reviewBoard()` gives `decided` (empty games before the decider are
+  closed up), `undecided` or `overrun` (games after the decider). Only
+  the two players see Review result, a `Sheet` that submits a `decided`
+  board. A spectator sees who submits instead. A submitted board is
+  frozen for everyone, and its submitter can Edit scores. Nothing is
+  signed or sent.
+- `src/scoring/scratchpad.ts` keeps each match's scratchpad in
+  `localStorage`, under `fortymm-scratchpad:<matchId>`: the games by
+  game number, who saved each, and the submission (`open` or
+  `submitted`). `useScratchpad()` reads it with `useSyncExternalStore`
+  and follows the `storage` event, so two tabs on one match stay in
+  step. It refuses game writes while the result is submitted, and works
+  in this tab when storage throws. The server will hold the shared board
+  later.
 - `design-system.tsx`: a public page. Public pages go directly in
   `src/routes/`. They make no request and never show the loading screen.
   The design system page has no `AppShell`, and no page links to it.
@@ -1169,6 +1201,10 @@ account's page. `holdAdmin(list)` holds a list's responses, and
 admin lists with nothing. `AdminPage` renders `/admin`, and
 `AdminPage.renderAccount(id)` an account's page. Only the open tab's panel
 shows, so a test opens a tab first.
+
+`ScoreGamePage` renders the scoring page, at `/matches/demo/scores/game/1/edit`
+by default. It types scores, saves them and reads the strip, the tally,
+the feedback and the review sheet.
 
 `HomePage.render({ path })` renders the app at another path, such as one
 with a query. `homePage.href` is the router's current path and query, so a
