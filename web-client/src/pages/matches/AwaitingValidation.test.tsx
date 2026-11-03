@@ -19,7 +19,7 @@ async function submitThreeNil(): Promise<AwaitingValidationPage> {
   const pad = await ScoreGamePage.render()
   for (const [game, points] of [[1, '5'], [2, '7'], [3, '9']] as const) {
     if (game > 1) await pad.goToGame(game)
-    await pad.enter({ [ME]: '11', [OPPONENT]: points })
+    await pad.enter({ You: '11', 'Your opponent': points })
     await pad.click(game === 3 ? 'Submit result' : `Save game ${game}`)
   }
   return new AwaitingValidationPage(pad.router)

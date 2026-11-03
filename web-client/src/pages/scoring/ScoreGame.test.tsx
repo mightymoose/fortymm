@@ -8,8 +8,9 @@ import { ErrorPage } from '../../test/pages/ErrorPage'
 import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
 import { holdSession, sessionResponse } from '../../test/server'
 
-const ME = 'excited egret 387'
-const OPPONENT = 'brave badger 214'
+// The pad names the players to a player as You and Your opponent.
+const ME = 'You'
+const OPPONENT = 'Your opponent'
 
 async function saveGame(page: ScoreGamePage, game: number, me: string, opponent: string) {
   if (!page.href.endsWith(`/game/${game}/edit`)) await page.goToGame(game)
@@ -29,7 +30,7 @@ describe('ScoreGame', () => {
     expect(page.slot(1)).toHaveAttribute('aria-current', 'page')
   })
 
-  it('puts the session’s player on the left when it differs from the saved account', async () => {
+  it('scores as the session’s player when it differs from the saved account', async () => {
     const account = sessionResponse.data.account
     saveAccount({
       ...account,
@@ -38,10 +39,13 @@ describe('ScoreGame', () => {
     const session = holdSession()
 
     const page = await ScoreGamePage.render()
-    expect(page.sides).toEqual(['old otter 111', OPPONENT])
+    expect(page.sides).toEqual([ME, OPPONENT])
 
     await session.respond(Response.json(sessionResponse))
-    await waitFor(() => expect(page.sides).toEqual([ME, OPPONENT]))
+    await act(async () => {})
+    await page.enter({ [ME]: '11', [OPPONENT]: '5' })
+    await page.save()
+    expect(readBoard(storageKey('demo')).games[1].savedBy.playerId).toBe(account.player.id)
   })
 
   it('focuses the left score when a game opens', async () => {
@@ -288,7 +292,7 @@ describe('ScoreGame', () => {
 
     await page.goToGame(1)
     expect(page.input(ME)).toHaveValue('7')
-    expect(page.text).toContain(`Saved by ${ME}`)
+    expect(page.text).toContain('Saved by you')
   })
 
   it('shows why an illegal score can’t be saved', async () => {
@@ -331,7 +335,7 @@ describe('ScoreGame', () => {
 
     await page.enter({ [ME]: '13', [OPPONENT]: '11' })
     expect(page.button('Submit result')).toBeInTheDocument()
-    expect(page.feedback ?? page.text).toContain(`${ME} wins 3–1, with the empty games left out`)
+    expect(page.feedback ?? page.text).toContain('You win 3–1, with the empty games left out')
 
     await page.click('Submit result')
 
@@ -339,8 +343,8 @@ describe('ScoreGame', () => {
     await page.router.navigate({ to: '/matches/$matchId/scores/game/$gameNumber/edit', params: { matchId: 'demo', gameNumber: '5' } })
     await page.settle()
     expect(page.slotScore(5)).toBe('13–11')
-    expect(page.result).toHaveTextContent(`Submitted by ${ME}. ${ME} wins 3–1.`)
-    expect(page.result).toHaveTextContent(`Waiting for ${OPPONENT}`)
+    expect(page.result).toHaveTextContent('Submitted by you. You win 3–1.')
+    expect(page.result).toHaveTextContent('Waiting for your opponent')
     expect(page.input(ME)).toBeDisabled()
     expect(page.button('Submit result')).toBeNull()
     expect(page.button('Clear game')).toBeNull()
