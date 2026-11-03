@@ -3,11 +3,9 @@ import { Link, useLoaderData, useNavigate, useRouteContext, useSearch } from '@t
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { sessionQuery } from '../../api/queries'
 import { Button } from '../../components/Button'
-import { closeDialog } from '../../components/closeDialog'
 import { FieldError } from '../../components/FieldError'
 import { Icon } from '../../components/Icon'
 import { PlayerAvatar } from '../../components/PlayerAvatar'
-import { Sheet } from '../../components/Sheet'
 import { Wordmark } from '../../components/Wordmark'
 import {
   deciderGame,
@@ -106,6 +104,8 @@ function ScoreBoard({ gameNumber }: { gameNumber: number }) {
   const sides: Sides = [left, other(left)]
   const slots = slotsOf(pad, match.bestOf)
   const saved = pad.games[gameNumber]
+  // Only a player submits, and only a decided board.
+  const canSubmit = viewer.role === 'player' && pad.submission.phase === 'open'
 
   return (
     <>
@@ -118,6 +118,7 @@ function ScoreBoard({ gameNumber }: { gameNumber: number }) {
         sides={sides}
         frozen={pad.submission.phase === 'submitted'}
         me={me}
+        canSubmit={canSubmit}
       />
       <GameStrip
         match={match}
@@ -126,6 +127,7 @@ function ScoreBoard({ gameNumber }: { gameNumber: number }) {
         sides={sides}
         unsynced={unsyncedGames(pad.outbox)}
         sync={sync}
+        canSubmit={canSubmit}
       />
       <Result
         match={match}
@@ -133,8 +135,6 @@ function ScoreBoard({ gameNumber }: { gameNumber: number }) {
         resultUnsynced={pad.outbox.some((change) => change.kind === 'submit' || change.kind === 'reopen')}
         sync={sync}
         viewer={viewer}
-        slots={slots}
-        sides={sides}
         me={me}
       />
     </>
@@ -148,6 +148,7 @@ function GameStrip({
   sides,
   unsynced,
   sync,
+  canSubmit,
 }: {
   match: Match
   slots: (GamePoints | null)[]
@@ -155,8 +156,10 @@ function GameStrip({
   sides: Sides
   unsynced: Set<number>
   sync: SyncStatus
+  canSubmit: boolean
 }) {
   const decider = deciderGame(slots, match.bestOf)
+  const review = reviewBoard(slots, match.bestOf)
   return (
     <nav
       className="score-strip-wrap"
@@ -171,7 +174,14 @@ function GameStrip({
           <SyncWaiting reason={sync.stuck} />
         ) : (
           decider !== null &&
-          decider < match.bestOf && <p className="score-strip__note">Match decided after game {decider}</p>
+          decider < match.bestOf && (
+            <p className="score-strip__note">
+              Match decided after game {decider}
+              {canSubmit &&
+                review.kind === 'overrun' &&
+                `. Clear ${review.extraGames.map((game) => `game ${game}`).join(' and ')} to submit.`}
+            </p>
+          )
         )}
       </div>
       <ol className="score-strip">
@@ -287,6 +297,7 @@ function ScorePad({
   sides,
   frozen,
   me,
+  canSubmit,
 }: {
   match: Match
   gameNumber: number
@@ -295,6 +306,7 @@ function ScorePad({
   sides: Sides
   frozen: boolean
   me: Scorer
+  canSubmit: boolean
 }) {
   const navigate = useNavigate()
   const feedbackId = useId()
@@ -324,11 +336,25 @@ function ScorePad({
     }
   }
   const message = feedback()
+  // The board as the button would leave it: with this game's score when
+  // it's legal, or as it is.
+  const after =
+    entry.kind === 'legal' ? slots.map((slot, index) => (index === gameNumber - 1 ? entry.points : slot)) : slots
+  const review = reviewBoard(after, match.bestOf)
+  // A player whose button would leave a decided board submits it. A score
+  // being typed that isn't legal yet is still a save.
+  const submits = canSubmit && review.kind === 'decided' && (entry.kind === 'legal' || entry.kind === 'empty')
 
-  // Saves on this device and moves on. The strip shows the game syncing.
+  // Saves on this device and moves on, or saves and submits the result the
+  // board now makes. The strip shows the game syncing.
   function save() {
+    if (submits && review.kind === 'decided') {
+      const changed = entry.kind === 'legal' && entry.points.some((points, side) => points !== saved?.points[side])
+      if (changed) saveGame(match.id, gameNumber, entry.points, me)
+      submitResult(match.id, { by: me.playerId, games: review.games, winner: review.winner })
+      return
+    }
     if (entry.kind !== 'legal' || !saveGame(match.id, gameNumber, entry.points, me)) return
-    const after = slots.map((slot, index) => (index === gameNumber - 1 ? entry.points : slot))
     // Once the match is decided, the next empty game would only be an extra
     // one, so the page stays.
     if (deciderGame(after, match.bestOf) !== null) return
@@ -406,7 +432,15 @@ function ScorePad({
           {/* The hint or the reason takes the place of "Saved by", in a line
               that keeps its height, so typing doesn't move the buttons. */}
           <div className="score-actions__note">
-            {message ?? (saved && <span className="fm-help">Saved by {saved.savedBy.name}</span>)}
+            {message ??
+              (submits && review.kind === 'decided' ? (
+                <span className="fm-help">
+                  {match.players[review.winner].name} wins {games(review.tally, review.winner)}
+                  {review.closedGaps && ', with the empty games left out'}
+                </span>
+              ) : (
+                saved && <span className="fm-help">Saved by {saved.savedBy.name}</span>
+              ))}
           </div>
           <div className="score-actions__buttons">
             {saved && (
@@ -414,8 +448,8 @@ function ScorePad({
                 Clear game
               </Button>
             )}
-            <Button type="submit" variant="primary" disabled={entry.kind !== 'legal'}>
-              Save game {gameNumber}
+            <Button type="submit" variant="primary" disabled={!submits && entry.kind !== 'legal'}>
+              {submits ? 'Submit result' : `Save game ${gameNumber}`}
             </Button>
           </div>
         </div>
@@ -424,16 +458,14 @@ function ScorePad({
   )
 }
 
-// What the page offers about the match's result: a review for a player, a
-// note for a spectator, or the submitted result.
+// The submitted result, or a note for a spectator about who submits it. A
+// player submits through the pad's button.
 function Result({
   match,
   submission,
   resultUnsynced,
   sync,
   viewer,
-  slots,
-  sides,
   me,
 }: {
   match: Match
@@ -441,8 +473,6 @@ function Result({
   resultUnsynced: boolean
   sync: SyncStatus
   viewer: Viewer
-  slots: (GamePoints | null)[]
-  sides: Sides
   me: Scorer
 }) {
   if (submission.phase === 'submitted') {
@@ -486,122 +516,5 @@ function Result({
       </section>
     )
   }
-  return <ReviewResult match={match} slots={slots} sides={sides} me={me} />
-}
-
-function ReviewResult({
-  match,
-  slots,
-  sides,
-  me,
-}: {
-  match: Match
-  slots: (GamePoints | null)[]
-  sides: Sides
-  me: Scorer
-}) {
-  const sheet = useRef<HTMLDialogElement>(null)
-  const review = reviewBoard(slots, match.bestOf)
-  const name = (side: Side) => match.players[side].name
-
-  function submit() {
-    if (review.kind !== 'decided') return
-    submitResult(match.id, { by: me.playerId, games: review.games, winner: review.winner })
-    sheet.current?.close()
-  }
-
-  function body(): ReactNode {
-    switch (review.kind) {
-      case 'decided':
-        return (
-          <>
-            <p className="h3 score-review__winner">
-              {name(review.winner)} wins {games(review.tally, review.winner)}
-            </p>
-            <ol className="score-review__games">
-              {review.games.map((points, index) => (
-                <li key={index}>
-                  <span>Game {index + 1}</span>{' '}
-                  <span className="score-review__pts">
-                    <SlotScore points={points} sides={sides} />
-                  </span>
-                </li>
-              ))}
-            </ol>
-            {review.closedGaps && (
-              <p className="fm-notice">
-                <Icon name="info" />
-                <span>Empty games were left out, so the games after them move up.</span>
-              </p>
-            )}
-          </>
-        )
-      case 'undecided': {
-        const count = (won: number) => (won === 1 ? '1 game' : `${won} games`)
-        return (
-          <p className="fm-notice">
-            <Icon name="info" />
-            <span>
-              {name(0)} has {count(review.tally[0])} and {name(1)} has {count(review.tally[1])}.
-              Nobody has won {review.gamesToWin} games yet.
-            </span>
-          </p>
-        )
-      }
-      case 'overrun':
-        return (
-          <>
-            <p className="fm-notice fm-notice--warning">
-              <Icon name="alert" />
-              <span>
-                The match was decided after game {review.decidedAtGame}, but{' '}
-                {review.extraGames.map((game) => `game ${game}`).join(', ')}{' '}
-                {review.extraGames.length === 1 ? 'has a score' : 'have scores'}. Clear{' '}
-                {review.extraGames.length === 1 ? 'it' : 'them'}, or fix the games before it.
-              </span>
-            </p>
-            <ul className="score-review__links">
-              {review.extraGames.map((game) => (
-                <li key={game}>
-                  <Link
-                    to={PATH}
-                    params={{ matchId: match.id, gameNumber: String(game) }}
-                    search={true}
-                    onClick={(event) => event.currentTarget.closest('dialog')?.close()}
-                  >
-                    Go to game {game}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </>
-        )
-    }
-  }
-
-  return (
-    <section className="score-result" aria-label="Result">
-      <Button variant="secondary" onClick={() => sheet.current?.showModal()}>
-        Review result
-      </Button>
-      <Sheet
-        ref={sheet}
-        title="Review result"
-        subtitle={`${name(0)} v ${name(1)}`}
-        footer={
-          review.kind === 'decided' ? (
-            <Button variant="primary" onClick={submit}>
-              Submit result
-            </Button>
-          ) : (
-            <Button variant="secondary" onClick={closeDialog}>
-              Keep scoring
-            </Button>
-          )
-        }
-      >
-        {body()}
-      </Sheet>
-    </section>
-  )
+  return null
 }

@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { serverKey } from '../../scoring/demoServer'
@@ -290,68 +290,75 @@ describe('ScoreGame', () => {
   })
 
 
-  it('names the games entered after the decider in the review', async () => {
-    const page = await ScoreGamePage.render()
-    await saveGame(page, 1, '11', '1')
-    await saveGame(page, 2, '11', '2')
-    await saveGame(page, 3, '11', '3')
-    await saveGame(page, 5, '4', '11')
-
-    expect(page.text).toContain('Match decided after game 3')
-    await page.click('Review result')
-
-    expect(page.review).toHaveTextContent('The match was decided after game 3, but game 5 has a score.')
-    expect(within(page.review).getByRole('link', { name: 'Go to game 5' })).toBeInTheDocument()
-    expect(within(page.review).queryByRole('button', { name: 'Submit result' })).toBeNull()
-  })
-
-  it('says who has how many games while nobody has won', async () => {
-    const page = await ScoreGamePage.render()
-    await saveGame(page, 1, '11', '1')
-
-    await page.click('Review result')
-
-    expect(page.review).toHaveTextContent(
-      `${ME} has 1 game and ${OPPONENT} has 0 games. Nobody has won 3 games yet.`,
-    )
-  })
-
-  it('submits a decided result and freezes the board', async () => {
+  it('turns Save into Submit result when the score decides the match', async () => {
     const page = await ScoreGamePage.render()
     await saveGame(page, 1, '11', '5')
     await saveGame(page, 2, '8', '11')
     await saveGame(page, 4, '11', '9')
-    await saveGame(page, 5, '13', '11')
+    await page.goToGame(5)
 
-    await page.click('Review result')
-    expect(page.review).toHaveTextContent(`${ME} wins 3–1`)
-    expect(page.review).toHaveTextContent('Empty games were left out')
+    await page.enter({ [ME]: '9', [OPPONENT]: '11' })
+    expect(page.saveButton).toHaveTextContent('Save game 5')
+
+    await page.enter({ [ME]: '13', [OPPONENT]: '11' })
+    expect(page.button('Submit result')).toBeInTheDocument()
+    expect(page.feedback ?? page.text).toContain(`${ME} wins 3–1, with the empty games left out`)
+
     await page.click('Submit result')
 
+    expect(page.slotScore(5)).toBe('13–11')
     expect(page.result).toHaveTextContent(`Submitted by ${ME}. ${ME} wins 3–1.`)
     expect(page.result).toHaveTextContent(`Waiting for ${OPPONENT}`)
     expect(page.input(ME)).toBeDisabled()
-    expect(page.saveButton).toBeNull()
+    expect(page.button('Submit result')).toBeNull()
     expect(page.button('Clear game')).toBeNull()
-    expect(page.button('Review result')).toBeNull()
 
     await page.click('Edit scores')
     expect(page.input(ME)).toBeEnabled()
     expect(page.button('Clear game')).toBeInTheDocument()
   })
 
+  it('submits a reopened board from a game with nothing new to save', async () => {
+    const page = await ScoreGamePage.render()
+    await saveGame(page, 1, '11', '1')
+    await saveGame(page, 2, '11', '2')
+    await page.enter({ [ME]: '11', [OPPONENT]: '3' })
+    await page.click('Submit result')
+    await page.click('Edit scores')
+    await page.goToGame(1)
+
+    expect(page.saveButton).toBeNull()
+    await page.click('Submit result')
+
+    expect(page.result).toHaveTextContent(`${ME} wins 3–0.`)
+  })
+
+  it('says which game to clear when one was played after the decider', async () => {
+    const page = await ScoreGamePage.render()
+    await saveGame(page, 1, '11', '1')
+    await saveGame(page, 2, '11', '2')
+    await saveGame(page, 5, '4', '11')
+    await saveGame(page, 3, '11', '3')
+
+    expect(page.text).toContain('Match decided after game 3. Clear game 5 to submit.')
+    expect(page.button('Submit result')).toBeNull()
+  })
+
   it('lets a spectator edit but not submit', async () => {
     const page = await ScoreGamePage.render('/matches/demo-spectator/scores/game/1/edit')
 
     expect(page.sides).toEqual(['calm crane 552', 'gentle gecko 731'])
-    expect(page.button('Review result')).toBeNull()
     expect(page.result).toHaveTextContent(
       'calm crane 552 or gentle gecko 731 submits the result when the match ends.',
     )
 
-    await page.enter({ 'calm crane 552': '11', 'gentle gecko 731': '6' })
-    await page.save()
-    expect(page.slotScore(1)).toBe('11–6')
+    for (const game of [1, 2, 3]) {
+      if (game > 1) await page.goToGame(game)
+      await page.enter({ 'calm crane 552': '11', 'gentle gecko 731': '6' })
+      await page.save()
+    }
+    expect(page.slotScore(3)).toBe('11–6')
+    expect(page.button('Submit result')).toBeNull()
   })
 
   it('shows the not-found page for an unknown match', async () => {

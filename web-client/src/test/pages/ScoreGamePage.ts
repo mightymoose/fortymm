@@ -150,12 +150,8 @@ export class ScoreGamePage {
     await this.settle()
   }
 
-  // The review sheet, open after Review result.
-  get review(): HTMLElement {
-    return screen.getByRole('dialog', { name: 'Review result' })
-  }
 
-  // The match's result section: the review, a spectator's note or the
+  // The match's result section: a spectator's note or the
   // submitted result.
   get result(): HTMLElement {
     return screen.getByRole('region', { name: 'Result' })

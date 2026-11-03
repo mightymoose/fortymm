@@ -955,13 +955,16 @@ it to `src/routes/`.
 - Anyone who can open the match can save any game, in any order. The
   only check is that the game's score is legal (`parseGameScore()` in
   `src/scoring/board.ts`). Save goes to the next empty game after it,
-  unless the match is decided. The match rules apply only at review.
+  unless the match is decided. The match rules apply only at submit.
   `reviewBoard()` gives `decided` (empty games before the decider are
-  closed up), `undecided` or `overrun` (games after the decider). Only
-  the two players see Review result, a `Sheet` that submits a `decided`
-  board. A spectator sees who submits instead. A submitted board is
-  frozen for everyone, and its submitter can Edit scores. The submission
-  syncs like a game, and nothing is signed yet.
+  closed up), `undecided` or `overrun` (games after the decider). When a
+  player's button would leave a `decided` board, it reads Submit result,
+  and the line beside it says who wins. It saves the game and submits in
+  one press, with no sheet to confirm. On an `overrun` board, the strip
+  tells a player which games to clear. A spectator's button only saves,
+  and the page says who submits instead. A submitted board is frozen
+  for everyone, and its submitter can Edit scores. The submission syncs
+  like a game, and nothing is signed yet.
 - A save stays on this device and the page moves on at once. Nothing
   about saving waits on the network or can fail. `src/scoring/scratchpad.ts`
   keeps each match's scratchpad in `localStorage`, under
