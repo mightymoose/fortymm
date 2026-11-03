@@ -50,7 +50,7 @@ describe('readFragment', () => {
   })
 
   it('opens a draft', () => {
-    expect(readFragment(draftHash(match, GAMES, null, 1), match)).toEqual({ kind: 'draft', result: result() })
+    expect(readFragment(draftHash(match, GAMES, null, 1), match)).toEqual({ kind: 'draft', issuedAt: 1, result: result() })
   })
 
   it('opens a signed result with its signers', async () => {

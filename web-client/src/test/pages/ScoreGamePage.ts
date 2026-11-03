@@ -1,17 +1,29 @@
-import { cleanup, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { serverBoard, setDemoNetwork, setServerBoard, type Network } from '../../scoring/demoServer'
 import { signWithDeviceKey } from '../../signing/deviceKey'
 import { renderRoute, type AppRouter } from '../renderRoute'
 
 // Page object for the page that edits one game of a match's scores. The
 // mock session's player is `excited egret 387`, who plays the `demo` match
 // against `brave badger 214`. The scores live in the URL's fragment, so
-// `href` includes it, and rendering an `href` again is a reload.
+// `href` includes it, and rendering an `href` again is a reload. The board
+// syncs to the demo server in the background.
 export class ScoreGamePage {
   static async render(path = '/matches/demo/scores/game/1/edit'): Promise<ScoreGamePage> {
     const page = new ScoreGamePage(await renderRoute(path))
     await page.settle()
     return page
+  }
+
+  // Another device's board for the `demo` match, synced to the server.
+  static otherDeviceSyncs(text: string): void {
+    setServerBoard('demo', text)
+  }
+
+  // The `demo` match's board on the demo server, or null when none synced.
+  static get serverBoard(): string | null {
+    return serverBoard('demo')
   }
 
   readonly router: AppRouter
@@ -105,6 +117,29 @@ export class ScoreGamePage {
     return this.cell(game).querySelector('b')?.textContent ?? null
   }
 
+  // What screen readers hear about game `game`'s sync: "Syncing", "Not
+  // synced", "Synced", or null once it settles.
+  slotSync(game: number): string | null {
+    return this.cell(game).querySelector('.score-slot__sync')?.textContent?.trim() ?? null
+  }
+
+  // The note in the strip's header, such as that the device is offline.
+  get stripNote(): string | null {
+    return this.strip.querySelector('.score-strip__note')?.textContent ?? null
+  }
+
+  // Switches the demo server's network, as a connection that drops or
+  // comes back, and waits for the sync it starts.
+  async switchNetwork(network: Network): Promise<void> {
+    act(() => setDemoNetwork(network))
+    await this.settle()
+  }
+
+  // The testing panel's choice of network.
+  network(label: string): HTMLElement {
+    return screen.getByRole('radio', { name: label })
+  }
+
   // The score input for `player`.
   input(player: string): HTMLInputElement {
     return screen.getByRole('textbox', { name: player }) as HTMLInputElement
@@ -184,11 +219,17 @@ export class ScoreGamePage {
     await this.settle()
   }
 
-  // Waits for the router to finish loading the page it's going to.
+  // Waits for the router to finish loading the page it's going to, and
+  // for the sync to stop sending and pulling, as the demo server answers
+  // after a delay.
   async settle(): Promise<void> {
-    await waitFor(() => {
-      if (this.router.state.status !== 'idle') throw new Error('still loading')
-    })
+    await waitFor(
+      () => {
+        if (this.router.state.status !== 'idle') throw new Error('still loading')
+        if (document.querySelector('[aria-busy=true]')) throw new Error('still syncing')
+      },
+      { timeout: 3000 },
+    )
     for (let tick = 0; tick < 5; tick++) {
       await new Promise((resolve) => setTimeout(resolve))
     }

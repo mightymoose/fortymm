@@ -15,7 +15,7 @@ type MatchRules = Pick<Match, 'uuid' | 'bestOf' | 'rated'>
 // signatures, the same bytes a result link carries.
 export type Fragment =
   | { kind: 'empty' }
-  | { kind: 'draft'; result: MatchResult }
+  | { kind: 'draft'; issuedAt: number; result: MatchResult }
   | {
       kind: 'signed'
       envelope: Uint8Array<ArrayBuffer>
@@ -75,7 +75,7 @@ function decodeFragment(hash: string): Fragment {
       signers: signatures.map(({ side }) => side),
     }
   }
-  return { kind: 'draft', result: decodePayload(bytes).result }
+  return { kind: 'draft', ...decodePayload(bytes) }
 }
 
 export function gamesOf(fragment: Fragment): GamePoints[] {

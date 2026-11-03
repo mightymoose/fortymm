@@ -7,6 +7,7 @@ import { FieldError } from '../../components/FieldError'
 import { Icon } from '../../components/Icon'
 import { PlayerAvatar } from '../../components/PlayerAvatar'
 import { otherSide, parseGameScore, tally, type GamePoints, type Side } from '../../scoring/board'
+import { saveBoard } from '../../scoring/boards'
 import type { Match, Viewer } from '../../scoring/demoMatches'
 import { draftHash, gamesOf, nowSeconds, replacesOf, resultOf, type Fragment } from '../../scoring/fragment'
 import { planPress, slotsOf } from '../../scoring/planPress'
@@ -17,7 +18,8 @@ import { gamesWon, PATH, playerLabel, shown, wins, type Sides } from './sides'
 
 // The pad that edits one game: a score input per player with the games
 // tally between them, then the actions. A save puts the games in the URL,
-// on this device, and the page moves on at once.
+// on this device, and the page moves on at once. The board then syncs in
+// the background, for whoever watches the match.
 export function ScoreEntry({
   match,
   gameNumber,
@@ -50,18 +52,17 @@ export function ScoreEntry({
       const result = resultOf(match, submitted, await replacesOf(fragment))
       return signResult(signer, nowSeconds(), result, side)
     },
-    onSuccess: (envelope) =>
-      navigate({
-        to: '/matches/$matchId/scores/submission',
-        params: { matchId: match.id },
-        search: true,
-        hash: base64url(envelope),
-      }),
+    onSuccess: (envelope) => {
+      const hash = base64url(envelope)
+      saveBoard(match.id, hash)
+      return navigate({ to: '/matches/$matchId/scores/submission', params: { matchId: match.id }, search: true, hash })
+    },
   })
   const failure = submit.error && failureMessages[classifyFailure(submit.error).kind]
 
   async function show(next: GamePoints[], game: number) {
     const hash = draftHash(match, next, await replacesOf(fragment), nowSeconds())
+    saveBoard(match.id, hash)
     await navigate({
       to: PATH,
       params: { matchId: match.id, gameNumber: String(game) },
