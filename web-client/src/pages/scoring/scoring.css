@@ -51,14 +51,15 @@
 .score-slot__pts{font:700 var(--text-base)/var(--lh-snug) var(--font-num);font-variant-numeric:tabular-nums;color:var(--loser)}
 .score-slot__pts b{color:var(--winner)}
 .score-slot--after{border-style:dashed}
-/* A game's sync state: a badge in the corner and a tint on the edge. The
+/* A game's sync state: a dot in the corner while it sends, a dashed amber
+   edge while it's stuck, each on its own, and green once it lands. The
    cell never changes size. */
 .score-slot__badge{position:absolute;top:4px;right:4px;display:grid;place-items:center;width:14px;height:14px;border-radius:50%;color:var(--ink-950)}
 .score-slot__badge .fm-ic{width:10px;height:10px}
 .score-slot__badge .fm-ic svg{stroke-width:3}
-.score-slot--syncing .score-slot__badge{width:6px;height:6px;top:8px;right:8px;background:var(--fg-3)}
-.score-slot--waiting{border-color:var(--conflict);border-style:dashed}
-.score-slot--waiting .score-slot__label{color:var(--conflict)}
+.score-slot--sending .score-slot__badge{width:6px;height:6px;top:8px;right:8px;background:var(--fg-3)}
+.score-slot--stuck{border-color:var(--conflict);border-style:dashed}
+.score-slot--stuck .score-slot__label{color:var(--conflict)}
 .score-slot--synced{border-color:var(--success)}
 .score-slot--synced .score-slot__badge{background:var(--success)}
 .score-slot--after,.score-slot--after .score-slot__pts,.score-slot--after .score-slot__pts b{color:var(--fg-disabled)}

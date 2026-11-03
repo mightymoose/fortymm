@@ -1,7 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { ApiError, classifyFailure } from '../api/errors'
 import { fetchBoard, knownOffline, sendChange, type Network } from './demoServer'
-import { markSent, matchesWithChanges, pendingChanges, receiveBoard, subscribe } from './scratchpad'
+import { markSent, matchesWithChanges, pendingChanges, receiveBoard, subscribe, type Change } from './scratchpad'
 
 // Sends a match's outbox to the server in the background, oldest change
 // first, one at a time, so the server applies them in the order they were
@@ -14,10 +14,16 @@ import { markSent, matchesWithChanges, pendingChanges, receiveBoard, subscribe }
 // the board it gets has every change this device sent. A pull that fails
 // leaves the device's board as it is, and the next sync pulls again.
 
-export type SyncStatus =
-  | { kind: 'idle' }
-  | { kind: 'sending' }
-  | { kind: 'waiting'; reason: 'offline' | 'failed' }
+// Two separate facts about a match's sync. A stuck outbox that is trying
+// again is both stuck and sending.
+export type SyncStatus = {
+  // The change on its way to the server now, if any.
+  sending: Change | null
+  // Pulling the server's board now.
+  pulling: boolean
+  // Why the last send didn't get through, until one does.
+  stuck: 'offline' | 'failed' | null
+}
 
 const RETRY_MS = [2000, 4000, 8000, 15000, 30000]
 
@@ -35,10 +41,10 @@ type Engine = {
 
 const engines = new Map<string, Engine>()
 const listeners = new Set<() => void>()
-const IDLE: SyncStatus = { kind: 'idle' }
+const IDLE: SyncStatus = { sending: null, pulling: false, stuck: null }
 
-function setStatus(engine: Engine, status: SyncStatus): void {
-  engine.status = status
+function setStatus(engine: Engine, status: Partial<SyncStatus>): void {
+  engine.status = { ...engine.status, ...status }
   for (const listener of listeners) listener()
 }
 
@@ -52,44 +58,46 @@ async function run(matchId: string, engine: Engine): Promise<void> {
   try {
     for (;;) {
       const [next] = pendingChanges(matchId)
-      if (engine.users === 0) {
-        setStatus(engine, IDLE)
-        return
-      }
-      // Neither sending nor pulling can work, so it waits for the browser's
-      // `online` event, with no retry timer.
-      if ((next || engine.pull) && knownOffline(engine.network)) {
-        setStatus(engine, next ? { kind: 'waiting', reason: 'offline' } : IDLE)
-        return
-      }
+      if (engine.users === 0) return
       if (!next) {
-        if (engine.pull) {
-          setStatus(engine, { kind: 'sending' })
+        // Nothing left to send, so nothing is stuck.
+        setStatus(engine, { stuck: null })
+        if (engine.pull && !knownOffline(engine.network)) {
+          setStatus(engine, { pulling: true })
           try {
             receiveBoard(matchId, await fetchBoard(matchId, engine.network))
             engine.pull = false
           } catch {
             // The device's board stands until the next pull.
+          } finally {
+            setStatus(engine, { pulling: false })
           }
         }
-        setStatus(engine, IDLE)
         return
       }
-      setStatus(engine, { kind: 'sending' })
+      // Sending can't work, so it waits for the browser's `online` event,
+      // with no retry timer.
+      if (knownOffline(engine.network)) {
+        setStatus(engine, { stuck: 'offline' })
+        return
+      }
+      setStatus(engine, { sending: next })
       try {
         await sendChange(matchId, next, engine.network)
         engine.failures = 0
         engine.pull = true
+        setStatus(engine, { sending: null, stuck: null })
         markSent(matchId, next.id)
       } catch (error) {
         if (!retryable(error)) {
+          setStatus(engine, { sending: null })
           markSent(matchId, next.id)
           continue
         }
         const delay = RETRY_MS[Math.min(engine.failures, RETRY_MS.length - 1)]
         engine.failures += 1
         const reason = classifyFailure(error).kind === 'unreachable' ? 'offline' : 'failed'
-        setStatus(engine, { kind: 'waiting', reason })
+        setStatus(engine, { sending: null, stuck: reason })
         engine.retry = setTimeout(() => {
           engine.retry = null
           void run(matchId, engine)

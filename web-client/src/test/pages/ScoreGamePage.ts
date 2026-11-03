@@ -87,6 +87,16 @@ export class ScoreGamePage {
     return this.slot(game).querySelector('.score-slot__sync')?.textContent?.trim() ?? null
   }
 
+  // Whether game `game` shows its change on its way to the server (the dot)
+  // and its sync stuck (the dashed edge). Each is on its own.
+  slotSyncMarks(game: number): { sending: boolean; stuck: boolean } {
+    const slot = this.slot(game)
+    return {
+      sending: slot.classList.contains('score-slot--sending'),
+      stuck: slot.classList.contains('score-slot--stuck'),
+    }
+  }
+
   // Game `game`'s points on the demo server, or null when it has none.
   serverScore(game: number): GamePoints | null {
     return readBoard(serverKey(this.matchId)).games[game]?.points ?? null

@@ -158,13 +158,17 @@ function GameStrip({
 }) {
   const decider = deciderGame(slots, match.bestOf)
   return (
-    <nav className="score-strip-wrap" aria-label="Games" aria-busy={sync.kind === 'sending' || undefined}>
+    <nav
+      className="score-strip-wrap"
+      aria-label="Games"
+      aria-busy={sync.sending !== null || sync.pulling || undefined}
+    >
       {/* One line that always holds its height, so a note never moves the
           page when it comes or goes. */}
       <div className="score-strip__head">
         <p className="score-strip__label">Games</p>
-        {sync.kind === 'waiting' && unsynced.size > 0 ? (
-          <SyncWaiting reason={sync.reason} />
+        {sync.stuck && unsynced.size > 0 ? (
+          <SyncWaiting reason={sync.stuck} />
         ) : (
           decider !== null &&
           decider < match.bestOf && <p className="score-strip__note">Match decided after game {decider}</p>
@@ -181,7 +185,8 @@ function GameStrip({
             after={decider !== null && index + 1 > decider}
             sides={sides}
             unsynced={unsynced.has(index + 1)}
-            waiting={sync.kind === 'waiting'}
+            sending={sync.sending !== null && 'game' in sync.sending && sync.sending.game === index + 1}
+            stuck={sync.stuck !== null}
           />
         ))}
       </ol>
@@ -197,8 +202,10 @@ function SyncWaiting({ reason }: { reason: 'offline' | 'failed' }) {
   )
 }
 
-// One game in the strip, with where its last change stands: syncing, not
-// synced while the outbox waits, or a moment of "Synced" once it lands.
+// One game in the strip, with where its last change stands. A dot while
+// it's on its way to the server, a dashed amber edge while its sync is
+// stuck, both while a stuck game tries again, and a moment of green once it
+// lands. None of them changes the cell's size.
 function GameSlot({
   match,
   game,
@@ -207,7 +214,8 @@ function GameSlot({
   after,
   sides,
   unsynced,
-  waiting,
+  sending,
+  stuck,
 }: {
   match: Match
   game: number
@@ -216,7 +224,8 @@ function GameSlot({
   after: boolean
   sides: Sides
   unsynced: boolean
-  waiting: boolean
+  sending: boolean
+  stuck: boolean
 }) {
   const [justSynced, setJustSynced] = useState(false)
   const wasUnsynced = useRef(unsynced)
@@ -229,10 +238,14 @@ function GameSlot({
     return () => clearTimeout(timer)
   }, [unsynced])
 
-  const state = unsynced ? (waiting ? 'waiting' : 'syncing') : justSynced ? 'synced' : null
+  const isStuck = unsynced && stuck
+  const synced = !unsynced && justSynced
+  const label = sending ? 'Syncing' : isStuck ? 'Not synced' : synced ? 'Synced' : unsynced ? 'Waiting to sync' : null
   const classes = ['score-slot']
   if (after) classes.push('score-slot--after')
-  if (state) classes.push(`score-slot--${state}`)
+  if (sending) classes.push('score-slot--sending')
+  if (isStuck) classes.push('score-slot--stuck')
+  if (synced) classes.push('score-slot--synced')
   return (
     <li>
       <Link
@@ -244,20 +257,12 @@ function GameSlot({
       >
         <span className="score-slot__label">Game {game}</span>{' '}
         <span className="score-slot__pts">{points ? <SlotScore points={points} sides={sides} /> : '–'}</span>
-        {state && (
-          <>
-            {/* Pinned in the corner, so the cell keeps its size. A game
-                that waits to sync shows it with its edge instead. */}
-            {state !== 'waiting' && (
-              <span className="score-slot__badge" aria-hidden="true">
-                {state === 'synced' && <Icon name="check" />}
-              </span>
-            )}
-            <span className="score-slot__sync fm-sr">
-              {state === 'syncing' ? 'Syncing' : state === 'waiting' ? 'Not synced' : 'Synced'}
-            </span>
-          </>
+        {(sending || synced) && (
+          <span className="score-slot__badge" aria-hidden="true">
+            {!sending && <Icon name="check" />}
+          </span>
         )}
+        {label && <span className="score-slot__sync fm-sr">{label}</span>}
       </Link>
     </li>
   )
@@ -455,7 +460,7 @@ function Result({
         </p>
         <p className="fm-help">
           {resultUnsynced
-            ? sync.kind === 'waiting'
+            ? sync.stuck
               ? 'Saved on this device. It reaches the server when you’re back online.'
               : 'Syncing the result…'
             : waitingFor && `Waiting for ${waitingFor.name}`}

@@ -984,9 +984,11 @@ it to `src/routes/`.
   whose outbox has changes, so a score saved with no signal syncs once
   the device is back online, even after the scoring page has closed.
   Each game in the strip shows its state as a badge in its corner and a
-  tint on its edge, so the cell never changes size: a dot while it
-  syncs, a dashed amber edge and label while the outbox waits, and green
-  for a moment once it lands. Screen readers hear `Syncing`, `Not synced` or `Synced`. The
+  tint on its edge, so the cell never changes size. The two are separate:
+  a dot while its change is on its way to the server, and a dashed amber
+  edge and label from a send that didn't get through until one does, so
+  a stuck game that tries again shows both. It goes green for a moment
+  once it lands. Screen readers hear `Syncing`, `Not synced` or `Synced`. The
   strip's header line says when the device is offline, or else where
   the match was decided. That line, and the line beside the buttons
   that holds the score hint or "Saved by", keep their height, so saving

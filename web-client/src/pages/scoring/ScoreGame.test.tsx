@@ -83,6 +83,21 @@ describe('ScoreGame', () => {
     expect(page.slotSync(1)).toBe('Synced')
   })
 
+  it('marks a stuck game, and shows it sending as well when it tries again', async () => {
+    const page = await ScoreGamePage.render()
+    await page.switchNetwork('broken')
+    await page.enter({ [ME]: '11', [OPPONENT]: '8' })
+    await page.save()
+
+    expect(page.slotSyncMarks(1)).toEqual({ sending: false, stuck: true })
+
+    await page.router.navigate({ to: '.', search: {} })
+
+    await waitFor(() => expect(page.slotSyncMarks(1)).toEqual({ sending: true, stuck: true }))
+    await waitFor(() => expect(page.serverScore(1)).toEqual([11, 8]))
+    await waitFor(() => expect(page.slotSyncMarks(1)).toEqual({ sending: false, stuck: false }))
+  })
+
   it('sends nothing while the browser knows it is offline, and syncs when it comes back', async () => {
     const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
     const page = await ScoreGamePage.render()
