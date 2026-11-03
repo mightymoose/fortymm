@@ -1,12 +1,13 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { ApiError, classifyFailure } from '../api/errors'
-import { sendChange, type Network } from './demoServer'
+import { knownOffline, sendChange, type Network } from './demoServer'
 import { markSent, matchesWithChanges, pendingChanges, subscribe } from './scratchpad'
 
 // Sends a match's outbox to the server in the background, oldest change
 // first, one at a time, so the server applies them in the order they were
-// made. A change the server can't take now waits, and the outbox tries again
-// after a backoff or as soon as the browser is back online. A change it
+// made. While the browser knows it's offline, nothing is sent until it fires
+// `online`. A change the server can't take now waits, and the outbox tries
+// again after a backoff or as soon as the browser is back online. A change it
 // refuses for good (a 4xx) leaves the outbox, since sending it again can't
 // help.
 
@@ -48,6 +49,12 @@ async function run(matchId: string, engine: Engine): Promise<void> {
       const [next] = pendingChanges(matchId)
       if (!next || engine.users === 0) {
         setStatus(engine, IDLE)
+        return
+      }
+      // Sending can't work, so it waits for the browser's `online` event,
+      // with no retry timer.
+      if (knownOffline(engine.network)) {
+        setStatus(engine, { kind: 'waiting', reason: 'offline' })
         return
       }
       setStatus(engine, { kind: 'sending' })

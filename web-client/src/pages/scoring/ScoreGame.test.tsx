@@ -1,6 +1,6 @@
 import { cleanup, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { serverKey } from '../../scoring/demoServer'
 import { pendingChanges, readBoard } from '../../scoring/scratchpad'
 import { ErrorPage } from '../../test/pages/ErrorPage'
@@ -103,6 +103,23 @@ describe('ScoreGame', () => {
 
     expect(page.serverScore(1)).toEqual([11, 9])
     expect(page.slotSync(1)).toBe('Synced')
+  })
+
+  it('sends nothing while the browser knows it is offline, and syncs when it comes back', async () => {
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+    const page = await ScoreGamePage.render()
+    await page.enter({ [ME]: '11', [OPPONENT]: '7' })
+    await page.save()
+    await new Promise((resolve) => setTimeout(resolve, 500))
+
+    expect(page.slotSync(1)).toBe('Not synced')
+    expect(page.serverScore(1)).toBeNull()
+
+    onLine.mockReturnValue(true)
+    window.dispatchEvent(new Event('online'))
+
+    await waitFor(() => expect(page.serverScore(1)).toEqual([11, 7]))
+    onLine.mockRestore()
   })
 
   it('syncs a score saved offline after the scoring page has closed', async () => {

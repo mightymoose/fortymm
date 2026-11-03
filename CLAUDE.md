@@ -972,8 +972,12 @@ it to `src/routes/`.
   reads it with `useSyncExternalStore` and follows the `storage` event, so
   two tabs on one match stay in step. It refuses game writes while the
   result is submitted, and works in this tab when storage throws.
-- `src/scoring/sync.ts` sends the outbox while the page is open, oldest
-  change first, one at a time. A change that can't get through waits,
+- `src/scoring/sync.ts` sends the outbox oldest change first, one at a
+  time. While the browser knows it's offline (`navigator.onLine`, or the
+  demo's `offline`), it sends nothing and waits for `online`.
+  `navigator.onLine` can be true with nothing getting through, as on hall
+  Wi-Fi with no internet, so a request can still fail. A change that
+  can't get through waits,
   with a backoff from 2 to 30 seconds, and goes as soon as the browser
   fires `online`. A 4xx drops the change, since sending it again can't
   help. `useAppSync()` runs in `Root`, on every page, for each match
@@ -993,8 +997,9 @@ it to `src/routes/`.
   last match it loaded in `fortymm-match:<matchId>`, so a load that can't
   reach the server opens that copy. Each call waits, then may fail, as
   the page's `network` search param says: `normal` (300ms), `slow`
-  (2.5s), `flaky` (every second request answers 503), `offline` (no
-  response) or `broken` (500). A Testing panel at the bottom of the
+  (2.5s), `flaky` (every second request answers 503), `offline` (the
+  browser knows it's offline, so each request fails at once) or `broken`
+  (500). A Testing panel at the bottom of the
   page (`TestingPanel.tsx`) switches the network, resets the match on
   the device and the server, or clears every demo match and saved copy.
   It goes when the API has matches.

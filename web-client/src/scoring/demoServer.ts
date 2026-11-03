@@ -8,7 +8,8 @@ import { applyChange, forgetRecords, readBoard, storageKey, writeBoard, type Cha
 // device's changes one at a time. Each call waits and may fail the way the
 // chosen network does, so the page's loading and syncing can be seen and
 // tested. The page picks the network from its `network` search param, such
-// as `?network=flaky`.
+// as `?network=flaky`. `offline` plays a browser that knows it's offline:
+// each request fails at once, as fetch does then.
 
 export const NETWORKS = ['normal', 'slow', 'flaky', 'offline', 'broken'] as const
 export type Network = (typeof NETWORKS)[number]
@@ -21,12 +22,19 @@ const BEHAVIOUR: Record<Network, { latencyMs: number; fails: (count: number) => 
   normal: { latencyMs: 300, fails: () => null },
   slow: { latencyMs: 2500, fails: () => null },
   flaky: { latencyMs: 800, fails: (count) => (count % 2 === 1 ? 503 : null) },
-  offline: { latencyMs: 1000, fails: () => 'unreachable' },
+  offline: { latencyMs: 0, fails: () => 'unreachable' },
   broken: { latencyMs: 400, fails: () => 500 },
 }
 
 export function parseNetwork(value: unknown): Network {
   return NETWORKS.find((network) => network === value) ?? 'normal'
+}
+
+// Whether the browser knows it has no connection, so a request can't help.
+// `offline` plays that. `navigator.onLine` can be true with nothing getting
+// through, as on hall Wi-Fi with no internet, so a request can still fail.
+export function knownOffline(network: Network): boolean {
+  return network === 'offline' || !navigator.onLine
 }
 
 let sent = 0
