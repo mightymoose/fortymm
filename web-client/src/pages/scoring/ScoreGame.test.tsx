@@ -335,7 +335,7 @@ describe('ScoreGame', () => {
 
     await page.click('Submit result')
 
-    expect(page.href).toBe('/matches/demo/validation')
+    expect(page.href).toBe('/matches/demo/score-validations/new')
     await page.router.navigate({ to: '/matches/$matchId/scores/game/$gameNumber/edit', params: { matchId: 'demo', gameNumber: '5' } })
     await page.settle()
     expect(page.slotScore(5)).toBe('13–11')
@@ -363,7 +363,7 @@ describe('ScoreGame', () => {
     expect(page.saveButton).toBeNull()
     await page.click('Submit result')
 
-    expect(page.href).toBe('/matches/demo/validation')
+    expect(page.href).toBe('/matches/demo/score-validations/new')
     expect(readBoard(storageKey('demo')).submission).toMatchObject({
       phase: 'submitted',
       games: [

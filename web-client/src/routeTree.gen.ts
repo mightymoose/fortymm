@@ -19,8 +19,8 @@ import { Route as AuthenticatedReviewPlayersRouteImport } from './routes/_authen
 import { Route as AuthenticatedShellIndexRouteImport } from './routes/_authenticated/_shell/index'
 import { Route as AuthenticatedShellAdminRouteRouteImport } from './routes/_authenticated/_shell/admin/route'
 import { Route as AuthenticatedShellAdminIndexRouteImport } from './routes/_authenticated/_shell/admin/index'
-import { Route as AuthenticatedMatchesMatchIdValidationRouteImport } from './routes/_authenticated/matches/$matchId/validation'
 import { Route as AuthenticatedShellAdminAccountsAccountIdRouteImport } from './routes/_authenticated/_shell/admin/accounts/$accountId'
+import { Route as AuthenticatedMatchesMatchIdScoreValidationsNewRouteImport } from './routes/_authenticated/matches/$matchId/score-validations/new'
 import { Route as AuthenticatedMatchesMatchIdScoresGameGameNumberEditRouteImport } from './routes/_authenticated/matches/$matchId/scores/game/$gameNumber/edit'
 
 const AuthenticatedRoute = AuthenticatedRouteImport.update({
@@ -74,17 +74,17 @@ const AuthenticatedShellAdminIndexRoute =
     path: '/',
     getParentRoute: () => AuthenticatedShellAdminRouteRoute,
   } as any)
-const AuthenticatedMatchesMatchIdValidationRoute =
-  AuthenticatedMatchesMatchIdValidationRouteImport.update({
-    id: '/matches/$matchId/validation',
-    path: '/matches/$matchId/validation',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
 const AuthenticatedShellAdminAccountsAccountIdRoute =
   AuthenticatedShellAdminAccountsAccountIdRouteImport.update({
     id: '/accounts/$accountId',
     path: '/accounts/$accountId',
     getParentRoute: () => AuthenticatedShellAdminRouteRoute,
+  } as any)
+const AuthenticatedMatchesMatchIdScoreValidationsNewRoute =
+  AuthenticatedMatchesMatchIdScoreValidationsNewRouteImport.update({
+    id: '/matches/$matchId/score-validations/new',
+    path: '/matches/$matchId/score-validations/new',
+    getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedMatchesMatchIdScoresGameGameNumberEditRoute =
   AuthenticatedMatchesMatchIdScoresGameGameNumberEditRouteImport.update({
@@ -101,9 +101,9 @@ export interface FileRoutesByFullPath {
   '/signed-out': typeof SignedOutRoute
   '/review-players': typeof AuthenticatedReviewPlayersRoute
   '/admin': typeof AuthenticatedShellAdminRouteRouteWithChildren
-  '/matches/$matchId/validation': typeof AuthenticatedMatchesMatchIdValidationRoute
   '/admin/': typeof AuthenticatedShellAdminIndexRoute
   '/admin/accounts/$accountId': typeof AuthenticatedShellAdminAccountsAccountIdRoute
+  '/matches/$matchId/score-validations/new': typeof AuthenticatedMatchesMatchIdScoreValidationsNewRoute
   '/matches/$matchId/scores/game/$gameNumber/edit': typeof AuthenticatedMatchesMatchIdScoresGameGameNumberEditRoute
 }
 export interface FileRoutesByTo {
@@ -113,9 +113,9 @@ export interface FileRoutesByTo {
   '/sign-in-stopped': typeof SignInStoppedRoute
   '/signed-out': typeof SignedOutRoute
   '/review-players': typeof AuthenticatedReviewPlayersRoute
-  '/matches/$matchId/validation': typeof AuthenticatedMatchesMatchIdValidationRoute
   '/admin': typeof AuthenticatedShellAdminIndexRoute
   '/admin/accounts/$accountId': typeof AuthenticatedShellAdminAccountsAccountIdRoute
+  '/matches/$matchId/score-validations/new': typeof AuthenticatedMatchesMatchIdScoreValidationsNewRoute
   '/matches/$matchId/scores/game/$gameNumber/edit': typeof AuthenticatedMatchesMatchIdScoresGameGameNumberEditRoute
 }
 export interface FileRoutesById {
@@ -129,9 +129,9 @@ export interface FileRoutesById {
   '/_authenticated/review-players': typeof AuthenticatedReviewPlayersRoute
   '/_authenticated/_shell/admin': typeof AuthenticatedShellAdminRouteRouteWithChildren
   '/_authenticated/_shell/': typeof AuthenticatedShellIndexRoute
-  '/_authenticated/matches/$matchId/validation': typeof AuthenticatedMatchesMatchIdValidationRoute
   '/_authenticated/_shell/admin/': typeof AuthenticatedShellAdminIndexRoute
   '/_authenticated/_shell/admin/accounts/$accountId': typeof AuthenticatedShellAdminAccountsAccountIdRoute
+  '/_authenticated/matches/$matchId/score-validations/new': typeof AuthenticatedMatchesMatchIdScoreValidationsNewRoute
   '/_authenticated/matches/$matchId/scores/game/$gameNumber/edit': typeof AuthenticatedMatchesMatchIdScoresGameGameNumberEditRoute
 }
 export interface FileRouteTypes {
@@ -144,9 +144,9 @@ export interface FileRouteTypes {
     | '/signed-out'
     | '/review-players'
     | '/admin'
-    | '/matches/$matchId/validation'
     | '/admin/'
     | '/admin/accounts/$accountId'
+    | '/matches/$matchId/score-validations/new'
     | '/matches/$matchId/scores/game/$gameNumber/edit'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -156,9 +156,9 @@ export interface FileRouteTypes {
     | '/sign-in-stopped'
     | '/signed-out'
     | '/review-players'
-    | '/matches/$matchId/validation'
     | '/admin'
     | '/admin/accounts/$accountId'
+    | '/matches/$matchId/score-validations/new'
     | '/matches/$matchId/scores/game/$gameNumber/edit'
   id:
     | '__root__'
@@ -171,9 +171,9 @@ export interface FileRouteTypes {
     | '/_authenticated/review-players'
     | '/_authenticated/_shell/admin'
     | '/_authenticated/_shell/'
-    | '/_authenticated/matches/$matchId/validation'
     | '/_authenticated/_shell/admin/'
     | '/_authenticated/_shell/admin/accounts/$accountId'
+    | '/_authenticated/matches/$matchId/score-validations/new'
     | '/_authenticated/matches/$matchId/scores/game/$gameNumber/edit'
   fileRoutesById: FileRoutesById
 }
@@ -257,19 +257,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedShellAdminIndexRouteImport
       parentRoute: typeof AuthenticatedShellAdminRouteRoute
     }
-    '/_authenticated/matches/$matchId/validation': {
-      id: '/_authenticated/matches/$matchId/validation'
-      path: '/matches/$matchId/validation'
-      fullPath: '/matches/$matchId/validation'
-      preLoaderRoute: typeof AuthenticatedMatchesMatchIdValidationRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
     '/_authenticated/_shell/admin/accounts/$accountId': {
       id: '/_authenticated/_shell/admin/accounts/$accountId'
       path: '/accounts/$accountId'
       fullPath: '/admin/accounts/$accountId'
       preLoaderRoute: typeof AuthenticatedShellAdminAccountsAccountIdRouteImport
       parentRoute: typeof AuthenticatedShellAdminRouteRoute
+    }
+    '/_authenticated/matches/$matchId/score-validations/new': {
+      id: '/_authenticated/matches/$matchId/score-validations/new'
+      path: '/matches/$matchId/score-validations/new'
+      fullPath: '/matches/$matchId/score-validations/new'
+      preLoaderRoute: typeof AuthenticatedMatchesMatchIdScoreValidationsNewRouteImport
+      parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/matches/$matchId/scores/game/$gameNumber/edit': {
       id: '/_authenticated/matches/$matchId/scores/game/$gameNumber/edit'
@@ -315,15 +315,15 @@ const AuthenticatedShellRouteWithChildren =
 interface AuthenticatedRouteChildren {
   AuthenticatedShellRoute: typeof AuthenticatedShellRouteWithChildren
   AuthenticatedReviewPlayersRoute: typeof AuthenticatedReviewPlayersRoute
-  AuthenticatedMatchesMatchIdValidationRoute: typeof AuthenticatedMatchesMatchIdValidationRoute
+  AuthenticatedMatchesMatchIdScoreValidationsNewRoute: typeof AuthenticatedMatchesMatchIdScoreValidationsNewRoute
   AuthenticatedMatchesMatchIdScoresGameGameNumberEditRoute: typeof AuthenticatedMatchesMatchIdScoresGameGameNumberEditRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedShellRoute: AuthenticatedShellRouteWithChildren,
   AuthenticatedReviewPlayersRoute: AuthenticatedReviewPlayersRoute,
-  AuthenticatedMatchesMatchIdValidationRoute:
-    AuthenticatedMatchesMatchIdValidationRoute,
+  AuthenticatedMatchesMatchIdScoreValidationsNewRoute:
+    AuthenticatedMatchesMatchIdScoreValidationsNewRoute,
   AuthenticatedMatchesMatchIdScoresGameGameNumberEditRoute:
     AuthenticatedMatchesMatchIdScoresGameGameNumberEditRoute,
 }

@@ -14,7 +14,7 @@ import { base64url, qrText } from '../../signing/text'
 import { gamesWon, PATH, shown, sidesFor } from '../scoring/sides'
 import '../scoring/scoring.css'
 
-const ROUTE = '/_authenticated/matches/$matchId/validation'
+const ROUTE = '/_authenticated/matches/$matchId/score-validations/new'
 
 // Where a player lands after submitting a result. The other player confirms
 // it from the QR code or the link, which carry the result this device

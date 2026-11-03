@@ -29,7 +29,7 @@ describe('AwaitingValidation', () => {
   it('shows the submitted result after a submit', async () => {
     const page = await submitThreeNil()
 
-    expect(page.href).toBe('/matches/demo/validation')
+    expect(page.href).toBe('/matches/demo/score-validations/new')
     expect(page.heading).toHaveTextContent('Waiting for validation')
     expect(page.text).toContain(`${OPPONENT} confirms the result`)
     expect(page.result).toHaveTextContent(`${ME} wins 3–0`)

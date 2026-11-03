@@ -987,7 +987,7 @@ it to `src/routes/`.
   decider step back, under "Match decided after game N", and stay
   editable. Below 880px the two sides stay side by side and the buttons
   split the width, with Save or Submit on the right.
-- `matches/$matchId/validation.tsx`: the page `AwaitingValidation`
+- `matches/$matchId/score-validations/new.tsx`: the page `AwaitingValidation`
   (`src/pages/matches/`), where a submitted result lands, with the
   scratchpad's frame. It says which player must confirm, and shows the
   games and the winner. Then it shows the signed result as a QR code

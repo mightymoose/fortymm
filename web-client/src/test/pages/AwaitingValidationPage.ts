@@ -7,7 +7,7 @@ import { renderRoute, type AppRouter } from '../renderRoute'
 export class AwaitingValidationPage {
   // Renders the page for `matchId` directly, as a reload does.
   static async render(matchId = 'demo'): Promise<AwaitingValidationPage> {
-    return new AwaitingValidationPage(await renderRoute(`/matches/${matchId}/validation`))
+    return new AwaitingValidationPage(await renderRoute(`/matches/${matchId}/score-validations/new`))
   }
 
   readonly router: AppRouter
