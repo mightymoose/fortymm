@@ -352,6 +352,7 @@ function ScorePad({
       const changed = entry.kind === 'legal' && entry.points.some((points, side) => points !== saved?.points[side])
       if (changed) saveGame(match.id, gameNumber, entry.points, me)
       submitResult(match.id, { by: me.playerId, games: review.games, winner: review.winner })
+      void navigate({ to: '/matches/$matchId', params: { matchId: match.id }, search: true })
       return
     }
     if (entry.kind !== 'legal' || !saveGame(match.id, gameNumber, entry.points, me)) return

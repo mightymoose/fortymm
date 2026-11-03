@@ -952,6 +952,9 @@ it to `src/routes/`.
   links to each game, with its score in mono and the game winner's
   points bold. Games after the decider step back, under "Match decided
   after game N", and stay editable.
+- `matches/$matchId/index.tsx`: the page `MatchPage`
+  (`src/pages/matches/`), where a submitted result lands. It shows
+  nothing yet.
 - Anyone who can open the match can save any game, in any order. The
   only check is that the game's score is legal (`parseGameScore()` in
   `src/scoring/board.ts`). Save goes to the next empty game after it,
@@ -960,7 +963,7 @@ it to `src/routes/`.
   closed up), `undecided` or `overrun` (games after the decider). When a
   player's button would leave a `decided` board, it reads Submit result,
   and the line beside it says who wins. It saves the game and submits in
-  one press, with no sheet to confirm. On an `overrun` board, the strip
+  one press, with no sheet to confirm, then goes to the match's page. On an `overrun` board, the strip
   tells a player which games to clear. A spectator's button only saves,
   and the page says who submits instead. A submitted board is frozen
   for everyone, and its submitter can Edit scores. The submission syncs
@@ -1013,7 +1016,9 @@ it to `src/routes/`.
   board, and the next sync pulls again. A Testing panel at the bottom of the
   page (`TestingPanel.tsx`) switches the network, resets the match on
   the device and the server, or clears every demo match and saved copy.
-  It goes when the API has matches.
+  It goes when the API has matches. Reset match and Clear everything drop
+  the demo server's requests in flight, so a late one can't bring back
+  what they cleared, and the Vitest setup drops them after each test.
 - `design-system.tsx`: a public page. Public pages go directly in
   `src/routes/`. They make no request and never show the loading screen.
   The design system page has no `AppShell`, and no page links to it.

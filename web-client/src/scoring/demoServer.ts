@@ -35,10 +35,21 @@ export function knownOffline(network: Network): boolean {
 }
 
 let sent = 0
+// Moves on when the demo starts over, so a request still on its way can't
+// bring back what was cleared.
+let generation = 0
+
+export function dropRequestsInFlight(): void {
+  generation += 1
+}
 
 async function send<T>(request: string, network: Network, work: () => T): Promise<T> {
   const behaviour = BEHAVIOUR[network]
+  const started = generation
   await new Promise((resolve) => setTimeout(resolve, behaviour.latencyMs))
+  if (generation !== started) {
+    throw new ApiUnreachable(request, { cause: new Error('The demo started over') })
+  }
   const failure = behaviour.fails(sent++)
   if (failure === 'unreachable') {
     throw new ApiUnreachable(request, { cause: new TypeError('Failed to fetch') })
@@ -69,12 +80,14 @@ export function fetchBoard(matchId: string, network: Network): Promise<Board> {
 
 // Starts the match over: its scratchpad, its outbox and the server's board.
 export function resetMatch(matchId: string): void {
+  dropRequestsInFlight()
   const keys = [storageKey(matchId), serverKey(matchId)]
   forgetRecords((key) => keys.includes(key))
 }
 
 // Deletes every demo match's scratchpad and server board.
 export function clearEverything(): void {
+  dropRequestsInFlight()
   const prefixes = [storageKey(''), serverKey('')]
   forgetRecords((key) => prefixes.some((prefix) => key.startsWith(prefix)))
 }

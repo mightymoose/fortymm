@@ -2,7 +2,7 @@ import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { serverKey } from '../../scoring/demoServer'
-import { markSent, pendingChanges, readBoard, saveGame as saveOnDevice, writeBoard } from '../../scoring/scratchpad'
+import { markSent, pendingChanges, readBoard, saveGame as saveOnDevice, storageKey, writeBoard } from '../../scoring/scratchpad'
 import { ErrorPage } from '../../test/pages/ErrorPage'
 import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
 
@@ -306,6 +306,9 @@ describe('ScoreGame', () => {
 
     await page.click('Submit result')
 
+    expect(page.href).toBe('/matches/demo')
+    await page.router.navigate({ to: '/matches/$matchId/scores/game/$gameNumber/edit', params: { matchId: 'demo', gameNumber: '5' } })
+    await page.settle()
     expect(page.slotScore(5)).toBe('13–11')
     expect(page.result).toHaveTextContent(`Submitted by ${ME}. ${ME} wins 3–1.`)
     expect(page.result).toHaveTextContent(`Waiting for ${OPPONENT}`)
@@ -324,13 +327,15 @@ describe('ScoreGame', () => {
     await saveGame(page, 2, '11', '2')
     await page.enter({ [ME]: '11', [OPPONENT]: '3' })
     await page.click('Submit result')
+    await page.router.navigate({ to: '/matches/$matchId/scores/game/$gameNumber/edit', params: { matchId: 'demo', gameNumber: '1' } })
+    await page.settle()
     await page.click('Edit scores')
-    await page.goToGame(1)
 
     expect(page.saveButton).toBeNull()
     await page.click('Submit result')
 
-    expect(page.result).toHaveTextContent(`${ME} wins 3–0.`)
+    expect(page.href).toBe('/matches/demo')
+    expect(readBoard(storageKey('demo')).submission).toMatchObject({ phase: 'submitted', winner: 0 })
   })
 
   it('says which game to clear when one was played after the decider', async () => {

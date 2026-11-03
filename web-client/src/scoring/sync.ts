@@ -36,6 +36,9 @@ type Engine = {
   // The server's board may have changed since the last pull.
   pull: boolean
   users: number
+  // Set when the last user leaves. A request that answers after it changes
+  // nothing.
+  stopped: boolean
   stop: () => void
 }
 
@@ -65,7 +68,9 @@ async function run(matchId: string, engine: Engine): Promise<void> {
         if (engine.pull && !knownOffline(engine.network)) {
           setStatus(engine, { pulling: true })
           try {
-            receiveBoard(matchId, await fetchBoard(matchId, engine.network))
+            const board = await fetchBoard(matchId, engine.network)
+            if (engine.stopped) return
+            receiveBoard(matchId, board)
             engine.pull = false
           } catch {
             // The device's board stands until the next pull.
@@ -84,11 +89,13 @@ async function run(matchId: string, engine: Engine): Promise<void> {
       setStatus(engine, { sending: next })
       try {
         await sendChange(matchId, next, engine.network)
+        if (engine.stopped) return
         engine.failures = 0
         engine.pull = true
         setStatus(engine, { sending: null, stuck: null })
         markSent(matchId, next.id)
       } catch (error) {
+        if (engine.stopped) return
         if (!retryable(error)) {
           setStatus(engine, { sending: null })
           markSent(matchId, next.id)
@@ -132,6 +139,7 @@ function start(matchId: string, network: Network): () => void {
       retry: null,
       pull: true,
       users: 0,
+      stopped: false,
       stop: () => {},
     }
     const online = () => kick(matchId, created)
@@ -142,6 +150,7 @@ function start(matchId: string, network: Network): () => void {
     })
     window.addEventListener('online', online)
     created.stop = () => {
+      created.stopped = true
       unsubscribe()
       window.removeEventListener('online', online)
       if (created.retry) clearTimeout(created.retry)
