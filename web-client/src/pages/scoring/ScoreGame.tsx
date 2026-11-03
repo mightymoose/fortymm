@@ -258,11 +258,13 @@ function GameSlot({
         <span className="score-slot__pts">{points ? <SlotScore points={points} sides={sides} /> : '–'}</span>
         {state && (
           <>
-            {/* Pinned in the corner, so the cell keeps its size. */}
-            <span className="score-slot__badge" aria-hidden="true">
-              {state === 'synced' && <Icon name="check" />}
-              {state === 'waiting' && <Icon name="alert" />}
-            </span>
+            {/* Pinned in the corner, so the cell keeps its size. A game
+                that waits to sync shows it with its edge instead. */}
+            {state !== 'waiting' && (
+              <span className="score-slot__badge" aria-hidden="true">
+                {state === 'synced' && <Icon name="check" />}
+              </span>
+            )}
             <span className="score-slot__sync fm-sr">
               {state === 'syncing' ? 'Syncing' : state === 'waiting' ? 'Not synced' : 'Synced'}
             </span>

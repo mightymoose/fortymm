@@ -57,8 +57,8 @@
 .score-slot__badge .fm-ic{width:10px;height:10px}
 .score-slot__badge .fm-ic svg{stroke-width:3}
 .score-slot--syncing .score-slot__badge{width:6px;height:6px;top:8px;right:8px;background:var(--fg-3)}
-.score-slot--waiting{border-color:var(--conflict)}
-.score-slot--waiting .score-slot__badge{background:var(--conflict)}
+.score-slot--waiting{border-color:var(--conflict);border-style:dashed}
+.score-slot--waiting .score-slot__label{color:var(--conflict)}
 .score-slot--synced{border-color:var(--success)}
 .score-slot--synced .score-slot__badge{background:var(--success)}
 .score-slot--after,.score-slot--after .score-slot__pts,.score-slot--after .score-slot__pts b{color:var(--fg-disabled)}

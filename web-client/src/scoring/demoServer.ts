@@ -1,5 +1,6 @@
 import { queryOptions } from '@tanstack/react-query'
 import { ApiError, ApiUnreachable, classifyFailure } from '../api/errors'
+import { shouldRetry } from '../api/queries'
 import { demoMatch, type Match, type MatchPlayer } from './demoMatches'
 import { applyChange, forgetRecords, readBoard, storageKey, writeBoard, type Change } from './scratchpad'
 
@@ -105,6 +106,11 @@ export function matchQuery(id: string, self: MatchPlayer, network: Network) {
       }
     },
     staleTime: Infinity,
+    // With nothing saved, a browser that knows it's offline shows the error
+    // at once, rather than a skeleton that waits for a connection or retries
+    // a request that can't work.
+    networkMode: 'always',
+    retry: (failureCount, error) => !knownOffline(network) && shouldRetry(failureCount, error),
   })
 }
 
