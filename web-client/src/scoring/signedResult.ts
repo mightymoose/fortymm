@@ -1,3 +1,7 @@
+import { queryOptions } from '@tanstack/react-query'
+import { NoSigningKey } from '../api/errors'
+import { signWithDeviceKey } from '../signing/deviceKey'
+import { signResult } from '../signing/envelope'
 import type { MatchResult, Side } from '../signing/result'
 import type { Match } from './demoMatches'
 import type { Submitted } from './scratchpad'
@@ -22,4 +26,23 @@ export function signedResultOf(match: Match, submission: Submitted): SignedResul
     },
     side,
   }
+}
+
+// The envelope this device signs for `submission`. Signing needs no network,
+// so the query never pauses offline. It keeps the bytes for the page load,
+// because ECDSA here is randomized, and signing again would give other
+// signature bytes for the same payload.
+export function signedResultQuery(match: Match, submission: Submitted) {
+  return queryOptions({
+    queryKey: ['signed-result', match.id, submission.submittedAt],
+    staleTime: Infinity,
+    gcTime: Infinity,
+    networkMode: 'always',
+    queryFn: async () => {
+      const signer = await signWithDeviceKey()
+      if (!signer) throw new NoSigningKey()
+      const { issuedAt, result, side } = signedResultOf(match, submission)
+      return signResult(signer, issuedAt, result, side)
+    },
+  })
 }

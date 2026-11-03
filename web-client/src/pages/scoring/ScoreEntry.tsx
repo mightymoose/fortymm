@@ -69,7 +69,7 @@ export function ScoreEntry({
       case 'submit':
         if (press.save) saveGame(match.id, gameNumber, press.save, me)
         submitResult(match.id, me.playerId, press.games)
-        void navigate({ to: '/matches/$matchId', params: { matchId: match.id }, search: true })
+        void navigate({ to: '/matches/$matchId/validation', params: { matchId: match.id }, search: true })
     }
   }
 

@@ -41,8 +41,18 @@ function parseRetryAfter(value: string | null): Date | null {
   return Number.isNaN(date) ? null : new Date(date)
 }
 
+// This browser has no signing key yet. It makes one once the API answers
+// its session.
+export class NoSigningKey extends Error {
+  constructor() {
+    super('this browser has no signing key')
+    this.name = 'NoSigningKey'
+  }
+}
+
 export type Failure =
   | { kind: 'unreachable' }
+  | { kind: 'no-signing-key' }
   | { kind: 'rate-limited'; retryAt: Date | null }
   | { kind: 'broken' }
 
@@ -53,6 +63,7 @@ const UNREACHABLE_STATUSES = new Set([502, 503, 504])
 // What a failed request means for the visitor, so a page can say what to do.
 export function classifyFailure(error: unknown): Failure {
   if (error instanceof ApiUnreachable) return { kind: 'unreachable' }
+  if (error instanceof NoSigningKey) return { kind: 'no-signing-key' }
   if (error instanceof ApiError) {
     if (error.status === 429) return { kind: 'rate-limited', retryAt: error.retryAt }
     if (UNREACHABLE_STATUSES.has(error.status)) return { kind: 'unreachable' }
@@ -67,6 +78,11 @@ export const failureMessages: Record<Failure['kind'], { title: string; sentence:
     title: 'Can’t reach FortyMM',
     sentence:
       'Our server isn’t answering. It may be starting up, or your connection may be down. Check your connection, then try again.',
+  },
+  'no-signing-key': {
+    title: 'This browser can’t sign the result yet',
+    sentence:
+      'FortyMM makes this browser’s signing key once it reaches our server. Check your connection, then try again.',
   },
   'rate-limited': {
     title: 'Wait a minute, then try again',
