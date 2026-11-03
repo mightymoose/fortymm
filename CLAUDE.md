@@ -980,7 +980,9 @@ it to `src/routes/`.
   a whole number from 1 to the match's `bestOf` goes to game 1, with a
   replace. One pad holds a big score input per player and the games
   tally between them, the viewer's player on the left, then the actions
-  (`ScoreEntry.tsx`). The left score has focus when a game opens. Enter
+  (`ScoreEntry.tsx`). To a player, the page names the players You and
+  Your opponent, with no avatar, as in "Saved by you" and "You win
+  3–1" (`playerLabel()` in `sides.ts`). A spectator sees their names. The left score has focus when a game opens. Enter
   moves to the other score while it is empty, and otherwise submits the
   pad's form. A strip (`GameStrip.tsx`) links to each game, with its
   score in mono and the game winner's points bold. Games after the

@@ -3,7 +3,7 @@ import { Icon } from '../../components/Icon'
 import { matchWinner, tally } from '../../scoring/board'
 import type { Match, Viewer } from '../../scoring/demoMatches'
 import { reopen, type Scorer, type Submission } from '../../scoring/scratchpad'
-import { gamesWon } from './sides'
+import { gamesWon, midSentence, playerLabel, wins } from './sides'
 
 // The submitted result, or a note for a spectator about who submits it. A
 // player submits through the pad's button.
@@ -23,7 +23,7 @@ export function ResultPanel({
   me: Scorer
 }) {
   if (submission.phase === 'submitted') {
-    const submitter = match.players.find((player) => player.id === submission.by)
+    const label = (playerId: string) => playerLabel(match, viewer, playerId, 'a player')
     const waitingFor = match.players.find((player) => player.id !== submission.by)
     const winner = matchWinner(submission.games)
     return (
@@ -31,8 +31,8 @@ export function ResultPanel({
         <p className="fm-notice fm-notice--success" role="status">
           <Icon name="check" />
           <span>
-            Submitted by <b>{submitter?.name ?? 'a player'}</b>.{' '}
-            <b>{match.players[winner].name}</b> wins {gamesWon(tally(submission.games), winner)}.
+            Submitted by <b>{midSentence(label(submission.by))}</b>.{' '}
+            {wins(label(match.players[winner].id), gamesWon(tally(submission.games), winner))}.
           </span>
         </p>
         <p className="fm-help">
@@ -40,7 +40,7 @@ export function ResultPanel({
             ? stuck
               ? 'Saved on this device. It reaches the server when you’re back online.'
               : 'Syncing the result…'
-            : waitingFor && `Waiting for ${waitingFor.name}`}
+            : waitingFor && `Waiting for ${midSentence(label(waitingFor.id))}`}
         </p>
         {submission.by === me.playerId && (
           <Button variant="secondary" onClick={() => reopen(match.id)}>
