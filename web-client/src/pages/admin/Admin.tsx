@@ -8,8 +8,6 @@ import { SigningKeysSection } from './SigningKeysSection'
 import { adminTabs, type AdminTab } from './tabs'
 import './admin.css'
 
-// Each tab's label and panel. A Record, so a tab id without a panel fails
-// tsc instead of shifting every index after it.
 const tabs: Record<AdminTab, { label: string; panel: ReactNode }> = {
   roles: { label: 'Roles', panel: <RolesSection /> },
   permissions: { label: 'Permissions', panel: <PermissionsSection /> },

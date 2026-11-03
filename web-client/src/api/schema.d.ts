@@ -878,7 +878,6 @@ export interface components {
         };
         /**
          * KeyState
-         * @description A key's state. Nothing stores it: _state() derives it.
          * @enum {string}
          */
         KeyState: "live" | "signed_out" | "revoked";

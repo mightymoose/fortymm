@@ -17,7 +17,6 @@ export function ConfirmDialog({
 }: {
   title: string
   confirmLabel: string
-  // The confirm button's label while `onConfirm` runs, such as "Deleting…".
   busyLabel: string
   onConfirm: () => Promise<void>
   onClose: () => void

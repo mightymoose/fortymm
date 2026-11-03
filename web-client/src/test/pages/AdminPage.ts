@@ -141,7 +141,6 @@ export class AdminPage {
     await this.click('Search')
   }
 
-  // Searches the signing keys by account.
   async searchKeys(text: string): Promise<void> {
     await this.type(this.panel, 'Account', text)
     await this.click('Search')

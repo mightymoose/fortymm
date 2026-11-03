@@ -388,7 +388,6 @@ def register_key(client: TestClient, account: dict[str, Any]) -> None:
 
 @pytest.fixture
 def viewer(client: TestClient, migrated_database: Engine) -> dict[str, Any]:
-    """The session's account, verified and holding only `admin.view`."""
     account: dict[str, Any] = client.post("/v1/session", headers=JSON).json()["data"][
         "account"
     ]

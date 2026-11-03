@@ -280,8 +280,6 @@ export function adminAccountQuery(api: ApiClient, id: string) {
   })
 }
 
-// The newest 50 keys of every account whose email or player name contains
-// `search`, and whether more match.
 export function adminSigningKeysQuery(api: ApiClient, search: string) {
   return queryOptions({
     queryKey: [...ADMIN_KEY, 'signing-keys', search],
@@ -349,7 +347,6 @@ export async function deleteRole(api: ApiClient, id: string): Promise<void> {
   )
 }
 
-// Revokes any account's key, by its kid.
 export async function revokeSigningKey(api: ApiClient, id: string): Promise<void> {
   await send(
     'POST /v1/admin/signing-keys/{key_id}/revoke',

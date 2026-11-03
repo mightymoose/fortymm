@@ -184,36 +184,25 @@ class AccountRolesRequest(BaseModel):
 
 class AdminKeyAccount(BaseModel):
     id: UUID
-    # Null for a guest account.
     email: str | None
-    # As in AdminAccount.
     display_name: str | None
 
 
 class AdminSigningKey(BaseModel):
-    # The key's kid, the thumbprint its signatures cite, in lowercase hex.
     id: HexBytes
     label: str
     created_at: datetime
-    # Revoked wins over signed out, which wins over live.
     state: KeyState
-    # When the device signed out, or a newer device took its place past the
-    # account's 20 live keys. The key still verifies what it signed.
     signed_out_at: datetime | None
-    # When the key was revoked. It verifies nothing since, not even what it
-    # signed before.
     revoked_at: datetime | None
-    # Who revoked it: the key's own account, or an administrator. Flat
-    # rather than a nullable object, because the schema has no `anyOf` with
-    # null (tests/test_openapi.py).
+    # Flat rather than a nullable object, because the schema has no `anyOf`
+    # with null (tests/test_openapi.py).
     revoked_by: UUID | None
-    # Null unless revoked, or when the key's own guest account revoked it.
     revoked_by_email: str | None
     account: AdminKeyAccount
 
 
 class AdminSigningKeysMeta(BaseModel):
-    # More keys match than `data` holds. Narrow `search` to see them.
     has_more: bool
 
 

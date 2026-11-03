@@ -72,7 +72,6 @@ def guest(database: Engine, name: str | None = None) -> AccountId:
 
 
 def player_account(database: Engine, email: str, name: str) -> AccountId:
-    """A verified account with a self player named `name`."""
     account = guest(database, name)
     with database.begin() as connection:
         connection.execute(

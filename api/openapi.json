@@ -2668,8 +2668,7 @@
           "signed_out",
           "revoked"
         ],
-        "title": "KeyState",
-        "description": "A key's state. Nothing stores it: _state() derives it."
+        "title": "KeyState"
       },
       "LogoutData": {
         "properties": {

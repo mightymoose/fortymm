@@ -21,7 +21,6 @@ depends_on: str | Sequence[str] | None = None
 # functions or views, so write those as op.execute(...).
 def upgrade() -> None:
     op.add_column("signing_keys", sa.Column("revoked_by", sa.Uuid(), nullable=True))
-    # Until now only a key's own account could revoke it.
     op.execute(
         "UPDATE signing_keys SET revoked_by = account_id WHERE revoked_at IS NOT NULL"
     )
@@ -42,9 +41,6 @@ def upgrade() -> None:
         "INSERT INTO permissions (key, description, built_in) VALUES"
         " ('signing_keys.revoke', 'Revoke any account''s device signing key.', true)"
     )
-    # A role that grants account_roles.manage can already grant itself
-    # anything, so this gives nobody new power. On a new database it is
-    # Administrator, whatever it has been renamed to.
     op.execute(
         "INSERT INTO role_permissions (role_id, permission_key)"
         " SELECT role_id, 'signing_keys.revoke' FROM role_permissions"

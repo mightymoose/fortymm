@@ -293,8 +293,6 @@ export type AdminState = {
   permissions: Omit<AdminPermission, 'role_count'>[]
   roles: Omit<AdminRole, 'account_count'>[]
   accounts: AdminAccount[]
-  // Every account's keys, guests' too, newest first. Each key's `state`
-  // agrees with its timestamps, as the API's does.
   signingKeys: AdminSigningKey[]
 }
 // A list, or one account's page, such as `accounts/<id>`.

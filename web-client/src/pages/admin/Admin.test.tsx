@@ -36,8 +36,6 @@ const ben = {
 const gamesRecord = { key: 'games.record', description: 'Record a match.', built_in: false }
 const guest = { id: '9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a', email: null, display_name: 'curious crane 512' }
 
-// A live key registered on 2 Nov 2026, unless `changes` say otherwise. Its
-// kid is `digit` 64 times.
 function signingKey(
   digit: string,
   label: string,

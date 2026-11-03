@@ -19,9 +19,6 @@ import { useAdminWrite, useCan } from './useAdminWrite'
 const searchSchema = z.object({ search: z.string().trim() })
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' })
 
-// Every account's signing keys, guests' too, newest first, found by account.
-// With `signing_keys.revoke`, the visitor revokes a key that isn't revoked,
-// after a dialog says what that does.
 export function SigningKeysSection() {
   const [search, setSearch] = useState('')
   const { register, handleSubmit } = useForm({
@@ -142,8 +139,6 @@ function SigningKeys({ search }: { search: string }) {
   )
 }
 
-// A verified account's email, linked to its admin page, or "Guest", with its
-// player's name under either.
 function KeyAccountCell({ account }: { account: AdminSigningKey['account'] }) {
   return (
     <>
@@ -161,8 +156,6 @@ function KeyAccountCell({ account }: { account: AdminSigningKey['account'] }) {
   )
 }
 
-// The key's state from the API's `state`. The page never works it out from
-// the timestamps.
 function KeyStateCell({ signingKey: key }: { signingKey: AdminSigningKey }) {
   switch (key.state) {
     case 'live':
@@ -205,7 +198,6 @@ function Day({ iso }: { iso: string }) {
   return <time dateTime={iso}>{dateFormat.format(new Date(iso))}</time>
 }
 
-// The start of a kid, enough to tell the rows apart.
 function shortKid(id: string): string {
   return id.slice(0, 8)
 }
