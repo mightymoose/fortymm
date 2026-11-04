@@ -288,8 +288,19 @@ describe('NewMatch', () => {
   })
 
   it('is linked from Home', async () => {
+    mockMatches()
     const home = await HomePage.render()
 
     expect(home.newMatchLink).toHaveAttribute('href', '/matches/new')
+  })
+
+  it('is only for an account with matches.create', async () => {
+    const home = await HomePage.render()
+    expect(home.newMatchLink).toBeNull()
+    cleanup()
+
+    const page = await NewMatchPage.render()
+
+    await waitFor(() => expect(page.pathname).toBe('/'))
   })
 })

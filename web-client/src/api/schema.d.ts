@@ -398,8 +398,9 @@ export interface paths {
          *     A new match answers 201. One that already exists with the same details
          *     answers 200, so a retry or a second device gets the match. One with
          *     other players, best of or rated status answers 409, and the title says
-         *     what differs. Players are compared through any merge. Anyone with a
-         *     session may make a match, a guest too, and needn't play in it.
+         *     what differs. Players are compared through any merge. It needs
+         *     `matches.create`, which no guest holds. The account needn't play in the
+         *     match.
          */
         post: operations["create_match"];
         delete?: never;
@@ -1868,6 +1869,15 @@ export interface operations {
             };
             /** @description The request has no valid session */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

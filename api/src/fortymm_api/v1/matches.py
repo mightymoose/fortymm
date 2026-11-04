@@ -8,13 +8,15 @@ from fastapi import APIRouter, Query, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from fortymm_api.accounts import PlayerId
-from fortymm_api.auth import RequestAccount
+from fortymm_api.accounts import CurrentAccount, PlayerId
+from fortymm_api.auth import RequestAccount, require_permission
 from fortymm_api.database import DatabaseSession
 from fortymm_api.matches import MatchId
+from fortymm_api.permissions import Permission
 from fortymm_api.services import match_results, matches, opponents
 from fortymm_api.services.matches import Difference, Refused
 from fortymm_api.v1.errors import (
+    FORBIDDEN,
     NO_SESSION,
     UNSUPPORTED_MEDIA_TYPE,
     Responses,
@@ -24,6 +26,8 @@ from fortymm_api.v1.errors import (
 from fortymm_api.v1.types import HexBytes
 
 router = APIRouter(prefix="/matches", tags=["matches"])
+
+MatchCreator = Annotated[CurrentAccount, require_permission(Permission.MATCHES_CREATE)]
 
 DIFFERENCE_NAMES: dict[Difference, str] = {
     "players": "players",
@@ -133,6 +137,7 @@ class OpponentsResponse(BaseModel):
 CREATE_ERRORS: Responses = {
     201: {"model": MatchResponse, "description": "The match was made"},
     **NO_SESSION,
+    **FORBIDDEN,
     **errors(
         409,
         "The match has other players, best of or rated status, and the title"
@@ -190,7 +195,7 @@ def match_opponents(
 def create_match(
     session: DatabaseSession,
     response: Response,
-    account: RequestAccount,
+    account: MatchCreator,
     body: MatchRequest,
 ) -> MatchResponse | JSONResponse:
     """Make the match, with its id from the device, or find it.
@@ -198,8 +203,9 @@ def create_match(
     A new match answers 201. One that already exists with the same details
     answers 200, so a retry or a second device gets the match. One with
     other players, best of or rated status answers 409, and the title says
-    what differs. Players are compared through any merge. Anyone with a
-    session may make a match, a guest too, and needn't play in it.
+    what differs. Players are compared through any merge. It needs
+    `matches.create`, which no guest holds. The account needn't play in the
+    match.
     """
     created = matches.create_match(
         session, MatchId(body.id), body.details(), account.id

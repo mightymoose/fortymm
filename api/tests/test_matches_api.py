@@ -7,7 +7,7 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 from match_setup import add_player
-from sqlalchemy import Engine
+from sqlalchemy import Engine, text
 from sqlalchemy.orm import sessionmaker
 
 from fortymm_api.main import create_app
@@ -40,6 +40,25 @@ def players(migrated_database: Engine) -> list[dict[str, str]]:
         return [{"id": str(p.id), "display_name": p.display_name} for p in found]
 
 
+@pytest.fixture
+def creator(client: TestClient, migrated_database: Engine) -> None:
+    """A session whose account is verified and holds Administrator, which
+    grants `matches.create`."""
+    account = client.post("/v1/session", headers=JSON).json()["data"]["account"]
+    with migrated_database.begin() as connection:
+        connection.execute(
+            text("UPDATE accounts SET email = 'ann@example.com' WHERE id = :id"),
+            {"id": account["id"]},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO account_roles (account_id, role_id)"
+                " SELECT :id, id FROM roles WHERE name = 'Administrator'"
+            ),
+            {"id": account["id"]},
+        )
+
+
 def create_body(players: list[dict[str, str]], best_of: int = 5) -> dict[str, object]:
     return {
         "id": str(MATCH),
@@ -49,11 +68,10 @@ def create_body(players: list[dict[str, str]], best_of: int = 5) -> dict[str, ob
     }
 
 
+@pytest.mark.usefixtures("creator")
 def test_a_new_match_answers_201_and_a_retry_200_with_its_id(
     client: TestClient, players: list[dict[str, str]]
 ) -> None:
-    client.post("/v1/session", headers=JSON)
-
     created = client.post("/v1/matches", headers=JSON, json=create_body(players))
     again = client.post("/v1/matches", headers=JSON, json=create_body(players))
 
@@ -70,10 +88,22 @@ def test_making_a_match_needs_a_session(
     assert response.status_code == 401
 
 
-def test_other_details_answer_409_with_what_differs(
+def test_making_a_match_needs_matches_create(
     client: TestClient, players: list[dict[str, str]]
 ) -> None:
     client.post("/v1/session", headers=JSON)
+
+    response = client.post("/v1/matches", headers=JSON, json=create_body(players))
+
+    assert response.status_code == 403
+    title = "You don't have permission to do this"
+    assert response.json() == {"errors": [{"status": "403", "title": title}]}
+
+
+@pytest.mark.usefixtures("creator")
+def test_other_details_answer_409_with_what_differs(
+    client: TestClient, players: list[dict[str, str]]
+) -> None:
     client.post("/v1/matches", headers=JSON, json=create_body(players))
 
     response = client.post(
@@ -85,6 +115,7 @@ def test_other_details_answer_409_with_what_differs(
     assert response.json() == {"errors": [{"status": "409", "title": title}]}
 
 
+@pytest.mark.usefixtures("creator")
 @pytest.mark.parametrize(
     ("other", "title"),
     [
@@ -95,7 +126,6 @@ def test_other_details_answer_409_with_what_differs(
 def test_players_that_cannot_play_answer_422_in_the_errors_shape(
     client: TestClient, players: list[dict[str, str]], other: int | None, title: str
 ) -> None:
-    client.post("/v1/session", headers=JSON)
     second = {"id": str(uuid.uuid4())} if other is None else players[other]
 
     response = client.post(

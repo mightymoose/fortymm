@@ -509,8 +509,8 @@ routes, under `/v1/admin`.
   letters, digits and `_`, joined by dots, such as `games.record`, at most
   64 characters. The key never changes, because code checks it by key.
 - The built-in permissions are the ones the code checks: `admin.view`,
-  `roles.manage`, `account_roles.manage` and `signing_keys.revoke`. They
-  are the members of
+  `roles.manage`, `account_roles.manage`, `signing_keys.revoke` and
+  `matches.create`. They are the members of
   `Permission` in `permissions.py`, and their rows have `built_in` set. A
   test fails if the two differ, so a new check in code needs a migration
   that adds its row. Nobody can delete a built-in permission (409).
@@ -539,9 +539,10 @@ routes, under `/v1/admin`.
 - The migration makes the role `Administrator`, with the built-in
   permissions. It grants it to `mightymoose@fortymm.com`: to the account
   if one exists, or else as an email grant. In dev, signing in through the
-  mock as that email makes an administrator. The migration that added
-  `signing_keys.revoke` granted it to every role that granted
-  `account_roles.manage`, which could already grant itself anything.
+  mock as that email makes an administrator. The migrations that added
+  `signing_keys.revoke` and `matches.create` granted each to every role
+  that granted `account_roles.manage`, which could already grant itself
+  anything.
 - `GET /v1/admin/accounts` lists verified accounts by email, at most 50,
   with `meta.has_more`. `email` filters by a case-insensitive substring.
   `GET /v1/admin/accounts/{account_id}` is the account's page in one
@@ -626,9 +627,8 @@ making a match, `services/opponents.py` those of picking an opponent, and
   are `STAYS_ON_PLAYER_MERGE`.
 - `POST /v1/matches` makes a match, through `create_match()`. It takes
   the match's `id`, made on the device, `best_of`, `rated` and `players`,
-  side 0's then side 1's. Nothing ever changes a match, so it isn't a
-  `PUT`. It needs a session, a guest's too, and the account needn't play
-  in it. The match goes in the default league with `team_size` 1. Each
+  side 0's then side 1's. It needs `matches.create`, which no guest
+  holds, and the account needn't play in it. The match goes in the default league with `team_size` 1. Each
   side stores the player that survives any merge. A new match answers
   201, and one that exists with the same details 200, both with only its
   id, `{"data": {"id": "<uuid>"}}`. `create_match()` returns `Created` or
@@ -1008,12 +1008,13 @@ it to `src/routes/`.
   or to its `returnTo` prop. It reads Try again, or Sign in for `used`,
   where nothing failed.
 - Home (`src/pages/Home.tsx`) shows `AdoptionReview`
-  (`src/pages/adoption/`), then a New match link to `/matches/new`, above
-  the roadmap. The link stays until matches have a page of their own. The
+  (`src/pages/adoption/`), then a New match link to `/matches/new` for an
+  account with `matches.create`, above the roadmap. The link stays until matches have a page of their own. The
   sidebar doesn't list it.
 - `_shell/matches/new.tsx`: the page `NewMatch`
   (`src/pages/matches/NewMatch.tsx`, with its parts in `newMatch/`),
-  which sets up a match. Its loader waits for the session, then starts
+  which sets up a match. Its loader waits for the session, and sends an
+  account without `matches.create` to `/`. Then it starts
   `opponentsQuery(api, '')` without waiting, so the page shows at once
   and a failed request fails only the list. The card holds the session's
   player, the opponent, the match length (1, 3, 5 or 7, a radiogroup
@@ -1562,7 +1563,8 @@ key. `mockSigningKeys(answers)` records each registration and answers
 with `answers` in order, each a `KeyAnswer` (`live`, `revoked` or
 `taken`, a 409), then `live`. With `hold`, each answer waits for
 `release()`. A default handler answers `GET /v1/matches/opponents` with
-no players. `mockMatches()` answers the recent opponents with `recent`
+no players. `mockMatches()` gives the session's account `matches.create`.
+It answers the recent opponents with `recent`
 and a search from `everyone`, and records each `POST /v1/matches` in
 `creates`. It answers it with `create`: `created`, `{ refused: title }`
 (a 422, or `status`) or `unreachable`, which a test can change. A
@@ -1729,13 +1731,14 @@ holds Administrator. A second test does the same at 390x844, where the
 sidebar is a tab bar, and checks that the toast sits 24px above the bar
 (#150).
 
-`e2e/new-match.spec.ts` starts a second guest account through the API,
-searches for its player on `/matches/new`, makes a best of 3 against it
+`e2e/new-match.spec.ts` starts a second guest account through the API.
+It signs in as `mightymoose@fortymm.com`, who holds `matches.create`,
+searches for that guest's player on `/matches/new`, makes a best of 3 against it
 and lands on game 1 of the scores, with a strip of 3 games. Then it
 aborts every request under `/api/v1/matches/` and reloads. The scores
 still open, from the fragment, and the page sent no such request.
 
-The suite counts about 28 guest accounts and sign-ins with no session,
+The suite counts about 29 guest accounts and sign-ins with no session,
 under the limit of 30 a minute.
 
 The design system page is a copy of the reference's component gallery

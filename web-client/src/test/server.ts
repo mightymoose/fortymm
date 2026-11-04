@@ -391,6 +391,7 @@ export type AdminList =
 export const builtInPermissions: AdminState['permissions'] = [
   { key: 'account_roles.manage', description: 'Set which roles an account holds.', built_in: true },
   { key: 'admin.view', description: 'See the admin page.', built_in: true },
+  { key: 'matches.create', description: 'Create a match.', built_in: true },
   { key: 'roles.manage', description: 'Edit roles and permissions.', built_in: true },
   { key: 'signing_keys.revoke', description: 'Revoke any account’s signing key.', built_in: true },
 ]
@@ -398,7 +399,7 @@ export const administrator: AdminState['roles'][number] = {
   id: 'a0d1f2e3-4b5c-4d6e-8f70-81920a1b2c3d',
   name: 'Administrator',
   description: 'Everything on the admin page.',
-  permissions: ['account_roles.manage', 'admin.view', 'roles.manage', 'signing_keys.revoke'],
+  permissions: ['account_roles.manage', 'admin.view', 'matches.create', 'roles.manage', 'signing_keys.revoke'],
 }
 
 // Signs the mock API in as the verified account `accounts[0]`, and answers
@@ -664,7 +665,8 @@ type MatchRequest = components['schemas']['MatchRequest']
 // title (a 422, or `status`), or no response comes back.
 export type CreateAnswer = 'created' | { refused: string; status?: number } | 'unreachable'
 
-// The mock API's matches. `recent` are the session's recent opponents, and
+// The mock API's matches, for a session whose account holds
+// `matches.create`. `recent` are the session's recent opponents, and
 // a search finds the players of `everyone` whose name contains it. Each
 // POST is recorded in `creates` and answered with `create`, which a test can
 // change. A second create of one id answers 200. `recentFails` makes the
@@ -692,7 +694,11 @@ export function mockMatches({
       await act(async () => pending.splice(0).forEach((resolve) => resolve()))
     },
   }
+  const creator: components['schemas']['SessionResponse'] = {
+    data: { account: { ...sessionResponse.data.account, permissions: ['matches.create'] } },
+  }
   server.use(
+    http.post(`${API_BASE_URL}/v1/session`, () => HttpResponse.json(creator)),
     http.get(`${API_BASE_URL}/v1/matches/opponents`, async ({ request }) => {
       const search = new URL(request.url).searchParams.get('search')?.trim() ?? ''
       if (search) {

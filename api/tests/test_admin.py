@@ -181,6 +181,7 @@ def test_lists_the_roles(
                 "permissions": [
                     "account_roles.manage",
                     "admin.view",
+                    "matches.create",
                     "roles.manage",
                     "signing_keys.revoke",
                 ],

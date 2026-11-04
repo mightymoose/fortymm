@@ -1,5 +1,8 @@
-import { Link, useRouterState } from '@tanstack/react-router'
+import { useSuspenseQuery } from '@tanstack/react-query'
+import { Link, useRouteContext, useRouterState } from '@tanstack/react-router'
 import { useEffect, useRef, type Ref } from 'react'
+import { can, Permission } from '../api/permissions'
+import { sessionQuery } from '../api/queries'
 import { Icon, type IconName } from '../components/Icon'
 import { AdoptionReview } from './adoption/AdoptionReview'
 
@@ -46,6 +49,8 @@ export function Home() {
   const reviewLink = useRef<HTMLAnchorElement>(null)
   const title = useRef<HTMLHeadingElement>(null)
   const fromReview = useRouterState({ select: (state) => state.location.state.fromReview })
+  const { api } = useRouteContext({ from: '__root__' })
+  const { data: account } = useSuspenseQuery(sessionQuery(api))
 
   useEffect(() => {
     if (fromReview) (reviewLink.current ?? title.current)?.focus()
@@ -54,12 +59,14 @@ export function Home() {
   return (
     <div className="home">
       <AdoptionReview linkRef={reviewLink} />
-      <div>
-        <Link to="/matches/new" className="fm-btn fm-btn--primary">
-          <Icon name="plus" />
-          New match
-        </Link>
-      </div>
+      {can(account, Permission.matchesCreate) && (
+        <div>
+          <Link to="/matches/new" className="fm-btn fm-btn--primary">
+            <Icon name="plus" />
+            New match
+          </Link>
+        </div>
+      )}
       <Roadmap titleRef={title} />
     </div>
   )

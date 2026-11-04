@@ -940,7 +940,7 @@
           "matches"
         ],
         "summary": "Create Match",
-        "description": "Make the match, with its id from the device, or find it.\n\nA new match answers 201. One that already exists with the same details\nanswers 200, so a retry or a second device gets the match. One with\nother players, best of or rated status answers 409, and the title says\nwhat differs. Players are compared through any merge. Anyone with a\nsession may make a match, a guest too, and needn't play in it.",
+        "description": "Make the match, with its id from the device, or find it.\n\nA new match answers 201. One that already exists with the same details\nanswers 200, so a retry or a second device gets the match. One with\nother players, best of or rated status answers 409, and the title says\nwhat differs. Players are compared through any merge. It needs\n`matches.create`, which no guest holds. The account needn't play in the\nmatch.",
         "operationId": "create_match",
         "requestBody": {
           "content": {
@@ -975,6 +975,16 @@
           },
           "401": {
             "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
             "content": {
               "application/json": {
                 "schema": {
