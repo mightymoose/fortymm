@@ -266,6 +266,8 @@ export interface paths {
          *     stays, with no manager. `same_as` merges it with the `managed` player
          *     that `player_id` names, with outcome `merged`. That player's question
          *     must be closed, because the merge would close it with no answer.
+         *     Two players who played each other never merge, so `yes` or `same_as`
+         *     for two such players answers 409.
          *
          *     In a merge, the player created first survives, and the other leaves the
          *     list. `meta.survivor` and `meta.merged` name them. Every answer closes
@@ -1477,7 +1479,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorsResponse"];
                 };
             };
-            /** @description The answer is `not_mine` and the question was already answered */
+            /** @description The answer is `not_mine` and the question was already answered. Or the answer is `yes` or `same_as` and the two players played each other */
             409: {
                 headers: {
                     [name: string]: unknown;

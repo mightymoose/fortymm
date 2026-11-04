@@ -22,7 +22,12 @@ ANSWER_ERRORS: Responses = {
         "The account doesn't manage the player, or `player_id` isn't a"
         " `managed` player of the account with a closed question",
     ),
-    **errors(409, "The answer is `not_mine` and the question was already answered"),
+    **errors(
+        409,
+        "The answer is `not_mine` and the question was already answered. Or"
+        " the answer is `yes` or `same_as` and the two players played each"
+        " other",
+    ),
     **UNSUPPORTED_MEDIA_TYPE,
     # This entry replaces FastAPI's own 422, so it repeats its body.
     422: {
@@ -156,6 +161,8 @@ def answer_question(
     stays, with no manager. `same_as` merges it with the `managed` player
     that `player_id` names, with outcome `merged`. That player's question
     must be closed, because the merge would close it with no answer.
+    Two players who played each other never merge, so `yes` or `same_as`
+    for two such players answers 409.
 
     In a merge, the player created first survives, and the other leaves the
     list. `meta.survivor` and `meta.merged` name them. Every answer closes

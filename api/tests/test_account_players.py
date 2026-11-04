@@ -7,8 +7,11 @@ from collections.abc import Iterator
 import httpx2 as httpx
 import pytest
 from fastapi.testclient import TestClient
+from played_matches import played
 from sqlalchemy import Engine, text
+from sqlalchemy.orm import sessionmaker
 
+from fortymm_api.accounts import PlayerId
 from fortymm_api.main import create_app
 
 JSON = {"Content-Type": "application/json"}
@@ -177,6 +180,41 @@ def test_answers_409_for_not_mine_after_an_answer(
     assert response.status_code == 409
     assert response.json() == {
         "errors": [{"status": "409", "title": "This question was already answered"}]
+    }
+
+
+@pytest.mark.parametrize("value", ["yes", "same_as"])
+def test_answers_409_for_a_merge_of_two_players_who_played_each_other(
+    client: TestClient,
+    player: dict[str, str],
+    migrated_database: Engine,
+    value: str,
+) -> None:
+    ant = managed_player(migrated_database, player["id"])
+    if value == "yes":
+        with migrated_database.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE player_managers SET relationship = 'self'"
+                    " WHERE player_id = :ant"
+                ),
+                {"ant": ant},
+            )
+    with sessionmaker(migrated_database).begin() as session:
+        played(session, (PlayerId(uuid.UUID(ant)), PlayerId(uuid.UUID(player["id"]))))
+
+    response = answer(
+        client, player["id"], value, {"player_id": ant} if value == "same_as" else {}
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "errors": [
+            {
+                "status": "409",
+                "title": "These players played each other, so they are two people",
+            }
+        ]
     }
 
 
