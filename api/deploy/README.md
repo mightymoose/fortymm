@@ -5,7 +5,7 @@ The API runs on Google Cloud Run in project `fortymm`, region `us-central1`
 behind the Cloudflare Worker that serves the web-client: the Worker forwards
 `https://fortymm.com/api/*` to it with the `/api` prefix stripped. The API
 answers 403 to any request without the Worker secret, which only the Worker
-sends. CLAUDE.md's Deploy section describes how it all fits together.
+sends. `docs/deploy.md` describes how it all fits together.
 
 - `../Dockerfile`: the production image (`./bin/mise run api:build`).
 - `cloud-run-deploy`: pushes the image and deploys it, to the `api` service

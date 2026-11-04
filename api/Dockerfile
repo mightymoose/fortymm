@@ -1,6 +1,6 @@
 # check=skip=InvalidDefaultArgInFrom
-# The production image of the API, deployed to Cloud Run (see CLAUDE.md's
-# Deploy section). The dev image is the repo root's Dockerfile.
+# The production image of the API, deployed to Cloud Run (see
+# docs/deploy.md). The dev image is the repo root's Dockerfile.
 #
 # Build it with `./bin/mise run api:build`, which reads both versions from
 # mise.container.toml so the image runs the same Python and uv as the dev

@@ -1,7 +1,7 @@
 # Deliberate breaks to /v1 that openapi:breaking lets through, one per line,
 # as oasdiff prints them: METHOD PATH description. Only the lines a change adds
 # count, so each one covers only the change that adds it. Allowed only until
-# the first app release (see CLAUDE.md).
+# the first app release (see OpenAPI schema and clients in api/CLAUDE.md).
 # #59: a verified account can have no self player while "Is this you?" waits.
 POST /v1/session the `data/account/player` response's property `type` changed from `object` to `any` for status `200`
 POST /v1/session removed the required property `data/account/player/display_name` from the response with the `200` status
