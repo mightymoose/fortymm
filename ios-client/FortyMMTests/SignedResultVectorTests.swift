@@ -151,6 +151,8 @@ struct SignedResultVectorTests {
         let players = try #require(Players(one, UUID()))
         let games = Array(repeating: Game(first: 11, second: 0), count: 4)
         #expect(MatchResult(match: UUID(), bestOf: .three, rated: true, players: players, games: games, ending: .completed) == nil)
+        #expect(MatchResult(match: UUID(), bestOf: .one, rated: true, players: players, games: Array(games.prefix(2)), ending: .completed) == nil)
+        #expect(MatchResult(match: UUID(), bestOf: .one, rated: true, players: players, games: Array(games.prefix(1)), ending: .completed) != nil)
         #expect(IssuedAt(seconds: IssuedAt.max + 1) == nil)
     }
 
