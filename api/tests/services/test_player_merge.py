@@ -242,3 +242,33 @@ def test_adoption_asks_instead_of_merging_two_players_who_played_each_other(
     assert merged_into(migrated_database, BO) is None
     assert merged_into(migrated_database, ANN) is None
     assert manager_rows(migrated_database, BO) == [(ann, "managed", guest)]
+
+
+def test_the_list_names_the_accounts_players_each_one_played(
+    migrated_database: Engine,
+) -> None:
+    stranger = PlayerId(uuid.uuid4())
+
+    def setup(session: Session) -> AccountId:
+        ann = ann_asked_about_bo(session)
+        add_player(session, CY)
+        add_player(session, stranger)
+        session.add(PlayerManager(player_id=CY, account_id=ann, relationship="managed"))
+        session.flush()
+        played(session, (ANN, BO))
+        played(session, (BO, ANN), rated=False)
+        played(session, (ANN, CY), with_result=False)
+        played(session, (CY, stranger))
+        return ann
+
+    ann = in_transaction(migrated_database, setup)
+
+    listed = in_transaction(
+        migrated_database, lambda session: account_players(session, ann)
+    )
+
+    assert {p.id: p.played_against for p in listed} == {
+        ANN: frozenset({BO}),
+        BO: frozenset({ANN}),
+        CY: frozenset(),
+    }

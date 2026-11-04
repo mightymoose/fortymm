@@ -26,7 +26,7 @@ ANSWER_ERRORS: Responses = {
         409,
         "The answer is `not_mine` and the question was already answered. Or"
         " the answer is `yes` or `same_as` and the two players played each"
-        " other",
+        " other, as `played_against` says",
     ),
     **UNSUPPORTED_MEDIA_TYPE,
     # This entry replaces FastAPI's own 422, so it repeats its body.
@@ -61,6 +61,10 @@ class AccountPlayer(BaseModel):
     match_count: int
     # The player's latest matches, newest first.
     recent_matches: list[RecentMatch]
+    # The account's other listed players that this one played, in a match
+    # with a result. Two players who played each other never merge, so
+    # `yes` and `same_as` can't join them.
+    played_against: list[UUID]
 
 
 class AccountPlayersResponse(BaseModel):
@@ -114,6 +118,7 @@ def player_models(found: list[players.AccountPlayer]) -> list[AccountPlayer]:
                 RecentMatch(id=match.id, played_at=match.played_at)
                 for match in player.recent_matches
             ],
+            played_against=sorted(player.played_against),
         )
         for player in found
     ]

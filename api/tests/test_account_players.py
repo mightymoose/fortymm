@@ -95,6 +95,7 @@ def test_lists_the_accounts_players(client: TestClient, player: dict[str, str]) 
                 "open_question": True,
                 "match_count": 0,
                 "recent_matches": [],
+                "played_against": [],
             }
         ]
     }
@@ -115,6 +116,7 @@ def test_an_answer_returns_the_accounts_players(
                 "open_question": False,
                 "match_count": 0,
                 "recent_matches": [],
+                "played_against": [],
             }
         ],
         "meta": {"outcome": "self"},
@@ -203,10 +205,15 @@ def test_answers_409_for_a_merge_of_two_players_who_played_each_other(
     with sessionmaker(migrated_database).begin() as session:
         played(session, (PlayerId(uuid.UUID(ant)), PlayerId(uuid.UUID(player["id"]))))
 
+    listed = client.get("/v1/account/players").json()["data"]
     response = answer(
         client, player["id"], value, {"player_id": ant} if value == "same_as" else {}
     )
 
+    assert {p["id"]: p["played_against"] for p in listed} == {
+        ant: [player["id"]],
+        player["id"]: [ant],
+    }
     assert response.status_code == 409
     assert response.json() == {
         "errors": [

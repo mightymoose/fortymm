@@ -221,11 +221,12 @@ type AnswerRequest = components['schemas']['AnswerRequest']
 type AnswerMeta = components['schemas']['AnswerResponse']['meta']
 
 // A player as the players list gives it. No player has a match until games
-// exist.
+// exist. `played_against` defaults to none.
 export function listedPlayer(
-  player: Pick<AccountPlayer, 'id' | 'display_name' | 'relationship' | 'open_question'>,
+  player: Pick<AccountPlayer, 'id' | 'display_name' | 'relationship' | 'open_question'> &
+    Partial<Pick<AccountPlayer, 'played_against'>>,
 ): AccountPlayer {
-  return { ...player, match_count: 0, recent_matches: [] }
+  return { played_against: [], ...player, match_count: 0, recent_matches: [] }
 }
 
 // Signs the mock API in as a verified account that manages `players`, and

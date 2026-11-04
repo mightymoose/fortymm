@@ -134,6 +134,7 @@ def listed(
         open_question,
         match_count=0,
         recent_matches=(),
+        played_against=frozenset(),
     )
 
 

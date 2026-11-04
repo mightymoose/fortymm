@@ -614,6 +614,8 @@ export interface components {
             match_count: number;
             /** Recent Matches */
             recent_matches: components["schemas"]["RecentMatch"][];
+            /** Played Against */
+            played_against: string[];
         };
         /** AccountPlayersResponse */
         AccountPlayersResponse: {
@@ -1479,7 +1481,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorsResponse"];
                 };
             };
-            /** @description The answer is `not_mine` and the question was already answered. Or the answer is `yes` or `same_as` and the two players played each other */
+            /** @description The answer is `not_mine` and the question was already answered. Or the answer is `yes` or `same_as` and the two players played each other, as `played_against` says */
             409: {
                 headers: {
                     [name: string]: unknown;
