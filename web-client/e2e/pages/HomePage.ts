@@ -16,6 +16,9 @@ export class HomePage {
   // The reminder of the players still to review, by its title.
   readonly reminder: Locator
 
+  // The account menu's link to the iPhone beta. It shows only below 600px.
+  readonly iphoneAppItem: Locator
+
   constructor(page: Page) {
     this.page = page
     this.title = page.getByRole('heading', { level: 1 })
@@ -26,6 +29,7 @@ export class HomePage {
       name: 'Sign out of this guest account?',
     })
     this.reminder = page.getByText(/^\d+ players? to review$/)
+    this.iphoneAppItem = this.accountMenu.getByRole('menuitem', { name: 'Get the iPhone app' })
   }
 
   // Opens the account menu and picks `item`, such as Sign in. A verified

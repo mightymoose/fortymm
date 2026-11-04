@@ -30,15 +30,15 @@ describe('UserMenu', () => {
     vi.unstubAllGlobals()
   })
 
-  function layout(narrow: boolean) {
+  function layout(phone: boolean) {
     vi.stubGlobal('matchMedia', () => ({
-      matches: narrow,
+      matches: phone,
       addEventListener: () => {},
       removeEventListener: () => {},
     }))
   }
 
-  it('links to the iPhone beta in a new tab below 900px, with no Android link yet', async () => {
+  it('links to the iPhone beta in a new tab below 600px, with no Android link yet', async () => {
     layout(true)
     const homePage = await HomePage.render()
     await userEvent.click(homePage.accountButton!)

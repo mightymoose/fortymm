@@ -11,14 +11,14 @@ import { PlayerAvatar } from '../../components/PlayerAvatar'
 import { mobileApps } from '../../mobileApps'
 import { useSignInHref } from '../useSignInHref'
 import { useSignOut } from '../useSignOut'
-import { useNarrowLayout } from './useNarrowLayout'
+import { usePhoneLayout } from './usePhoneLayout'
 
 // The visitor's account at the topbar's right end, styled by `.user-menu` in
 // styles/base.css: a chip of the player's avatar and name that opens a menu.
 // A guest gets Sign in, and Sign out behind a dialog, because nobody can get
 // a guest account back after it signs out. A verified account signs out at
 // once. An account with `admin.view` gets a link to the admin page. Below
-// 900px, where the sidebar is a tab bar, it links to each mobile beta. It
+// 600px, phone widths, it links to each mobile beta. It
 // shows nothing until the session has started, and it doesn't
 // suspend, so the loading screen times only the page.
 export function UserMenu() {
@@ -32,7 +32,7 @@ export function UserMenu() {
   const guestDialog = useRef<HTMLDialogElement>(null)
   const signInHref = useSignInHref()
   const { signOut, leaving, failed } = useSignOut()
-  const narrow = useNarrowLayout()
+  const phone = usePhoneLayout()
 
   useEffect(() => {
     if (!open) return
@@ -106,7 +106,7 @@ export function UserMenu() {
             Administration
           </Link>
         )}
-        {narrow &&
+        {phone &&
           mobileApps.map((app) => (
             <a
               key={app.href}

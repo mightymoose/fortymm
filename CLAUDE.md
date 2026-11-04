@@ -935,9 +935,11 @@ it to `src/routes/`.
   player's `PlayerAvatar` (`src/components/PlayerAvatar.tsx`, the initials
   of the display name, whose accessible name is the full name) and the
   name. Below 600px the chip hides the name. The chip opens the account
-  menu. An account with `admin.view` gets an Administration link there. Below 900px
-  (`useNarrowLayout()`), the menu also links to each mobile beta in
-  `mobileApps` (`src/mobileApps.ts`), in a new tab. A verified account gets
+  menu. An account with `admin.view` gets an Administration link there. Below 600px
+  (`usePhoneLayout()`), where phones land, the menu also links to each
+  mobile beta in `mobileApps` (`src/mobileApps.ts`), in a new tab. A tablet
+  or a desktop can't install one. `e2e/mobile-apps.spec.ts` checks the
+  widths, because jsdom applies no media queries. A verified account gets
   Sign out, which signs out at once. A guest
   gets Sign in, and Sign out behind a dialog. The dialog says nobody can
   get a guest account back after it signs out, and links to sign-in. The
