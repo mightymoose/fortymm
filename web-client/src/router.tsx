@@ -17,6 +17,12 @@ export function createAppRouter(
     routeTree,
     history,
     context: { api, queryClient, appUpdate },
+    // A link loads its route's chunk and runs its loaders when the pointer
+    // rests on it or it takes focus, so the click finds them ready.
+    defaultPreload: 'intent',
+    // TanStack Query caches the data, so the router keeps no preloaded
+    // loader data of its own and runs the loaders again on the click.
+    defaultPreloadStaleTime: 0,
     Wrap: ({ children }) => (
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     ),
