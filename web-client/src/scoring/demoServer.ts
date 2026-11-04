@@ -1,25 +1,25 @@
 import { useSyncExternalStore } from 'react'
 import { ApiError, ApiUnreachable } from '../api/errors'
-import { applyEdit, forgetRecords, readBoard, storageKey, writeBoard, type Board, type Change } from './scratchpad'
+import { forgetBoards } from './boards'
 
-// Stands in for the API's match routes until they exist. It keeps its own
-// board per match, apart from the device's scratchpad, and takes the
-// device's changes one at a time. Each call waits and may fail the way the
-// chosen network does, so syncing can be seen and tested. `offline` plays a
-// browser that knows it's offline: each request fails at once, as fetch
-// does then.
+// Stands in for the API's match routes until they exist. It keeps the
+// latest board per match, the fragment's text, so spectators and
+// tournament directors can watch a match. Each call waits and may fail the
+// way the chosen network does, so syncing can be seen and tested.
+// `offline` plays a browser that knows it's offline: each request fails at
+// once, as fetch does then.
 
 export const NETWORKS = ['normal', 'slow', 'flaky', 'offline', 'broken'] as const
 export type Network = (typeof NETWORKS)[number]
 
 type Failure = 'unreachable' | number
 
-// `fails` gets the count of requests sent so far, so `flaky` fails every
-// second one.
+// `fails` gets the count of requests sent on this network so far, so
+// `flaky` fails every second one.
 const BEHAVIOUR: Record<Network, { latencyMs: number; fails: (count: number) => Failure | null }> = {
   normal: { latencyMs: 300, fails: () => null },
   slow: { latencyMs: 2500, fails: () => null },
-  flaky: { latencyMs: 800, fails: (count) => (count % 2 === 1 ? 503 : null) },
+  flaky: { latencyMs: 300, fails: (count) => (count % 2 === 1 ? 503 : null) },
   offline: { latencyMs: 0, fails: () => 'unreachable' },
   broken: { latencyMs: 400, fails: () => 500 },
 }
@@ -29,6 +29,7 @@ const NETWORK_KEY = 'fortymm-demo-network'
 // Used only when localStorage throws.
 let networkInMemory: Network = 'normal'
 const networkListeners = new Set<() => void>()
+let sent = 0
 
 // Kept in localStorage, so a reload stays `offline`.
 export function demoNetwork(): Network {
@@ -42,6 +43,7 @@ export function demoNetwork(): Network {
 
 export function setDemoNetwork(network: Network): void {
   networkInMemory = network
+  sent = 0
   try {
     if (network === 'normal') localStorage.removeItem(NETWORK_KEY)
     else localStorage.setItem(NETWORK_KEY, network)
@@ -67,7 +69,6 @@ export function knownOffline(): boolean {
   return demoNetwork() === 'offline' || !navigator.onLine
 }
 
-let sent = 0
 // Moves on when the demo starts over, so a request still on its way can't
 // bring back what was cleared.
 let generation = 0
@@ -91,72 +92,57 @@ async function send<T>(request: string, work: () => T): Promise<T> {
   return work()
 }
 
-export function serverKey(matchId: string): string {
-  return `fortymm-demo-server:${matchId}`
-}
+const PREFIX = 'fortymm-demo-server:'
+// Used only when localStorage throws.
+const boardsInMemory = new Map<string, string>()
 
-function appliedKey(matchId: string): string {
-  return `${serverKey(matchId)}:applied`
-}
-
-const appliedInMemory = new Map<string, string[]>()
-
-function appliedChanges(matchId: string): string[] {
-  const key = appliedKey(matchId)
-  if (appliedInMemory.has(key)) return appliedInMemory.get(key) ?? []
+// The board every device synced last, or null when none has.
+export function serverBoard(matchId: string): string | null {
   try {
-    const ids: unknown = JSON.parse(localStorage.getItem(key) ?? '[]')
-    return Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : []
+    return localStorage.getItem(PREFIX + matchId)
   } catch {
-    return []
+    return boardsInMemory.get(matchId) ?? null
   }
 }
 
-function recordApplied(matchId: string, ids: string[]): void {
-  const key = appliedKey(matchId)
-  appliedInMemory.delete(key)
+export function setServerBoard(matchId: string, text: string): void {
   try {
-    localStorage.setItem(key, JSON.stringify(ids))
+    localStorage.setItem(PREFIX + matchId, text)
   } catch {
-    appliedInMemory.set(key, ids)
+    boardsInMemory.set(matchId, text)
   }
 }
 
-// Applies one change to the server's board, once. Two tabs on one match can
-// both send a change, and a late copy of an old score must not undo the
-// correction that landed after it. A game write after the result was
-// submitted answers 409, as the API will.
-export function sendChange(matchId: string, change: Change): Promise<void> {
-  const request = `POST /v1/matches/${matchId}/changes`
-  return send(request, () => {
-    const applied = appliedChanges(matchId)
-    if (applied.includes(change.id)) return
-    const board = applyEdit(readBoard(serverKey(matchId)), change.edit)
-    if (!board) throw new ApiError(request, new Response(null, { status: 409 }))
-    writeBoard(serverKey(matchId), board)
-    recordApplied(matchId, [...applied, change.id])
-  })
+export function putBoard(matchId: string, text: string): Promise<void> {
+  return send(`PUT /v1/matches/${matchId}/board`, () => setServerBoard(matchId, text))
 }
 
-// The server's board, with what every device has synced.
-export function fetchBoard(matchId: string): Promise<Board> {
-  return send(`GET /v1/matches/${matchId}/board`, () => readBoard(serverKey(matchId)))
+export function fetchBoard(matchId: string): Promise<string | null> {
+  return send(`GET /v1/matches/${matchId}/board`, () => serverBoard(matchId))
 }
 
-// Starts the match over: its scratchpad, its outbox and the server's board.
+function removeServerBoards(keep: (matchId: string) => boolean): void {
+  for (const matchId of [...boardsInMemory.keys()]) if (!keep(matchId)) boardsInMemory.delete(matchId)
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith(PREFIX) && !keep(key.slice(PREFIX.length))) localStorage.removeItem(key)
+    }
+  } catch {
+    // Nothing was stored there.
+  }
+}
+
+// Starts the match over: the server's board and this tab's unsent one.
 export function resetMatch(matchId: string): void {
   dropRequestsInFlight()
-  const keys = [storageKey(matchId), serverKey(matchId), appliedKey(matchId)]
-  appliedInMemory.delete(appliedKey(matchId))
-  forgetRecords((key) => keys.includes(key))
+  removeServerBoards((id) => id !== matchId)
+  forgetBoards(matchId)
 }
 
-// Deletes every demo match's scratchpad and server board, and sets the
-// network back to normal.
+// Deletes every demo match's board, and sets the network back to normal.
 export function clearEverything(): void {
   dropRequestsInFlight()
-  const prefixes = [storageKey(''), serverKey('')]
-  appliedInMemory.clear()
-  forgetRecords((key) => prefixes.some((prefix) => key.startsWith(prefix)))
+  removeServerBoards(() => false)
+  forgetBoards()
   setDemoNetwork('normal')
 }

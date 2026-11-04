@@ -1,4 +1,4 @@
-/* The match scratchpad (ScoreGame.tsx), laid out like fortymm-real's score
+/* A match's scores (ScoreGame.tsx), laid out like fortymm-real's score
    entry: the game's heading, one pad with a side per player and the games
    tally between them, the actions, then the strip of games and the result.
    The root isn't `.score`, which is the design system's 96px score type
@@ -75,7 +75,6 @@
 .validation-share{display:flex;flex-direction:column;align-items:flex-start;gap:var(--s-3)}
 .qr-code{display:block;width:min(100%,320px);aspect-ratio:1;border-radius:var(--r-md)}
 .validation-link{max-width:100%;font-size:var(--text-sm);overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
-.validation-link-skeleton{width:min(100%,480px);height:calc(var(--text-sm) * 3)}
 .validation-back{align-self:flex-start}
 
 /* The approval page (AcceptResult.tsx): what the opponent reported, the

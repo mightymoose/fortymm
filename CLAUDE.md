@@ -999,60 +999,169 @@ it to `src/routes/`.
   `src/api/permissions.ts` checks the session's permissions, by the
   built-in keys in `Permission`. The API checks every request again.
 - `matches/$matchId/scores/game/$gameNumber/edit.tsx`: the page
-  `ScoreGame` (`src/pages/scoring/`), a match's scoring scratchpad, with
-  the wordmark, a link to Home and no `AppShell`. It edits one game. The
+  `ScoreGame` (`src/pages/scoring/`), a match's scores, with the
+  wordmark, a link to Home and no `AppShell`. It edits one game. The
   match comes from `demoMatch()` (`src/scoring/demoMatches.ts`), because
   the API has no matches yet. `demo` is a best of 5 between the session's
-  player and `brave badger 214`. The page works out the match from the
-  session on each render, not in the loader, because a saved account can
-  stand in for the session until the API answers with another player. In `demo-spectator`, two other players play, so the viewer is a
-  spectator. Any other id throws `notFound()`. A game number that isn't
-  a whole number from 1 to the match's `bestOf` goes to game 1, with a
-  replace. One pad holds a big score input per player and the games
-  tally between them, the viewer's player on the left, then the actions
+  player and `brave badger 214`. In `demo-spectator`, two other players
+  play, so the viewer is a spectator. Any other id throws `notFound()`.
+  One pad holds a big score input per player and the games tally
+  between them, the viewer's player on the left, then the actions
   (`ScoreEntry.tsx`). To a player, the page names the players You and
-  Your opponent, with no avatar, as in "Saved by you" and "You win
-  3–1" (`playerLabel()` in `sides.ts`). A spectator sees their names. The left score has focus when a game opens. Enter
-  moves to the other score while it is empty, and otherwise submits the
-  pad's form. A strip (`GameStrip.tsx`) links to each game, with its
-  score in mono and the game winner's points bold. Games after the
-  decider step back, under "Match decided after game N", and stay
-  editable. Below 880px the two sides stay side by side and the buttons
-  split the width, with Save or Submit on the right.
+  Your opponent, with no avatar, as in "You win 3–1" (`playerLabel()` in
+  `sides.ts`). A spectator sees their names. The left score has focus
+  when a game opens. Enter moves to the other score while it is empty,
+  and otherwise submits the pad's form. A strip (`GameStrip.tsx`) shows
+  each game, with its score in mono and the game winner's points bold.
+  It links to each game that can open, keeping the URL's fragment. Games
+  after the decider step back, under "Match decided after game N", and
+  stay editable. Below 880px the two sides stay side by side and the
+  buttons split the width, with Save or Submit on the right.
+- The URL's fragment holds the match's scores, as base64url
+  (`src/scoring/fragment.ts`). It is empty, a bare payload of
+  `encodePayload()` (a draft nobody approved yet), or a COSE_Sign
+  envelope, the same bytes a result link carries. The URL is the
+  scorer's truth, so a reload shows the same games and any scoring URL
+  can be shared. The games are an ordered list with no gaps. Game N opens
+  only once game N-1 has a score.
+- Each scoring route's loader reads the fragment once with
+  `readFragment()`, and the page trusts the loader's data. The CBOR codec
+  decodes the bytes, and `fragmentResultSchema()`, a zod schema built per
+  match, checks the result. It must name the match's `uuid`, `bestOf` and
+  `rated`, end `completed`, and hold at most `bestOf` games, each a legal
+  score (`checkGame()`). A save changes only the hash, which keeps the
+  same route match. So the routes set `shouldReload: true` and a
+  `blocking` loader, and the loader runs again before the page renders.
+- The edit route drops a fragment it can't read. It redirects to game 1
+  with no hash, with a replace, so a reload or a share doesn't carry it,
+  and sets `discardedScores` in the router's history state (typed in
+  `src/router.tsx`). The page then says "This link’s scores couldn’t be
+  read, so the scores start empty." A game number past the first game
+  with no score, or one that isn't a whole number, goes to that game,
+  with a replace, keeping the hash.
+- `matchFor()` in `demoMatches.ts` is the match a result names, as this
+  device knows it. Until matches come from the API, each device builds
+  `demo` as its own player against `brave badger 214`. So a result from
+  another device names that device's player and the badger. The viewer
+  stands in for the badger, unless the result already names the viewer.
+  The points stay in the result's order, and the viewer's side goes on
+  the left. A player this device can't name shows as `Player 1` or
+  `Player 2`. Nobody stands in for a player of `demo-spectator`. The page
+  works out the players from the session on each render, not in the
+  loader, because a saved account can stand in for the session until
+  the API answers with another player.
+- Anyone who can open the match can save any game that can open. The
+  only check is that the game's score is legal (`parseGameScore()` in
+  `src/scoring/board.ts`). The match rules apply only at submit.
+  `reviewBoard()` reads the games in one pass and gives `decided`,
+  `undecided` or `overrun` (games after the decider), with the decider's
+  game number. `planPress()` (`src/scoring/planPress.ts`) decides what
+  the pad's button does, from the games, the viewer, the game and what
+  is typed: `disabled`, `save` with the game to open next, or `submit`.
+  Save goes to the next empty game, unless the match is decided.
+- A save puts a new draft in the hash, on this device, and the page
+  moves on at once. It pushes when the game number changes and replaces
+  when it stays. Nothing about saving waits on the network. Clear game
+  shows only on the last game with a score, and removes it.
+- Each save, and each submit, also syncs the board in the background
+  (`src/scoring/sync.ts`), so spectators and tournament directors can
+  watch the match. Sync is best effort. It never holds up or fails a
+  save. The board is a snapshot, the fragment's text, with no outbox of
+  changes. `src/scoring/boards.ts` keeps, per match and in memory only,
+  the newest board this tab saved that the server hasn't taken
+  (`pending`), and the last one the server took or this tab pulled
+  (`synced`). A newer save replaces an unsent one, and a reload forgets
+  it. Each match sends one board at a time, so a late older copy from
+  this tab can't land after a newer one. Across tabs and devices the
+  last write wins.
+- A match's sync is a state machine of `idle`, `sending`,
+  `waitingRetry`, `waitingOnline`, `pulling` and `stopped`, with why the
+  last send got stuck kept beside it. `nextStep()` picks what an idle
+  sync does. While the browser knows it's offline (`navigator.onLine`,
+  or the demo's `offline`), it sends nothing and waits for `online`. A
+  board that can't get through waits, with a backoff of 2, 4, 8, 15 and
+  then 30 seconds, and goes as soon as the browser fires `online`. A 4xx
+  other than 429 drops the board. `useAppSync()` runs in `Root`, on every
+  page, for each match with a board to send, so it still goes after the
+  person leaves the scoring page. A sync stops when its last holder lets
+  go, and a response that lands after that changes nothing.
+- Only the scoring edit page pulls the server's board, and only while
+  this tab has nothing to send. It pulls when the page opens, after each
+  board the server takes, and every 5 seconds while the page is visible.
+  A pulled board that `readFragment()` can't read, or that doesn't fit
+  the match, is ignored. `adopts()` decides whether the page takes it,
+  with a replace, on the same game or the last one that can open. The
+  page follows the server while its fragment is empty or is the board it
+  last synced. So two tabs on one match converge while idle. A board
+  from a link, such as one that Edit scores opens, gives way only to a
+  board issued later, so opening it never undoes it.
+- `src/scoring/demoServer.ts` stands in for the API's match routes. It
+  keeps the latest board per match under `fortymm-demo-server:<matchId>`,
+  with `putBoard()` and `fetchBoard()`. Each call waits, then may fail,
+  as the demo network says: `normal` (300ms), `slow` (2.5s), `flaky`
+  (every second request on that network answers 503), `offline` (each
+  request fails at once) or `broken` (500). The network is in
+  `localStorage` under `fortymm-demo-network`, and each request reads it.
+  A switch to any network but `offline` fires `online`, as a connection
+  that came back does. Tests set it with `setDemoNetwork()`.
+- A Testing panel at the bottom of the edit page (`TestingPanel.tsx`)
+  switches the network. Reset match clears the server's board and this
+  tab's unsent one, and opens game 1 with no hash. Clear everything does
+  that for every demo match and sets the network back to `normal`. Both
+  drop the demo server's requests in flight, so a late one can't bring
+  back what they cleared. The panel goes when the API has matches.
+- The strip shows each game's sync while this tab has a board to send.
+  A game is unsynced when its points differ from the `synced` board. It
+  shows a dot while the board is on its way, a dashed amber edge and
+  label after a send that didn't get through, and green for 1.2 seconds
+  once it lands. Screen readers hear `Syncing`, `Not synced` or
+  `Synced`. The strip's header line says when the device is offline.
+  The marks never change a cell's size, and the line keeps its height.
+- When a player's press would leave a `decided` board, the button reads
+  Submit result, and the line beside it says who wins. Submit drops any
+  signatures, signs the games with the typed score with this browser's
+  key (`signResult()`, for the viewer's side), and goes to the
+  submission page with the envelope as its hash. With no key, it says
+  under the button that the browser can't sign yet. On an `overrun`
+  board, the strip tells a player which games to clear. A spectator's
+  button only saves, and the page says who submits instead
+  (`ResultPanel.tsx`).
+- A draft or envelope made from a signed result names it in `replaces`,
+  the SHA-256 of its payload, from the first save on. A draft keeps the
+  `replaces` it has. `replacesOf()` hashes in the save or submit
+  handler, never at render. Above the pad, a signed fragment shows
+  "Reported by your opponent. A change makes a new result that corrects
+  it.", or "Approved by both players." and the same sentence once both
+  sides signed. A draft with `replaces` shows "This corrects an earlier
+  result." The page never says "sign".
 - `matches/$matchId/scores/submission.tsx`: the page `AwaitingValidation`
-  (`src/pages/matches/`), where a submitted result lands, with the
-  scratchpad's frame. It says which player must confirm, and shows the
-  games and the winner. Then it shows the signed result as a QR code
-  (`QrCode` in `src/components/`, the `FMR1:` text at level M) and as a
-  link. The link is same-origin
+  (`src/pages/matches/`), where a submitted result lands, with the score
+  page's frame. Its hash is the signed envelope, and its loader gives
+  the page nothing else to read. A fragment that isn't a signed result
+  of the match shows "This page has no result to share". The side that
+  signed last is the submitter's. It says which player must confirm, and
+  shows the games and the winner. Then it shows the signed result as a
+  QR code (`QrCode` in `src/components/`, the `FMR1:` text at level M)
+  and as a link. The link is same-origin
   `/matches/<matchId>/scores/approvals/new#` and the envelope in
   base64url, so it opens in dev and on a Preview. It isn't the format's
   `https://fortymm.com/r#` link, and the app has no `/r` page. Copy link
-  copies it.
-  `signedResultOf()` (`src/scoring/signedResult.ts`) builds the result
-  from the match and the submission, and `signedResultQuery()` signs it
-  with this browser's key, in its own `QueryBoundary`. With no key, the
-  boundary says the browser can't sign yet. The query keeps the envelope
-  for the page load, because ECDSA in WebCrypto is randomized, so a
-  reload signs the same payload with other signature bytes. A pad that
-  isn't submitted by the session's player goes to its game 1, with a
-  replace. A demo match has a fixed `uuid` for the result, and is
-  unrated.
+  copies it. "Back to the scores" opens game 1 with the same envelope.
+  A demo match has a fixed `uuid` for the result, and is unrated.
 - `matches/$matchId/scores/approvals/new.tsx`: the page `AcceptResult`
-  (`src/pages/matches/`), which the link opens, with the scratchpad's
-  frame. It works offline and makes no request of its own. Until matches
-  come from the API, every viewer stands in as the player whose side
-  hasn't signed, or once both have, the side that signed last. It shows
-  only what the link's payload, the session and this device's scratchpad
-  say. "Review match score" heads it, then
+  (`src/pages/matches/`), which the link opens, with the score page's
+  frame. It works offline and makes no request of its own. Its loader
+  takes only a signed result that the match's scores could hold, by the
+  same zod check, so a retirement or another best of shows "This link
+  isn’t a FortyMM result" too. Until matches come from the API, every
+  viewer stands in as the player whose side hasn't signed, or once both
+  have, the side that signed last. "Review match score" heads it, then
   the outcome for the viewer, such as "Your opponent reported that you
   lost 3–1. Do these scores look right?" One `.fm-games` table follows:
   a row for You, then one for Your opponent, each game's points, then
-  Won. A row shows the player's username beside its role only if this
-  device already has it: the session's player, or a player who saved a
-  game of the match here. Nothing fetches one. Below 880px the username
-  drops under the role, so a best of 7 fits a phone. A retirement counts
-  only the finished games. Under the table are best of, rated, when the
+  Won. A row shows the session's own username beside its role. Nothing
+  fetches another one. Below 880px the username drops under the role, so
+  a best of 7 fits a phone. Under the table are best of, rated, when the
   opponent reported it and whether it corrects another. The page never
   says "sign". Approve result appends this browser's signature
   (`appendSignature()`) and replaces the URL's fragment with the new
@@ -1066,112 +1175,10 @@ it to `src/routes/`.
   refused this result" with the title. No network shows the boundary's
   error with Try again, under "Approved on this device". The query is
   keyed by the envelope, so a reload checks again. Nothing keeps the
-  approved result yet (#195). Edit scores goes to the match's game 1. If this device's
-  pad for the match is empty, it first saves the reviewed games there,
-  each player's points on their side, so the opponent edits them rather
-  than typing them again. It checks no
-  signature. With no key, it says the browser can't sign yet. A missing
-  or malformed fragment shows "This link isn’t a FortyMM result".
-- Anyone who can open the match can save any game, in any order. The
-  only check is that the game's score is legal (`parseGameScore()` in
-  `src/scoring/board.ts`). The match rules apply only at submit.
-  `reviewBoard()` reads the board in one pass and gives `decided`
-  (empty games before the decider are closed up), `undecided` or
-  `overrun` (games after the decider), with the decider's game number.
-  `planPress()` (`src/scoring/planPress.ts`) decides what the pad's
-  button does, from the board, the viewer, the game and what is typed:
-  `disabled`, `save` with the game to open next, or `submit`. Save goes
-  to the next empty game after this one, unless the match is decided.
-  When a player's press would leave a `decided` board, the button reads
-  Submit result, and the line beside it says who wins. It saves the game
-  if its score changed and submits in one press, with no sheet to
-  confirm, then goes to the match's validation page, which signs it. On an `overrun` board, the
-  strip tells a player which games to clear. A spectator's button only
-  saves, and the page says who submits instead (`ResultPanel.tsx`). The
-  submission keeps the games the player approved, because another
-  device's save can reach the server first. The winner comes from those
-  games. A submitted board is frozen for everyone, and its submitter can
-  Edit scores. The submission syncs like a game.
-- A save stays on this device and the page moves on at once. Nothing
-  about saving waits on the network or can fail. `src/scoring/scratchpad.ts`
-  keeps each match's scratchpad in `localStorage`, under
-  `fortymm-scratchpad:<matchId>`: the board (the games by game number, who
-  saved each, and the submission, `open` or `submitted`) and an outbox of
-  the changes the server hasn't taken. Each change is an `id` and an
-  `edit`. `applyEdit()` applies one edit to a board, the same way here
-  and on the demo server. The record is read through zod schemas, because
-  another tab or an older build may have written it. A game or change
-  that isn't valid is left out, and the rest of the record stays. A
-  record whose board is empty is removed rather than written.
-  `useScratchpad()` reads it with `useSyncExternalStore` and follows the
-  `storage` event, so two tabs on one match stay in step. It refuses game
-  writes while the result is submitted. When a write to storage throws,
-  as in a private window or with storage full, the record stays in memory
-  and this tab reads it from there.
-- A known race, left for #192: each save, clear and acknowledgment reads
-  the whole record, changes it and writes it back. Two tabs on one match
-  can both read it before either writes, and then the last write drops
-  the other tab's game and its queued change. localStorage has no
-  transaction, and another tab's read can be stale, so a lock can't fix
-  it. #192 moves the scratchpad to IndexedDB, where each change runs in
-  one `readwrite` transaction. Until then the scratchpad syncs only to
-  the demo server, so no real result is at risk.
-- `src/scoring/sync.ts` keeps one sync per match, whose state is one of
-  `idle`, `sending`, `waitingRetry`, `waitingOnline`, `pulling` or
-  `stopped`, with why the last send got stuck kept beside it. It sends
-  the outbox oldest change first, one at a time. While the browser knows
-  it's offline (`navigator.onLine`, or the demo's `offline`), it sends
-  nothing and waits for `online`. `navigator.onLine` can be true with
-  nothing getting through, as on hall Wi-Fi with no internet, so a
-  request can still fail. A change that can't get through waits, with a
-  backoff of 2, 4, 8, 15 and then 30 seconds, and goes as soon as the
-  browser fires `online`. A 4xx other than 429 drops the change, since
-  sending it again can't help. `useAppSync()` runs in `Root`, on every
-  page, for each match whose outbox has changes, so a score saved with no
-  signal syncs once the device is back online, even after the scoring
-  page has closed. The page holds its match's sync too, so it pulls even
-  with nothing to send. A sync stops when its last holder lets go, and a
-  response that lands after that changes nothing.
-  Each game in the strip shows its state as a badge in its corner and a
-  tint on its edge, so the cell never changes size. The two are separate:
-  a dot while its change is on its way to the server, and a dashed amber
-  edge and label from a send that didn't get through until one does, so
-  a stuck game that tries again shows both. It goes green for 1.2
-  seconds once it lands. Screen readers hear `Syncing`, `Not synced` or
-  `Synced`. The strip's header line says when the device is offline, or
-  else where the match was decided. That line, and the line beside the
-  buttons that holds the score hint or "Saved by", keep their height, so
-  saving and typing don't move the page.
-- `src/scoring/demoServer.ts` stands in for the API's match routes, with
-  its own board under `fortymm-demo-server:<matchId>`. It takes the
-  outbox's changes and answers `fetchBoard()`. It answers 409 to a game
-  write on a submitted board, as the API will. It applies each change
-  once, by its id, under `fortymm-demo-server:<matchId>:applied`. Two tabs
-  on one match can both send a change, and a late copy of an old score
-  must not undo the correction that landed after it. The API must do the
-  same. Each call waits, then may
-  fail, as the demo network says: `normal` (300ms), `slow` (2.5s),
-  `flaky` (every second request answers 503), `offline` (the browser
-  knows it's offline, so each request fails at once) or `broken` (500).
-  The network is the demo server's setting, in `localStorage` under
-  `fortymm-demo-network`, so a reload keeps it. Each request reads it, so
-  switching it restarts nothing. A switch to any network but `offline`
-  fires `online`, as a connection that came back does, so a waiting
-  outbox sends at once. Tests set it with `setDemoNetwork()`.
-- The page has no loading or error state. The match comes with the
-  route, and the board comes from this device, so the page draws at once
-  with or without a connection. With nothing saved it shows an empty
-  board. Once the outbox is empty, sync pulls the server's board, so
-  the page shows what other devices synced. `receiveBoard()` takes it as
-  the base and applies the unsent changes on top again, so a pull never
-  undoes what was entered here. A pull that fails leaves the device's
-  board, and the next sync pulls again. A Testing panel at the bottom of
-  the page (`TestingPanel.tsx`) switches the network, resets the match
-  on the device and the server, or clears every demo match and saved
-  copy and sets the network back to `normal`. It goes when the API has
-  matches. Reset match and Clear everything drop the demo server's
-  requests in flight, so a late one can't bring back what they cleared,
-  and the Vitest setup drops them after each test.
+  approved result yet (#195). Edit scores opens the match's game 1 with
+  the page's fragment, unchanged. After an approval, that is the envelope
+  with both signatures. It checks no signature. With no key, it says the
+  browser can't sign yet.
 - `design-system.tsx`: a public page. Public pages go directly in
   `src/routes/`. They make no request and never show the loading screen.
   The design system page has no `AppShell`, and no page links to it.
@@ -1349,8 +1356,9 @@ environment). `web-client/src/setupTests.ts` loads the jest-dom matchers,
 starts the mock API, and cleans up rendered components and `localStorage`
 after each test, so a saved session doesn't leak into the next test. It
 loads `fake-indexeddb`, and gives each test a new `IDBFactory`, so a
-signing key, or a registration still in flight, doesn't leak either. Tests
-live next to the code as `*.test.tsx`.
+signing key, or a registration still in flight, doesn't leak either. It
+also drops the demo server's requests in flight and forgets every unsent
+board. Tests live next to the code as `*.test.tsx`.
 
 Tests go through page objects in `web-client/src/test/pages/`. A static async
 `render()` renders the app's router at the page's path (via
@@ -1415,11 +1423,20 @@ admin lists with nothing. `AdminPage` renders `/admin`, and
 shows, so a test opens a tab first.
 
 `ScoreGamePage` renders the scoring page, at `/matches/demo/scores/game/1/edit`
-by default. It types scores, saves them, switches the demo network and
-reads the strip, the tally, the feedback and the result. `close()`
-unmounts the page, so a test can render it again as a reload does.
+by default, or at any path with a fragment. It types scores, saves,
+clears and submits them, and reads the strip, the tally, the feedback,
+the notices and the URL's fragment. A press waits until the URL changes
+or an alert shows, because a save hashes the result it corrects first.
+`href` includes the fragment, and `close()` unmounts the page, so a test
+renders `href` again as a reload does. `waitForKey()` waits for this
+browser's signing key before a submit. `settle()` also waits until the
+strip isn't `aria-busy`, so the sync has stopped sending and pulling.
+`switchNetwork()` sets the demo network, `otherDeviceSyncs()` puts
+another device's board on the demo server, `serverBoard` reads it, and
+`slotSync()` reads what a screen reader hears about a game's sync.
 `AwaitingValidationPage` wraps the router after a submit, or renders the
-submission page directly, and finds its link and QR code.
+submission page at a path with its envelope, and finds its link, QR code
+and the link back to the scores.
 `AcceptResultPage` renders a link's path and fragment, approves the
 result or goes to edit the scores, and reads the game scores table, the
 approval status, the check with FortyMM and the URL's fragment.

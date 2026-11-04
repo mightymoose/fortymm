@@ -19,15 +19,16 @@ const LABELS: Record<Network, string> = {
   broken: 'Broken',
 }
 
-// Tools for trying the scratchpad against the demo server: the network it
-// answers on, and starting over. They go when the API has matches.
+// Tools for trying the background sync against the demo server: the
+// network it answers on, and starting over. They go when the API has
+// matches.
 export function TestingPanel() {
   const { matchId } = useParams({ from: ROUTE })
   const network = useDemoNetwork()
   const navigate = useNavigate()
   const startOver = (clear: () => void) => {
     clear()
-    void navigate({ to: PATH, params: { matchId, gameNumber: '1' }, replace: true })
+    void navigate({ to: PATH, params: { matchId, gameNumber: '1' }, search: true, hash: '', replace: true })
   }
 
   return (
@@ -49,8 +50,8 @@ export function TestingPanel() {
         </Button>
       </div>
       <p className="fm-help">
-        Reset match empties this match’s games and its server copy. Clear everything does that for
-        every demo match.
+        Reset match empties this match’s games and its server copy. Clear everything empties every
+        demo match’s server copy too.
       </p>
     </section>
   )

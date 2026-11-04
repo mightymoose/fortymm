@@ -1,20 +1,31 @@
 import { describe, expect, it } from 'vitest'
-import { fetchBoard, sendChange } from './demoServer'
-import type { Change } from './scratchpad'
-
-const ann = { playerId: 'b3c7a0d2-0000-4000-8000-000000000001', name: 'excited egret 387' }
-
-function save(id: string, points: [number, number]): Change {
-  return { id, edit: { kind: 'save', game: 1, points, savedBy: ann } }
-}
+import { ApiError } from '../api/errors'
+import { fetchBoard, putBoard, resetMatch, serverBoard, setDemoNetwork } from './demoServer'
 
 describe('the demo server', () => {
-  it('applies a change once, so a late copy can’t undo the correction after it', async () => {
-    const old = save('c1', [11, 3])
-    await sendChange('d1', old)
-    await sendChange('d1', save('c2', [11, 5]))
-    await sendChange('d1', old)
+  it('keeps the latest board per match', async () => {
+    expect(await fetchBoard('d1')).toBeNull()
 
-    expect((await fetchBoard('d1')).games[1]?.points).toEqual([11, 5])
+    await putBoard('d1', 'a')
+    await putBoard('d1', 'b')
+
+    expect(await fetchBoard('d1')).toBe('b')
+  })
+
+  it('fails every second request on the flaky network', async () => {
+    setDemoNetwork('flaky')
+
+    await putBoard('d2', 'a')
+    await expect(putBoard('d2', 'b')).rejects.toBeInstanceOf(ApiError)
+
+    expect(serverBoard('d2')).toBe('a')
+  })
+
+  it('drops a request in flight when the match resets', async () => {
+    const put = putBoard('d3', 'a')
+    resetMatch('d3')
+
+    await expect(put).rejects.toThrow()
+    expect(serverBoard('d3')).toBeNull()
   })
 })

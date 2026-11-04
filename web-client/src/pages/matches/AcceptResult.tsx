@@ -1,5 +1,5 @@
 import { useMutation, useSuspenseQuery } from '@tanstack/react-query'
-import { Link, useLocation, useNavigate, useParams, useRouteContext } from '@tanstack/react-router'
+import { Link, useLoaderData, useLocation, useNavigate, useParams, useRouteContext } from '@tanstack/react-router'
 import type { FormEvent } from 'react'
 import { classifyFailure, failureMessages, NoSigningKey } from '../../api/errors'
 import { sessionQuery } from '../../api/queries'
@@ -7,14 +7,12 @@ import { Button } from '../../components/Button'
 import { ErrorScreen } from '../../components/ErrorScreen'
 import { Icon } from '../../components/Icon'
 import { Wordmark } from '../../components/Wordmark'
-import { checkGame, otherSide, tally, type GamePoints, type Side } from '../../scoring/board'
-import { demoMatch, viewerOf } from '../../scoring/demoMatches'
-import { readBoard, saveGame, storageKey, useScratchpad, type Scorer } from '../../scoring/scratchpad'
-import { Malformed } from '../../signing/cbor'
-import { appendSignature, decodeEnvelope } from '../../signing/envelope'
+import { checkGame, tally, type Side } from '../../scoring/board'
+import type { Fragment } from '../../scoring/fragment'
+import { appendSignature } from '../../signing/envelope'
 import { signWithDeviceKey } from '../../signing/deviceKey'
-import { decodePayload, type MatchResult } from '../../signing/result'
-import { base64url, fromBase64url } from '../../signing/text'
+import type { MatchResult } from '../../signing/result'
+import { base64url } from '../../signing/text'
 import { gamesWon, PATH, sidesFor } from '../scoring/sides'
 import { ServerCheck } from './ServerCheck'
 import '../scoring/scoring.css'
@@ -32,18 +30,20 @@ type Opened = {
   approved: boolean
 }
 
-type Outcome = { winner: Side; won: [number, number]; retired: Side | null }
-
 // The page a result link opens, where the other player approves the result
 // with their signature, or goes back to edit the scores. Until matches come
 // from the API, every viewer stands in as the player who hasn't signed. It
-// shows only what the link's payload, the session and this device's
-// scratchpad say. The payload names players by id alone, so a row shows a
-// username only if this device already has that player's name.
+// shows only what the link's payload and the session say. The payload names
+// players by id alone, so only the session's player has a username here. A
+// link opens only a result the scores page could edit, so one rule decides
+// what a result link may hold.
 export function AcceptResult() {
   const { hash } = useLocation()
-  const opened = open(hash)
-  if (!opened) {
+  const { matchId } = useParams({ from: ROUTE })
+  const { api } = useRouteContext({ from: '__root__' })
+  const { data: account } = useSuspenseQuery(sessionQuery(api))
+  const { fragment } = useLoaderData({ from: ROUTE })
+  if (!fragment) {
     return (
       <ErrorScreen
         title="This link isn’t a FortyMM result"
@@ -57,30 +57,30 @@ export function AcceptResult() {
       </ErrorScreen>
     )
   }
-  return <Result opened={opened} />
+  return <Result opened={open(fragment)} hash={hash} matchId={matchId} player={account.player} />
 }
 
-function Result({ opened }: { opened: Opened }) {
-  const { matchId } = useParams({ from: ROUTE })
-  const { api } = useRouteContext({ from: '__root__' })
-  const { data: account } = useSuspenseQuery(sessionQuery(api))
-  const pad = useScratchpad(matchId)
+function Result({
+  opened,
+  hash,
+  matchId,
+  player,
+}: {
+  opened: Opened
+  hash: string
+  matchId: string
+  player: { id: string; display_name: string }
+}) {
   const { result, issuedAt, mySide, approved } = opened
-
-  // The names this device already has, by player id. Nothing is fetched.
-  const known = new Map(Object.values(pad.games).map(({ savedBy }) => [savedBy.playerId, savedBy.name]))
-  known.set(account.player.id, account.player.display_name)
-  const usernameOf = (side: Side) => known.get(result.players[side])
+  // Nothing is fetched, so only the session's own player has a name here.
+  const usernameOf = (side: Side) => (result.players[side] === player.id ? player.display_name : undefined)
   const roleOf = (side: Side) => (side === mySide ? 'You' : 'Your opponent')
 
   const outcome = outcomeOf(result)
   const order = sidesFor(mySide)
   const reportedAt = new Date(issuedAt * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
   const wonOrLost = outcome.winner === mySide ? 'won' : 'lost'
-  const score =
-    outcome.retired === null
-      ? `you ${wonOrLost} ${gamesWon(outcome.won, outcome.winner)}`
-      : `${outcome.retired === mySide ? 'you' : 'they'} retired, so you ${wonOrLost}`
+  const score = `you ${wonOrLost} ${gamesWon(outcome.won, outcome.winner)}`
 
   return (
     <div className="score-page">
@@ -136,7 +136,6 @@ function Result({ opened }: { opened: Opened }) {
                           {usernameOf(side)}
                         </span>
                       )}
-                      {side === outcome.retired && <small>Retired</small>}
                     </th>
                     {result.games.map((points, game) => (
                       <td key={game} className={wonGame(points, side) ? 'w' : undefined}>
@@ -154,14 +153,12 @@ function Result({ opened }: { opened: Opened }) {
             {result.replaces && ' · Corrects an earlier result'}
           </p>
         </section>
-        {!approved && (
-          <ApproveForm
-            envelope={opened.envelope}
-            games={result.games}
-            side={mySide}
-            matchId={matchId}
-            me={{ playerId: account.player.id, name: account.player.display_name }}
-          />
+        {approved ? (
+          <div className="approval-actions">
+            <EditScores matchId={matchId} hash={hash} />
+          </div>
+        ) : (
+          <ApproveForm envelope={opened.envelope} side={mySide} matchId={matchId} hash={hash} />
         )}
       </main>
     </div>
@@ -172,20 +169,17 @@ function Result({ opened }: { opened: Opened }) {
 // result with both signatures in the URL, so a reload shows it approved.
 // The approval happens on this device, so it works with no network. The
 // approved page then sends the result to FortyMM to check. The page never
-// says "sign": to a player, signing is approving. Edit scores goes back to
-// the match's scores.
+// says "sign": to a player, signing is approving.
 function ApproveForm({
   envelope,
-  games,
   side,
   matchId,
-  me,
+  hash,
 }: {
   envelope: Uint8Array<ArrayBuffer>
-  games: GamePoints[]
   side: Side
   matchId: string
-  me: Scorer
+  hash: string
 }) {
   const navigate = useNavigate()
   const submit = useMutation({
@@ -217,32 +211,20 @@ function ApproveForm({
         <Button type="submit" variant="primary" size="lg" busy={submit.isPending}>
           {submit.isPending ? 'Approving…' : 'Approve result'}
         </Button>
-        <Link
-          to={PATH}
-          params={{ matchId, gameNumber: '1' }}
-          className="fm-btn fm-btn--secondary fm-btn--lg"
-          onClick={() => carryScores(matchId, games, side, me)}
-        >
-          Edit scores
-        </Link>
+        <EditScores matchId={matchId} hash={hash} />
       </div>
     </form>
   )
 }
 
-// The opponent's device is often the first to see the match, so its pad is
-// empty. Edit scores saves the reviewed games there first, each player's
-// points on their side of the pad. A pad with games or a result keeps them.
-function carryScores(matchId: string, games: GamePoints[], reviewer: Side, me: Scorer): void {
-  const pad = readBoard(storageKey(matchId))
-  if (pad.submission.phase === 'submitted' || Object.keys(pad.games).length > 0) return
-  const viewer = viewerOf(demoMatch(matchId, { id: me.playerId, name: me.name }), me.playerId)
-  if (viewer.role !== 'player') return
-  games.forEach((points, game) => {
-    if (checkGame(points).kind !== 'legal') return
-    const onPad: GamePoints = viewer.side === reviewer ? points : [points[1], points[0]]
-    saveGame(matchId, game + 1, onPad, me)
-  })
+// Opens the match's scores with the result on this page, unchanged, so an
+// edit corrects it.
+function EditScores({ matchId, hash }: { matchId: string; hash: string }) {
+  return (
+    <Link to={PATH} params={{ matchId, gameNumber: '1' }} hash={hash} className="fm-btn fm-btn--secondary fm-btn--lg">
+      Edit scores
+    </Link>
+  )
 }
 
 function wonGame(points: [number, number], side: Side): boolean {
@@ -250,31 +232,21 @@ function wonGame(points: [number, number], side: Side): boolean {
   return game.kind === 'legal' && game.winner === side
 }
 
-// Who won, by how many games, and who retired. A retirement can leave the
-// last game unfinished, so only finished games count.
-function outcomeOf(result: MatchResult): Outcome {
-  const won = tally(result.games.filter((points) => checkGame(points).kind === 'legal'))
-  if (result.ending === 'retired') {
-    return { winner: otherSide(result.retiredBy), won, retired: result.retiredBy }
-  }
-  return { winner: won[0] > won[1] ? 0 : 1, won, retired: null }
+// Who won, and by how many games.
+function outcomeOf(result: MatchResult): { winner: Side; won: [number, number] } {
+  const won = tally(result.games)
+  return { winner: won[0] > won[1] ? 0 : 1, won }
 }
 
-// The link's fragment as a result, or null for anything that isn't one.
-function open(fragment: string): Opened | null {
-  try {
-    const envelope = fromBase64url(fragment)
-    const { payload, signatures } = decodeEnvelope(envelope)
-    const signed = new Set(signatures.map(({ side }) => side))
-    const unsigned = ([0, 1] as const).find((side) => !signed.has(side))
-    return {
-      envelope,
-      ...decodePayload(payload),
-      mySide: unsigned ?? signatures[signatures.length - 1].side,
-      approved: unsigned === undefined,
-    }
-  } catch (error) {
-    if (error instanceof Malformed) return null
-    throw error
+// The side the viewer stands in as, and whether it has approved.
+function open(fragment: Extract<Fragment, { kind: 'signed' }>): Opened {
+  const signed = new Set(fragment.signers)
+  const unsigned = ([0, 1] as const).find((side) => !signed.has(side))
+  return {
+    envelope: fragment.envelope,
+    issuedAt: fragment.issuedAt,
+    result: fragment.result,
+    mySide: unsigned ?? fragment.signers[fragment.signers.length - 1],
+    approved: unsigned === undefined,
   }
 }

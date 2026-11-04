@@ -80,18 +80,16 @@ describe('reviewBoard', () => {
       winner: 0,
       games: [A, A],
       tally: [2, 0],
-      closedGaps: false,
     })
   })
 
   it('decides a best of 5 for the second player', () => {
-    expect(reviewBoard([A, B, B, null, B], 5)).toEqual({
+    expect(reviewBoard([A, B, B, B, null], 5)).toEqual({
       kind: 'decided',
-      decidedAtGame: 5,
+      decidedAtGame: 4,
       winner: 1,
       games: [A, B, B, B],
       tally: [1, 3],
-      closedGaps: true,
     })
   })
 
@@ -101,18 +99,6 @@ describe('reviewBoard', () => {
       decidedAtGame: 7,
       winner: 0,
       tally: [4, 3],
-      closedGaps: false,
-    })
-  })
-
-  it('closes up gaps before the decider', () => {
-    expect(reviewBoard([null, A, null, A, A], 5)).toEqual({
-      kind: 'decided',
-      decidedAtGame: 5,
-      winner: 0,
-      games: [A, A, A],
-      tally: [3, 0],
-      closedGaps: true,
     })
   })
 

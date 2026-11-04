@@ -1,44 +1,61 @@
 import { useNavigate } from '@tanstack/react-router'
 import { useId, useRef, useState, type ReactNode } from 'react'
+import { classifyFailure, failureMessages } from '../../api/errors'
 import { Button } from '../../components/Button'
 import { FieldError } from '../../components/FieldError'
+import { Icon } from '../../components/Icon'
 import { PlayerAvatar } from '../../components/PlayerAvatar'
-import { otherSide, parseGameScore, tally, type Side } from '../../scoring/board'
+import { otherSide, parseGameScore, tally, type GamePoints, type Side } from '../../scoring/board'
+import { saveBoard } from '../../scoring/boards'
 import type { Match, Viewer } from '../../scoring/demoMatches'
-import { planPress } from '../../scoring/planPress'
-import { clearGame, saveGame, slotsOf, submitResult, type Board, type Scorer } from '../../scoring/scratchpad'
-import { gamesWon, midSentence, PATH, playerLabel, shown, wins, type Sides } from './sides'
+import { draftHash, gamesOf, nowSeconds, replacesOf, type Fragment } from '../../scoring/fragment'
+import { planPress, slotsOf } from '../../scoring/planPress'
+import type { SubmitResult } from './useSubmitResult'
+import { gamesWon, PATH, playerLabel, shown, wins, type Sides } from './sides'
 
 // The pad that edits one game: a score input per player with the games
-// tally between them, then the actions. A save stays on this device and the
-// page moves on at once.
+// tally between them, then the actions. A save puts the games in the URL,
+// on this device, and the page moves on at once. The board then syncs in
+// the background, for whoever watches the match.
 export function ScoreEntry({
   match,
   gameNumber,
-  board,
+  fragment,
   viewer,
   sides,
-  me,
+  submit,
 }: {
   match: Match
   gameNumber: number
-  board: Board
+  fragment: Fragment
   viewer: Viewer
   sides: Sides
-  me: Scorer
+  submit: SubmitResult
 }) {
   const navigate = useNavigate()
   const feedbackId = useId()
-  const saved = board.games[gameNumber]
-  const frozen = board.submission.phase === 'submitted'
+  const games = gamesOf(fragment)
+  const saved = games[gameNumber - 1]
   // In the match's player order, like the stored points.
-  const [draft, setDraft] = useState<[string, string]>(
-    saved ? [String(saved.points[0]), String(saved.points[1])] : ['', ''],
-  )
+  const [draft, setDraft] = useState<[string, string]>(saved ? [String(saved[0]), String(saved[1])] : ['', ''])
   const inputs = useRef<[HTMLInputElement | null, HTMLInputElement | null]>([null, null])
   const entry = parseGameScore(draft[0], draft[1])
   const invalid = entry.kind === 'malformed' || entry.kind === 'illegal'
-  const press = planPress(board, viewer, gameNumber, entry, match.bestOf)
+  const press = planPress(games, viewer, gameNumber, entry, match.bestOf)
+
+  const failure = submit.error && failureMessages[classifyFailure(submit.error).kind]
+
+  async function show(next: GamePoints[], game: number) {
+    const hash = draftHash(match, next, await replacesOf(fragment), nowSeconds())
+    saveBoard(match.id, hash)
+    await navigate({
+      to: PATH,
+      params: { matchId: match.id, gameNumber: String(game) },
+      search: true,
+      hash,
+      replace: game === gameNumber,
+    })
+  }
 
   const message = ((): ReactNode => {
     switch (entry.kind) {
@@ -62,14 +79,16 @@ export function ScoreEntry({
     switch (press.kind) {
       case 'disabled':
         return
-      case 'save':
-        if (!saveGame(match.id, gameNumber, press.points, me) || press.next === null) return
-        void navigate({ to: PATH, params: { matchId: match.id, gameNumber: String(press.next) }, search: true })
+      case 'save': {
+        const next = [...games]
+        next[gameNumber - 1] = press.points
+        void show(next, press.next ?? gameNumber)
         return
+      }
       case 'submit':
-        if (press.save) saveGame(match.id, gameNumber, press.save, me)
-        submitResult(match.id, me.playerId, press.games)
-        void navigate({ to: '/matches/$matchId/scores/submission', params: { matchId: match.id }, search: true })
+        if (viewer.role === 'player' && !submit.isPending) {
+          submit.mutate({ submitted: press.games, side: viewer.side, gameNumber })
+        }
     }
   }
 
@@ -92,8 +111,7 @@ export function ScoreEntry({
           placeholder="0"
           maxLength={3}
           value={draft[side]}
-          autoFocus={side === sides[0] && !frozen}
-          disabled={frozen}
+          autoFocus={side === sides[0]}
           aria-label={name}
           aria-invalid={invalid || undefined}
           aria-describedby={message ? feedbackId : undefined}
@@ -129,41 +147,38 @@ export function ScoreEntry({
           <span className="score-mid__vs">vs</span>
           <p className="score-tally">
             <span className="fm-sr">Games </span>
-            {shown(tally(slotsOf(board, match.bestOf)), sides)}
+            {shown(tally(slotsOf(games, match.bestOf)), sides)}
           </p>
         </div>
         {side(sides[1])}
       </section>
-      {frozen ? (
-        message
-      ) : (
-        <div className="score-actions">
-          {/* A line that keeps its height, so typing doesn't move the buttons. */}
-          <div className="score-actions__note">
-            {message ??
-              (press.kind === 'submit' ? (
-                <span className="fm-help">
-                  {wins(playerLabel(match, viewer, match.players[press.winner].id), gamesWon(tally(press.games), press.winner))}
-                  {press.closedGaps && ', with the empty games left out'}
-                </span>
-              ) : (
-                saved && (
-                  <span className="fm-help">
-                    Saved by {midSentence(playerLabel(match, viewer, saved.savedBy.playerId, saved.savedBy.name))}
-                  </span>
-                )
-              ))}
-          </div>
-          <div className="score-actions__buttons">
-            {saved && (
-              <Button variant="secondary" onClick={() => clearGame(match.id, gameNumber)}>
-                Clear game
-              </Button>
-            )}
-            <Button type="submit" variant="primary" disabled={press.kind === 'disabled'}>
-              {press.kind === 'submit' ? 'Submit result' : `Save game ${gameNumber}`}
+      <div className="score-actions">
+        {/* A line that keeps its height, so typing doesn't move the buttons. */}
+        <div className="score-actions__note">
+          {message ??
+            (press.kind === 'submit' && (
+              <span className="fm-help">
+                {wins(playerLabel(match, viewer, match.players[press.winner].id), gamesWon(tally(press.games), press.winner))}
+              </span>
+            ))}
+        </div>
+        <div className="score-actions__buttons">
+          {/* Only the last game clears, so the games never have a gap. */}
+          {saved && gameNumber === games.length && (
+            <Button variant="secondary" onClick={() => void show(games.slice(0, -1), gameNumber)}>
+              Clear game
             </Button>
-          </div>
+          )}
+          <Button type="submit" variant="primary" disabled={press.kind === 'disabled'} busy={submit.isPending}>
+            {press.kind === 'submit' ? (submit.isPending ? 'Submitting…' : 'Submit result') : `Save game ${gameNumber}`}
+          </Button>
+        </div>
+      </div>
+      {failure && (
+        <div className="fm-alert fm-alert--error" role="alert">
+          <Icon name="error" />
+          <p className="fm-alert__title">{failure.title}</p>
+          <p className="fm-alert__body">{failure.sentence}</p>
         </div>
       )}
     </form>
