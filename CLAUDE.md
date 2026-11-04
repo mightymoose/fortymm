@@ -1034,8 +1034,8 @@ it to `src/routes/`.
   sends its id again, so a retry after a lost response finds the match
   the first press made. Then the page opens game 1 of the match's
   scores, with a draft of no games as the fragment, so the scores open
-  with no network. Nothing caches the match. A 409 or a 422 shows the
-  API's title. While `navigator.onLine` is false, Start match sends
+  with no network. Nothing caches the match. A 422 shows the API's
+  title. While `navigator.onLine` is false, Start match sends
   nothing, and a request that gets no response is the same. Both say
   "Making a match needs a connection. Connect, then press Start match
   again." The form keeps its state, and the next press sends the same id.

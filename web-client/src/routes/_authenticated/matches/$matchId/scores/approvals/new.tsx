@@ -16,7 +16,7 @@ export const Route = createFileRoute('/_authenticated/matches/$matchId/scores/ap
       const scoring = scoringMatch(params.matchId, location.hash)
       const match = matchOf(scoring, { id: account.player.id, name: account.player.display_name }, null)
       const fragment = readFragment(location.hash, match)
-      return { scoring, fragment: fragment?.kind === 'signed' ? fragment : null }
+      return { fragment: fragment?.kind === 'signed' ? fragment : null }
     },
   },
   component: AcceptResult,

@@ -7,7 +7,7 @@ export type Opponent = { id: string; name: string }
 // A match needs two players, so there is no match without an opponent.
 export type OpponentChoice = { kind: 'none' } | { kind: 'picked'; opponent: Opponent }
 
-export type Submit =
+type Submit =
   | { kind: 'idle' }
   | { kind: 'needsOpponent' }
   | { kind: 'starting' }
@@ -55,9 +55,8 @@ export function setupReducer(setup: Setup, action: SetupAction): Setup {
     case 'bestOf':
       return { ...setup, bestOf: action.bestOf }
     case 'rated':
-      return setup.opponent.kind === 'picked' ? { ...setup, rated: action.rated } : setup
+      return { ...setup, rated: action.rated }
     case 'start': {
-      if (setup.submit.kind === 'starting') return setup
       if (setup.opponent.kind === 'none') return { ...setup, submit: { kind: 'needsOpponent' } }
       const details = {
         best_of: setup.bestOf,

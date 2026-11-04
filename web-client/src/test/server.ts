@@ -663,7 +663,7 @@ type MatchRequest = components['schemas']['MatchRequest']
 
 // How the mock API answers a new match: it makes it, refuses it with this
 // title (a 422, or `status`), or no response comes back.
-export type CreateAnswer = 'created' | { refused: string; status?: number } | 'unreachable'
+type CreateAnswer = 'created' | { refused: string; status?: number } | 'unreachable'
 
 // The mock API's matches, for a session whose account holds
 // `matches.create`. `recent` are the session's recent opponents, and

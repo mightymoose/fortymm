@@ -44,11 +44,6 @@ export class NewMatchPage {
     return names(await screen.findByRole('list', { name: 'Players found' }))
   }
 
-  get resultNames(): string[] {
-    const list = screen.queryByRole('list', { name: 'Players found' })
-    return list ? names(list) : []
-  }
-
   get text(): string {
     return this.card.textContent ?? ''
   }
@@ -122,10 +117,6 @@ export class NewMatchPage {
 
   async pressKey(key: string): Promise<void> {
     await this.user.keyboard(key)
-  }
-
-  async tab(): Promise<void> {
-    await this.user.tab()
   }
 
   get ratedSwitch(): HTMLElement {

@@ -23,9 +23,6 @@ import {
 } from './newMatch/setup'
 import './newMatch/newMatch.css'
 
-// The statuses whose title is FortyMM's reason for refusing the match.
-const REFUSAL_STATUSES = new Set([409, 422])
-
 // Sets up a match against another player, then opens its scores. Start
 // match is never off: without an opponent it says to pick one and sends
 // nothing.
@@ -66,7 +63,7 @@ export function NewMatch() {
         hash: draftHash(apiMatch(id, request.best_of, request.rated, [first, second]), [], null, nowSeconds()),
       })
     } catch (error) {
-      if (error instanceof ApiError && REFUSAL_STATUSES.has(error.status) && error.title) {
+      if (error instanceof ApiError && error.status === 422 && error.title) {
         dispatch({ type: 'refused', title: error.title })
       } else if (error instanceof ApiUnreachable) {
         dispatch({ type: 'offline' })

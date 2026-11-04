@@ -10,7 +10,7 @@ import { QueryBoundary } from '../../../components/QueryBoundary'
 import type { Opponent, OpponentChoice } from './setup'
 
 // How long the search waits after a key before it asks the API.
-export const SEARCH_DELAY_MS = 200
+const SEARCH_DELAY_MS = 200
 
 type Focus = 'change' | 'searchAll' | null
 

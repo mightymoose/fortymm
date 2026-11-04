@@ -1,10 +1,9 @@
 import { cleanup, screen, waitFor } from '@testing-library/react'
-import { http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { HomePage } from '../../test/pages/HomePage'
 import { NewMatchPage } from '../../test/pages/NewMatchPage'
 import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
-import { API_BASE_URL, mockMatches, server, sessionResponse } from '../../test/server'
+import { mockMatches, sessionResponse } from '../../test/server'
 
 const self = sessionResponse.data.account.player
 const badger = { id: '6f1d2c43-8b5e-4a0f-9c71-2e4b8d0a5f13', display_name: 'brave badger 214' }
@@ -192,7 +191,6 @@ describe('NewMatch', () => {
     const scoresUrl = new ScoreGamePage(page.router).href
     cleanup()
 
-    server.use(http.get(`${API_BASE_URL}/v1/matches/:matchId`, () => HttpResponse.error()))
     const scores = await ScoreGamePage.render(scoresUrl)
 
     expect(scores.heading).toHaveTextContent('Game 1')

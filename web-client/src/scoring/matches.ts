@@ -8,7 +8,7 @@ import { fragmentResult } from './fragment'
 // page works it out from the session on each render: a saved account can
 // stand in for the session until the API answers with another player. A
 // match the API made is the same for everyone.
-export type ScoringMatch = { kind: 'demo'; id: string } | { kind: 'api'; match: Match }
+type ScoringMatch = { kind: 'demo'; id: string } | { kind: 'api'; match: Match }
 
 const DEMO_IDS = new Set(['demo', 'demo-spectator'])
 
