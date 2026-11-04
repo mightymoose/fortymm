@@ -15,6 +15,7 @@ from fortymm_api.database import create_database_engine, migrate
 from fortymm_api.identity_provider import IdentityProvider
 from fortymm_api.services.authorization import MissingPermission
 from fortymm_api.services.match_results import IllegalEnding, WrongMatch
+from fortymm_api.services.player_merge import PlayedEachOther
 from fortymm_api.services.players import (
     PlayerNotManaged,
     QuestionClosed,
@@ -52,6 +53,7 @@ PLAYER_ERRORS: dict[type[Exception], tuple[int, str]] = {
     PlayerNotManaged: (404, "You don't manage this player"),
     QuestionClosed: (409, "This question was already answered"),
     SameAsItself: (422, "A player can't be the same as itself"),
+    PlayedEachOther: (409, "These players played each other, so they are two people"),
 }
 ROLE_ERRORS: dict[type[Exception], tuple[int, str]] = {
     MissingPermission: (403, "You don't have permission to do this"),

@@ -54,7 +54,25 @@ const ant = listedPlayer({
   open_question: false,
 })
 
+// Another player the account already manages.
+const owl = listedPlayer({
+  id: '8a7b6c5d-4e3f-4a2b-9c1d-0e1f2a3b4c5d',
+  display_name: 'outgoing owl 640',
+  relationship: 'managed',
+  open_question: false,
+})
+
 const NOT_SAVED = 'Your answer wasn’t saved. Please try again.'
+const PLAYED_EACH_OTHER = 'These players played each other, so they are two people'
+
+// `a` and `b` as the players list gives them once they played each other.
+type AccountPlayer = components['schemas']['AccountPlayer']
+function playedEachOther(a: AccountPlayer, b: AccountPlayer): [AccountPlayer, AccountPlayer] {
+  return [
+    { ...a, played_against: [...a.played_against, b.id] },
+    { ...b, played_against: [...b.played_against, a.id] },
+  ]
+}
 
 describe('Is this you?', () => {
   afterEach(() => {
@@ -407,6 +425,39 @@ describe('Is this you?', () => {
     expect(new HomePage(page.router).avatar(egret.display_name)).toHaveTextContent('EE')
   })
 
+  it('offers no "Yes" for a player who played the account’s own player', async () => {
+    const [egretPlayedDove, dovePlayedEgret] = playedEachOther(egret, dove)
+    mockVerifiedAccount([egretPlayedDove, dovePlayedEgret])
+    const page = await PlayerReviewPage.render()
+
+    expect(page.heading).toHaveTextContent('Is this you?')
+    expect(page.queryButton('Yes, this is me')).toBeNull()
+    expect(page.answers).toHaveTextContent(
+      `${egret.display_name} played ${dove.display_name}, your player, so it isn’t you.`,
+    )
+    expect(page.button('Someone else played')).toBeEnabled()
+  })
+
+  it('says why a "Yes" was refused when another tab made an opponent the account’s own', async () => {
+    const [egretPlayedBadger, badgerPlayedEgret] = playedEachOther(egret, badger)
+    // The badger is older than the dove, so a "Yes" for it makes it the
+    // account's own player.
+    const api = mockVerifiedAccount([egretPlayedBadger, badgerPlayedEgret, dove])
+    const page = await PlayerReviewPage.render()
+    api.answerInAnotherTab(badger.id, { answer: 'yes' })
+
+    await page.click('Yes, this is me')
+
+    expect(api.answers).toEqual([{ playerId: egret.id, answer: 'yes' }])
+    expect(page.heading).toHaveTextContent('Is this you?')
+    expect(page.notice).toBe(PLAYED_EACH_OTHER)
+    expect(page.queryButton('Yes, this is me')).toBeNull()
+    expect(page.answers).toHaveTextContent(
+      `${egret.display_name} played ${badger.display_name}, your player, so it isn’t you.`,
+    )
+    expect(page.toasts).toEqual([])
+  })
+
   it('shows an empty match preview, with no way to see all matches', async () => {
     mockVerifiedAccount([egret, dove])
     const page = await PlayerReviewPage.render()
@@ -451,6 +502,27 @@ describe('Is this you?', () => {
       expect(page.href).toBe('/')
       expect(page.toasts).toEqual([toast])
       expect(new HomePage(page.router).avatar(dove.display_name)).toHaveTextContent('DD')
+    })
+
+    it('leaves out the players the player played', async () => {
+      const [antPlayedEgret, egretPlayedAnt] = playedEachOther(ant, egret)
+      const { page } = await choosing([antPlayedEgret, owl, egretPlayedAnt, dove])
+
+      expect(page.targets).toEqual([owl.display_name])
+    })
+
+    it('says why a merge was refused when the chosen player played the player', async () => {
+      const [antPlayedEgret, egretPlayedAnt] = playedEachOther(ant, egret)
+      const { api, page } = await choosing([ant, owl, egret, dove])
+      api.playersChange([antPlayedEgret, owl, egretPlayedAnt, dove])
+
+      await page.choose(ant.display_name)
+
+      expect(api.answers).toEqual([{ playerId: egret.id, answer: 'same_as', player_id: ant.id }])
+      expect(page.heading).toHaveTextContent('Which player?')
+      expect(page.notice).toBe(PLAYED_EACH_OTHER)
+      expect(page.targets).toEqual([owl.display_name])
+      expect(page.toasts).toEqual([])
     })
 
     it('keeps the player as a separate one', async () => {

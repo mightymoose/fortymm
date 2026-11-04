@@ -219,21 +219,29 @@ export function failPlayersOnce(status: number) {
 type AccountPlayer = components['schemas']['AccountPlayer']
 type AnswerRequest = components['schemas']['AnswerRequest']
 type AnswerMeta = components['schemas']['AnswerResponse']['meta']
+type Refusal = { status: number; title: string }
+const PLAYED_EACH_OTHER: Refusal = {
+  status: 409,
+  title: 'These players played each other, so they are two people',
+}
 
 // A player as the players list gives it. No player has a match until games
-// exist.
+// exist. `played_against` defaults to none.
 export function listedPlayer(
-  player: Pick<AccountPlayer, 'id' | 'display_name' | 'relationship' | 'open_question'>,
+  player: Pick<AccountPlayer, 'id' | 'display_name' | 'relationship' | 'open_question'> &
+    Partial<Pick<AccountPlayer, 'played_against'>>,
 ): AccountPlayer {
-  return { ...player, match_count: 0, recent_matches: [] }
+  return { played_against: [], ...player, match_count: 0, recent_matches: [] }
 }
 
 // Signs the mock API in as a verified account that manages `players`, and
 // answers "Is this you?" as the API does. Returns the answers it received,
 // and answerInAnotherTab(), which answers without the page knowing. One of
 // `players` is the account's self player, and they are in the order the API
-// made them. So a merge keeps the first of the two. `failAnswers` makes
-// every answer fail with a 500.
+// made them. So a merge keeps the first of the two, and it refuses two
+// players who played each other. `failAnswers` makes every answer fail with
+// a 500. playersChange() replaces the players, as a match recorded
+// meanwhile can.
 export function mockVerifiedAccount(
   players: AccountPlayer[],
   { failAnswers = false }: { failAnswers?: boolean } = {},
@@ -246,20 +254,34 @@ export function mockVerifiedAccount(
     return { id: found.id, display_name: found.display_name }
   }
 
-  // The older player survives, and takes the relationship of `into`.
-  function merge(player: AccountPlayer, into: AccountPlayer): AnswerMeta {
+  // The older player survives, takes the relationship of `into`, and plays
+  // as both.
+  function merge(player: AccountPlayer, into: AccountPlayer): AnswerMeta | Refusal {
+    if (player.played_against.includes(into.id)) return PLAYED_EACH_OTHER
     const [survivor, merged] =
       current.indexOf(into) < current.indexOf(player) ? [into, player] : [player, into]
+    const as = (id: string) => (id === merged.id ? survivor.id : id)
     current = current.flatMap((found) => {
       if (found === merged) return []
-      if (found !== survivor) return [found]
-      return [{ ...found, relationship: into.relationship, open_question: false }]
+      const played_against = [...new Set(found.played_against.map(as))]
+      if (found !== survivor) return [{ ...found, played_against }]
+      return [
+        {
+          ...found,
+          relationship: into.relationship,
+          open_question: false,
+          played_against: [...new Set([...played_against, ...merged.played_against])],
+        },
+      ]
     })
     return { outcome: 'merged', survivor: survivor.id, merged: merged.id }
   }
 
   // The API's answer: the outcome, or the status it refuses with.
-  function answer(playerId: string, request: AnswerRequest): AnswerMeta | 404 | 409 | 422 {
+  function answer(
+    playerId: string,
+    request: AnswerRequest,
+  ): AnswerMeta | Refusal | 404 | 409 | 422 {
     if (request.answer === 'same_as' && request.player_id === playerId) return 422
     const answered = current.find((player) => player.id === playerId)
     if (!answered) return 404
@@ -316,11 +338,12 @@ export function mockVerifiedAccount(
       async ({ params, request }) => {
         const body = await request.json()
         answers.push({ playerId: params.playerId, ...body })
-        const meta = failAnswers ? 500 : answer(params.playerId, body)
-        if (typeof meta === 'number') {
+        let meta = failAnswers ? 500 : answer(params.playerId, body)
+        if (typeof meta === 'number') meta = { status: meta, title: 'Refused' }
+        if ('status' in meta) {
           return HttpResponse.json(
-            { errors: [{ status: String(meta), title: 'Refused' }] },
-            { status: meta },
+            { errors: [{ status: String(meta.status), title: meta.title }] },
+            { status: meta.status },
           )
         }
         return HttpResponse.json<components['schemas']['AnswerResponse']>({ data: current, meta })
@@ -333,6 +356,9 @@ export function mockVerifiedAccount(
     // from before.
     answerInAnotherTab(playerId: string, request: AnswerRequest): void {
       answer(playerId, request)
+    },
+    playersChange(players: AccountPlayer[]): void {
+      current = players
     },
   }
 }

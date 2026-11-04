@@ -73,6 +73,11 @@ export class PlayerReviewPage {
     return screen.getByRole('button', { name })
   }
 
+  // An answer, or null when the page doesn't offer it.
+  queryButton(name: ReviewAction): HTMLElement | null {
+    return screen.queryByRole('button', { name })
+  }
+
   // The button on "Which player?" that merges the player into the managed
   // player named `displayName`.
   target(displayName: string): HTMLElement {

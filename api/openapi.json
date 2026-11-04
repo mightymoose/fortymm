@@ -520,7 +520,7 @@
           "players"
         ],
         "summary": "Answer Question",
-        "description": "Answer \"Is this you?\" for one player. `data` lists the account's\nplayers after the answer, and `meta.outcome` says what the answer did.\n\n`yes` makes it the account's own player, with outcome `self`. If the\naccount already has one, the two players merge, with outcome `merged`.\n`no` keeps it as a player the account manages, with outcome `managed`.\n`not_mine` takes it off the account, with outcome `removed`. The player\nstays, with no manager. `same_as` merges it with the `managed` player\nthat `player_id` names, with outcome `merged`. That player's question\nmust be closed, because the merge would close it with no answer.\n\nIn a merge, the player created first survives, and the other leaves the\nlist. `meta.survivor` and `meta.merged` name them. Every answer closes\nthe question. A second answer changes nothing, with outcome\n`already_answered`, but a second `not_mine` answers 409.",
+        "description": "Answer \"Is this you?\" for one player. `data` lists the account's\nplayers after the answer, and `meta.outcome` says what the answer did.\n\n`yes` makes it the account's own player, with outcome `self`. If the\naccount already has one, the two players merge, with outcome `merged`.\n`no` keeps it as a player the account manages, with outcome `managed`.\n`not_mine` takes it off the account, with outcome `removed`. The player\nstays, with no manager. `same_as` merges it with the `managed` player\nthat `player_id` names, with outcome `merged`. That player's question\nmust be closed, because the merge would close it with no answer.\nTwo players who played each other never merge, so `yes` or `same_as`\nfor two such players answers 409.\n\nIn a merge, the player created first survives, and the other leaves the\nlist. `meta.survivor` and `meta.merged` name them. Every answer closes\nthe question. A second answer changes nothing, with outcome\n`already_answered`, but a second `not_mine` answers 409.",
         "operationId": "answer_question",
         "security": [
           {
@@ -581,7 +581,7 @@
             }
           },
           "409": {
-            "description": "The answer is `not_mine` and the question was already answered",
+            "description": "The answer is `not_mine` and the question was already answered. Or the answer is `yes` or `same_as` and the two players played each other, as `played_against` says",
             "content": {
               "application/json": {
                 "schema": {
@@ -1975,6 +1975,14 @@
             },
             "type": "array",
             "title": "Recent Matches"
+          },
+          "played_against": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Played Against"
           }
         },
         "type": "object",
@@ -1984,7 +1992,8 @@
           "relationship",
           "open_question",
           "match_count",
-          "recent_matches"
+          "recent_matches",
+          "played_against"
         ],
         "title": "AccountPlayer"
       },

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from fortymm_api.accounts import AccountId, PlayerId
 from fortymm_api.models import Account, PlayerManager
 from fortymm_api.ownership import OWNERSHIP_RULES, OwnershipRule
-from fortymm_api.services.player_merge import merge_players
+from fortymm_api.services.player_merge import PlayedEachOther, merge_players
 from fortymm_api.services.sessions import convert_guest
 
 # hand_over_players() moves these, because they also change kind.
@@ -32,7 +32,9 @@ def hand_over_players(session: Session, guest: AccountId, into: AccountId) -> No
     A player that hasn't played asks nothing. Verify in place keeps it as it
     is, so the guest keeps its player and name. Adoption merges a self
     player into the self player of `into`, as "Yes" would, or makes it the
-    self player of `into` if it has none. A managed one stays managed.
+    self player of `into` if it has none. A managed one stays managed. If
+    the two self players played each other, they can't merge, so the
+    guest's one asks "Is this you?" as a player that has played does.
     """
     # start_session() and another adoption can give `into` a self player
     # meanwhile, and a row lock can't see a row that moves in. Both lock
@@ -66,7 +68,19 @@ def hand_over_players(session: Session, guest: AccountId, into: AccountId) -> No
             # The self index isn't deferrable, so the row moves as managed
             # before the merge picks the survivor's relationship.
             session.execute(row.values(account_id=into, relationship="managed"))
-            merge_players(session, into, player, self_player)
+            try:
+                merge_players(session, into, player, self_player)
+            except PlayedEachOther:
+                # A sign-in never fails over it. The account answers "Is
+                # this you?" instead.
+                session.execute(
+                    update(PlayerManager)
+                    .where(
+                        PlayerManager.account_id == into,
+                        PlayerManager.player_id == player,
+                    )
+                    .values(adopted_from=guest)
+                )
         else:
             session.execute(row.values(account_id=into))
 

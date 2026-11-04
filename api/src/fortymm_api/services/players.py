@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from fortymm_api.accounts import AccountId, PlayerId
 from fortymm_api.models import Player, PlayerManager
-from fortymm_api.services.player_merge import Merged, merge_players
+from fortymm_api.services.player_merge import Merged, merge_players, opponents
 from fortymm_api.services.sessions import lock_account_for_write
 
 type Relationship = Literal["self", "managed"]
@@ -69,6 +69,9 @@ class AccountPlayer:
     open_question: bool
     match_count: int
     recent_matches: tuple[RecentMatch, ...]
+    # The account's other listed players that this one played, so they
+    # can't merge.
+    played_against: frozenset[PlayerId]
 
 
 @dataclass(frozen=True)
@@ -181,6 +184,8 @@ def _players(session: Session, account: AccountId) -> list[AccountPlayer]:
         .where(PlayerManager.account_id == account, Player.merged_into.is_(None))
         .order_by(PlayerManager.relationship != "self", Player.display_name)
     ).all()
+    listed = {id for id, *_ in found}
+    played = opponents(session, listed)
     # No games are played yet, so no player has a match. The games work
     # fills match_count and recent_matches.
     return [
@@ -191,6 +196,7 @@ def _players(session: Session, account: AccountId) -> list[AccountPlayer]:
             open_question,
             match_count=0,
             recent_matches=(),
+            played_against=played[id] & listed,
         )
         for id, display_name, relationship, open_question in found
     ]
