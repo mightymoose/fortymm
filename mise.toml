@@ -2,7 +2,7 @@
 # Tool versions used inside the dev container live in mise.container.toml.
 
 [env]
-# Where the API is deployed (see CLAUDE.md's Deploy section). Override either
+# Where the API is deployed (see docs/deploy.md). Override either
 # in the environment to deploy elsewhere.
 GCP_PROJECT = "{{ get_env(name='GCP_PROJECT', default='fortymm') }}"
 GCP_REGION = "{{ get_env(name='GCP_REGION', default='us-central1') }}"

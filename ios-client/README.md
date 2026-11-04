@@ -51,7 +51,7 @@ which `bin/xcodebuild-test` and `bin/xcodebuild-testflight` pass.
 ## Releasing the iOS app
 
 Each push to `main` that changes the app uploads it to TestFlight (see the
-ios-client section of CLAUDE.md). The upload needs an app record in App Store
+ios-client/CLAUDE.md). The upload needs an app record in App Store
 Connect and an App Store Connect API key, which a person sets up once. Until
 then, the workflow warns and skips the upload.
 
