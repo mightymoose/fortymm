@@ -639,6 +639,7 @@ stores nothing (see Approving a result).
   result out only through `verify(keys)`. Before that, it names only its
   `kids` and its `match`. `verify()` takes each key's kid from the key, so
   a caller can't pair a kid with the wrong key.
+  `BestOf` is 1, 3, 5 or 7, as in the tables (#182).
 - A refusal is `Malformed`, `UnknownKey` or `BadSignature`, each with a
   `code`, in that order of precedence. `Malformed` is decided from the
   bytes alone: decode, re-encode with cbor2 canonical, compare, plus the

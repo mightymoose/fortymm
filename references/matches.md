@@ -249,8 +249,6 @@ replaced or cut off gets a 409.
 ## Not built yet
 
 - The routes and services that write these tables (#187, #188).
-- Best of 1 in the signed result format (#182). The tables already allow
-  it.
 - Doubles: a v2 payload and the doubles approval rule.
 - Walkovers, voids, pre-play states such as scheduled and called, and
   director rulings, which come with tournaments (#189).

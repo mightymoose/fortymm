@@ -202,6 +202,10 @@ def test_signed_illegal_scores_are_refused_after_the_signatures(
         pytest.param(
             ((11, 6), (11, 7), (11, 8), (11, 9)), Completed(), 7, id="best of 7"
         ),
+        pytest.param(((11, 6),), Completed(), 1, id="best of 1"),
+        pytest.param(((13, 11),), Completed(), 1, id="best of 1 past deuce"),
+        pytest.param(((5, 8),), Retired(0), 1, id="best of 1 retired mid game"),
+        pytest.param((), Retired(1), 1, id="best of 1 retired before a point"),
         pytest.param((), Retired(0), 5, id="retired before a point"),
         pytest.param(((11, 5), (4, 2)), Retired(1), 5, id="retired mid game"),
         pytest.param(((11, 5), (10, 10)), Retired(1), 5, id="retired at deuce"),
@@ -234,6 +238,9 @@ def test_a_legal_ending_passes(
         pytest.param(((11, 5), (11, 7)), Retired(1), 3, id="retired at the decider"),
         pytest.param(((11, 10), (4, 2)), Retired(1), 5, id="retired after 11-10"),
         pytest.param(((11, 5), (15, 3)), Retired(1), 5, id="unreachable last game"),
+        pytest.param((), Completed(), 1, id="best of 1 with no game"),
+        pytest.param(((11, 10),), Completed(), 1, id="best of 1 unfinished"),
+        pytest.param(((11, 6),), Retired(1), 1, id="best of 1 retired after it"),
     ],
 )
 def test_an_illegal_ending_is_refused(

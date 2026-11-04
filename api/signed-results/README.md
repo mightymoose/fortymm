@@ -43,7 +43,7 @@ The result map:
 | Key | Name | Type | Meaning |
 | --- | --- | --- | --- |
 | `1` | match | bstr(16) | The match id, the 16 bytes of a UUID. The client makes it, so a result can reach the server before its match. |
-| `2` | best_of | 3, 5 or 7 | The format. |
+| `2` | best_of | 1, 3, 5 or 7 | The format. |
 | `3` | rated | bool | Whether the match counts for ratings. |
 | `4` | players | [bstr(16), bstr(16)] | The two player ids. Distinct. Their order fixes the order of each game's points. |
 | `5` | games | [[uint, uint], ...] | Each game's points, for players[0] then players[1], in the order played. 0 to best_of entries. A retirement can come before a game ends, so the last game may be unfinished. |
@@ -284,7 +284,7 @@ vector carries a signature by a fourth key that the file doesn't list.
 | Field | Type | On the wire |
 | --- | --- | --- |
 | `match` | UUID | `1`, bstr(16) |
-| `best_of` | 3, 5 or 7 | `2`, uint |
+| `best_of` | 1, 3, 5 or 7 | `2`, uint |
 | `rated` | boolean | `3`, `true` or `false` |
 | `players` | [UUID, UUID] | `4`, [bstr(16), bstr(16)] |
 | `games` | [[uint, uint], ...] | `5` |
@@ -410,6 +410,8 @@ Valid:
 | `one-key-for-both-players` | `cy` approves for both sides. |
 | `two-keys-for-one-player` | `ann` and `cy` both approve for side 0, then `bo` for side 1. Three signatures, 459 bytes. |
 | `same-signature-twice` | The same COSE_Signature twice. `approvals` has one entry. |
+| `completed-best-of-1` | Best of 1, one game, two signatures. |
+| `retired-in-best-of-1` | Best of 1, `retired_by` 0 in its one game, which is unfinished. |
 
 Invalid, `malformed` unless marked. Every vector has one fault, except the
 three precedence vectors and `signer-alg-label-true`. The precedence vectors
@@ -453,6 +455,7 @@ picks.
 | `bad-signature-then-short-signature` | Precedence. A well-formed signature with one bit flipped, which fails to verify, then a 63-byte signature. `malformed` wins over `bad_signature`. |
 | `points-as-bignum` | The first game's first points as 2^64, a tag 2 bignum. |
 | `issued-at-after-9999` | `iat` 253402300800, one second after 9999-12-31T23:59:59Z. |
+| `best-of-2` | `best_of` 2 in `completed-best-of-1`. A match is best of an odd number. |
 
 Registrations:
 
