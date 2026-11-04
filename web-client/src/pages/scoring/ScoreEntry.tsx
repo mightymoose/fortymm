@@ -1,7 +1,6 @@
-import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useId, useRef, useState, type ReactNode } from 'react'
-import { classifyFailure, failureMessages, NoSigningKey } from '../../api/errors'
+import { classifyFailure, failureMessages } from '../../api/errors'
 import { Button } from '../../components/Button'
 import { FieldError } from '../../components/FieldError'
 import { Icon } from '../../components/Icon'
@@ -9,11 +8,9 @@ import { PlayerAvatar } from '../../components/PlayerAvatar'
 import { otherSide, parseGameScore, tally, type GamePoints, type Side } from '../../scoring/board'
 import { saveBoard } from '../../scoring/boards'
 import type { Match, Viewer } from '../../scoring/demoMatches'
-import { draftHash, gamesOf, nowSeconds, replacesOf, resultOf, type Fragment } from '../../scoring/fragment'
+import { draftHash, gamesOf, nowSeconds, replacesOf, type Fragment } from '../../scoring/fragment'
 import { planPress, slotsOf } from '../../scoring/planPress'
-import { signWithDeviceKey } from '../../signing/deviceKey'
-import { signResult } from '../../signing/envelope'
-import { base64url } from '../../signing/text'
+import type { SubmitResult } from './useSubmitResult'
 import { gamesWon, PATH, playerLabel, shown, wins, type Sides } from './sides'
 
 // The pad that edits one game: a score input per player with the games
@@ -26,12 +23,14 @@ export function ScoreEntry({
   fragment,
   viewer,
   sides,
+  submit,
 }: {
   match: Match
   gameNumber: number
   fragment: Fragment
   viewer: Viewer
   sides: Sides
+  submit: SubmitResult
 }) {
   const navigate = useNavigate()
   const feedbackId = useId()
@@ -44,20 +43,6 @@ export function ScoreEntry({
   const invalid = entry.kind === 'malformed' || entry.kind === 'illegal'
   const press = planPress(games, viewer, gameNumber, entry, match.bestOf)
 
-  const submit = useMutation({
-    networkMode: 'always',
-    mutationFn: async ({ submitted, side }: { submitted: GamePoints[]; side: Side }) => {
-      const signer = await signWithDeviceKey()
-      if (!signer) throw new NoSigningKey()
-      const result = resultOf(match, submitted, await replacesOf(fragment))
-      return signResult(signer, nowSeconds(), result, side)
-    },
-    onSuccess: (envelope) => {
-      const hash = base64url(envelope)
-      saveBoard(match.id, hash)
-      return navigate({ to: '/matches/$matchId/scores/submission', params: { matchId: match.id }, search: true, hash })
-    },
-  })
   const failure = submit.error && failureMessages[classifyFailure(submit.error).kind]
 
   async function show(next: GamePoints[], game: number) {
@@ -101,7 +86,9 @@ export function ScoreEntry({
         return
       }
       case 'submit':
-        if (viewer.role === 'player' && !submit.isPending) submit.mutate({ submitted: press.games, side: viewer.side })
+        if (viewer.role === 'player' && !submit.isPending) {
+          submit.mutate({ submitted: press.games, side: viewer.side, gameNumber })
+        }
     }
   }
 

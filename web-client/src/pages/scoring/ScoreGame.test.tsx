@@ -264,6 +264,20 @@ describe('ScoreGame', () => {
     expect(page.pathname).toBe(`${EDIT}/3/edit`)
   })
 
+  it('keeps the deciding score in the URL when the result can’t be signed', async () => {
+    const page = await ScoreGamePage.render(`${EDIT}/3/edit#${draft([[11, 1], [11, 2]])}`)
+    await takeKey()
+
+    await page.enter({ [ME]: '11', [OPPONENT]: '3' })
+    await page.click('Submit result')
+
+    expect(await page.findAlert()).toHaveTextContent('This browser can’t sign the result yet')
+    const href = page.href
+    page.close()
+    const reloaded = await ScoreGamePage.render(href)
+    expect([1, 2, 3].map((game) => reloaded.slotScore(game))).toEqual(['11–1', '11–2', '11–3'])
+  })
+
   it('says which game to clear when one was played after the decider', async () => {
     const page = await ScoreGamePage.render(`${EDIT}/2/edit#${draft([[11, 1], [1, 11], [11, 2], [11, 3]])}`)
 

@@ -12,6 +12,7 @@ import { useBoardSync } from '../../scoring/sync'
 import { GameStrip } from './GameStrip'
 import { ResultPanel } from './ResultPanel'
 import { ScoreEntry } from './ScoreEntry'
+import { useSubmitResult } from './useSubmitResult'
 import { midSentence, PATH, playerLabel, ROUTE, sidesFor } from './sides'
 import { TestingPanel } from './TestingPanel'
 import './scoring.css'
@@ -57,6 +58,7 @@ export function ScoreGame() {
   const boards = useSyncExternalStore(subscribeBoards, () => boardsOf(match.id))
   // Only a board waiting to go marks games, so a board from a link that
   // nobody saved here doesn't read as stuck.
+  const submit = useSubmitResult(match, fragment)
   const unsynced =
     boards.pending === null
       ? new Set<number>()
@@ -87,6 +89,7 @@ export function ScoreGame() {
           fragment={fragment}
           viewer={viewer}
           sides={sides}
+          submit={submit}
         />
         <GameStrip
           match={match}
