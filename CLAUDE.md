@@ -628,8 +628,8 @@ making a match, `services/opponents.py` those of picking an opponent, and
 - `POST /v1/matches` makes a match, through `create_match()`. It takes
   the match's `id`, made on the device, `best_of`, `rated` and `players`,
   side 0's then side 1's. It needs `matches.create`, which no guest
-  holds, and the account needn't play in it. The match goes in the default league with `team_size` 1. Each
-  side stores the player that survives any merge. A new match answers
+  holds, and the account needn't play in it. The match goes in the
+  default league with `team_size` 1. A new match answers
   201, and one that exists with the same details 200, both with only its
   id, `{"data": {"id": "<uuid>"}}`. `create_match()` returns `Created` or
   `Found` with the id, or `Refused`. Other details answer 409
@@ -637,10 +637,12 @@ making a match, `services/opponents.py` those of picking an opponent, and
   and best of differ from the match's". Players are compared side by
   side after resolving `merged_into`, so a request from before a merge
   still fits. A player that doesn't exist answers 422 ("A player of the
-  match doesn't exist", `UnknownPlayer`), and so do two sides that are
-  one player after merges ("Both sides of the match are the same
-  player", `SamePlayer`). Neither writes anything. Both checks are only
-  for a new match. An existing id is looked up first, so a retry after
+  match doesn't exist", `UnknownPlayer`), and so do a player merged into
+  another ("A player of the match merged into another player. Pick them
+  again", `MergedPlayer`) and one player on both sides ("Both sides of
+  the match are the same player", `SamePlayer`). So a new match stores
+  exactly the players the device sent, which its scoring link names.
+  None of them writes anything. These checks are only for a new match. An existing id is looked up first, so a retry after
   the two players merged still finds its match.
 - Two creates of one id take turns on an advisory lock on the id
   (`MATCH_LOCK`), because a row lock can't hold a match that isn't there
@@ -1035,7 +1037,8 @@ it to `src/routes/`.
   the first press made. Then the page opens game 1 of the match's
   scores, with a draft of no games as the fragment, so the scores open
   with no network. Nothing caches the match. A 422 shows the API's
-  title. While `navigator.onLine` is false, Start match sends
+  title and loads the opponents again, since a player may have merged.
+  A create that answers after the person left the page opens nothing. While `navigator.onLine` is false, Start match sends
   nothing, and a request that gets no response is the same. Both say
   "Making a match needs a connection. Connect, then press Start match
   again." The form keeps its state, and the next press sends the same id.
@@ -1198,7 +1201,8 @@ it to `src/routes/`.
   same route match. So the routes set `shouldReload: true` and a
   `blocking` loader, and the loader runs again before the page renders.
 - The edit route drops a fragment it can't read. It redirects to game 1
-  with no hash, with a replace, so a reload or a share doesn't carry it,
+  with no scores, with a replace. An API match's fragment keeps its
+  details, and a demo match's is empty, so a reload or a share doesn't carry it,
   and sets `discardedScores` in the router's history state (typed in
   `src/router.tsx`). The page then says "This link’s scores couldn’t be
   read, so the scores start empty." A game number past the first game
@@ -1271,7 +1275,8 @@ it to `src/routes/`.
   that came back does. Tests set it with `setDemoNetwork()`.
 - A Testing panel at the bottom of the edit page (`TestingPanel.tsx`)
   switches the network. Reset match clears the server's board and this
-  tab's unsent one, and opens game 1 with no hash. Clear everything does
+  tab's unsent one, and opens game 1 with no scores. An API match keeps
+  its details in the fragment. Clear everything does
   that for every demo match and sets the network back to `normal`. Both
   drop the demo server's requests in flight, so a late one can't bring
   back what they cleared. The panel goes when the API has matches.

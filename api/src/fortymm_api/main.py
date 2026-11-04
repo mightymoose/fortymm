@@ -14,7 +14,7 @@ from fortymm_api.database import create_database_engine, migrate
 from fortymm_api.identity_provider import IdentityProvider
 from fortymm_api.services.authorization import MissingPermission
 from fortymm_api.services.match_results import IllegalEnding, WrongMatch
-from fortymm_api.services.matches import SamePlayer, UnknownPlayer
+from fortymm_api.services.matches import MergedPlayer, SamePlayer, UnknownPlayer
 from fortymm_api.services.player_merge import PlayedEachOther
 from fortymm_api.services.players import (
     PlayerNotManaged,
@@ -89,6 +89,10 @@ APPROVAL_ERRORS: dict[type[Exception], tuple[int, str]] = {
 }
 MATCH_ERRORS: dict[type[Exception], tuple[int, str]] = {
     UnknownPlayer: (422, "A player of the match doesn't exist"),
+    MergedPlayer: (
+        422,
+        "A player of the match merged into another player. Pick them again",
+    ),
     SamePlayer: (422, "Both sides of the match are the same player"),
 }
 AUTH0_SETTINGS = ("AUTH0_DOMAIN", "AUTH0_CLIENT_ID", "AUTH0_CLIENT_SECRET")

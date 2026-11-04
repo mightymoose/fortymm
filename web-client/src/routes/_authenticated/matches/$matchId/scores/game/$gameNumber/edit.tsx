@@ -2,7 +2,7 @@ import { createFileRoute, redirect } from '@tanstack/react-router'
 import { sessionQuery } from '../../../../../../../api/queries'
 import { ScoreGame } from '../../../../../../../pages/scoring/ScoreGame'
 import { matchOf, scoringMatch } from '../../../../../../../scoring/matches'
-import { gamesOf, readFragment } from '../../../../../../../scoring/fragment'
+import { draftHash, gamesOf, nowSeconds, readFragment } from '../../../../../../../scoring/fragment'
 
 const PATH = '/matches/$matchId/scores/game/$gameNumber/edit'
 
@@ -28,7 +28,8 @@ export const Route = createFileRoute('/_authenticated/matches/$matchId/scores/ga
           to: PATH,
           params: { matchId: params.matchId, gameNumber: '1' },
           search: true,
-          hash: '',
+          // An API match's details stay, because nothing else knows them.
+          hash: draftHash(match, [], null, nowSeconds()),
           state: { discardedScores: true },
           replace: true,
         })

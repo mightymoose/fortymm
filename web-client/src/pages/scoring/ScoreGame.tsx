@@ -103,7 +103,7 @@ export function ScoreGame() {
           sync={sync}
         />
         <ResultPanel match={match} viewer={viewer} />
-        <TestingPanel />
+        <TestingPanel match={match} />
       </main>
     </div>
   )

@@ -11,12 +11,13 @@ from sqlalchemy.orm import Session
 
 from fortymm_api.accounts import AccountId, PlayerId
 from fortymm_api.matches import MatchId
-from fortymm_api.models import Match, MatchSidePlayer
+from fortymm_api.models import Match
 from fortymm_api.services.matches import (
     Created,
     Difference,
     Found,
     MatchDetails,
+    MergedPlayer,
     Refusal,
     Refused,
     SamePlayer,
@@ -129,27 +130,16 @@ def test_a_create_with_other_details_is_refused_with_what_differs(
     assert refused == Refused(Refusal.MATCH_DIFFERS, frozenset(differences))
 
 
-def test_a_merged_player_is_stored_as_its_survivor(migrated_database: Engine) -> None:
+def test_a_new_match_naming_a_merged_player_is_not_made(
+    migrated_database: Engine,
+) -> None:
     account, ann, bea = two_players(migrated_database)
     alias = in_transaction(migrated_database, add_player)
     in_transaction(migrated_database, lambda session: merge(session, alias, ann))
 
-    created = create(migrated_database, MatchDetails(3, False, (alias, bea)), account)
-    again = create(migrated_database, MatchDetails(3, False, (ann, bea)), account)
-
-    assert isinstance(created, Created)
-    assert again == Found(MATCH)
-    stored = in_transaction(
-        migrated_database,
-        lambda session: set(
-            session.scalars(
-                select(MatchSidePlayer.player_id).where(
-                    MatchSidePlayer.match_id == MATCH
-                )
-            )
-        ),
-    )
-    assert stored == {ann, bea}
+    with pytest.raises(MergedPlayer):
+        create(migrated_database, MatchDetails(3, False, (alias, bea)), account)
+    assert match_count(migrated_database) == 0
 
 
 def test_a_create_from_before_a_merge_finds_the_match(
@@ -192,13 +182,9 @@ def test_a_match_with_an_unknown_player_is_not_made(
 
 def test_one_player_on_both_sides_is_not_made(migrated_database: Engine) -> None:
     account, ann, _ = two_players(migrated_database)
-    alias = in_transaction(migrated_database, add_player)
-    in_transaction(migrated_database, lambda session: merge(session, alias, ann))
 
     with pytest.raises(SamePlayer):
         create(migrated_database, MatchDetails(3, False, (ann, ann)), account)
-    with pytest.raises(SamePlayer):
-        create(migrated_database, MatchDetails(3, False, (alias, ann)), account)
     assert match_count(migrated_database) == 0
 
 

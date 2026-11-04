@@ -72,9 +72,14 @@ class UnknownPlayer(Exception):
     answers 422."""
 
 
+class MergedPlayer(Exception):
+    """A new match would name a player merged into another. `create_app()`
+    answers 422, so the device picks the player again."""
+
+
 class SamePlayer(Exception):
-    """Both sides of a match would be one player, after merges.
-    `create_app()` answers 422."""
+    """Both sides of a match would be one player. `create_app()` answers
+    422."""
 
 
 def create_match(
@@ -82,14 +87,15 @@ def create_match(
 ) -> Created | Found | Refused:
     """Make the match in the default league, as the account's, or find it if
     it exists with the same details, so a retry or a second device gets the
-    same answer. Refused with what differs otherwise. Raises UnknownPlayer
-    or SamePlayer, and writes nothing, for players that can't play a new
-    match. An existing match is found first, so a retry after its players
-    merged still finds it.
+    same answer. Refused with what differs otherwise. Raises UnknownPlayer,
+    MergedPlayer or SamePlayer, and writes nothing, for players that can't
+    play a new match. An existing match is found first, so a retry after its
+    players merged still finds it.
 
-    Each side stores the player that survives any merge. Anyone may make a
-    match, and it grants nobody anything: who may approve its results is
-    the players' managers' business.
+    A new match names only players that aren't merged, so the device's copy
+    of the match names the players stored. Making a match grants nobody
+    anything: who may approve its results is the players' managers'
+    business.
     """
     lock_account_for_write(session, account)
     # A row lock can't hold a match that isn't there yet, so two creates of
@@ -105,7 +111,9 @@ def create_match(
     survivors = _survivors(session, details.players)
     if any(player not in survivors for player in details.players):
         raise UnknownPlayer
-    first, second = (survivors[player] for player in details.players)
+    if any(survivors[player] != player for player in details.players):
+        raise MergedPlayer
+    first, second = details.players
     if first == second:
         raise SamePlayer
     settings = session.scalar(

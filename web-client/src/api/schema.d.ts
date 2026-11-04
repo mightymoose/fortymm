@@ -1903,7 +1903,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorsResponse"];
                 };
             };
-            /** @description The body is invalid. If a player doesn't exist, or both sides are the same player after merges, the body is in the `errors` shape instead */
+            /** @description The body is invalid. If a player doesn't exist, merged into another player, or plays both sides, the body is in the `errors` shape instead */
             422: {
                 headers: {
                     [name: string]: unknown;

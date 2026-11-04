@@ -1,6 +1,6 @@
 import { useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useRouteContext } from '@tanstack/react-router'
-import { useId, useReducer, useRef } from 'react'
+import { useEffect, useId, useReducer, useRef } from 'react'
 import { ApiError, ApiUnreachable, classifyFailure, failureMessages } from '../../api/errors'
 import { createMatch, OPPONENTS_KEY, sessionQuery } from '../../api/queries'
 import { uuidv7 } from '../../api/uuidv7'
@@ -35,6 +35,14 @@ export function NewMatch() {
   // A second press before React renders again would see the first press's
   // state and send another match.
   const sending = useRef(false)
+  // A create that answers after the person left the page opens nothing.
+  const left = useRef(false)
+  useEffect(() => {
+    left.current = false
+    return () => {
+      left.current = true
+    }
+  }, [])
   const opponentErrorId = useId()
 
   async function start() {
@@ -56,6 +64,7 @@ export function NewMatch() {
     try {
       await createMatch(api, request)
       void queryClient.invalidateQueries({ queryKey: OPPONENTS_KEY })
+      if (left.current) return
       // The fragment carries the match, so its scores open with no network.
       await navigate({
         to: '/matches/$matchId/scores/game/$gameNumber/edit',
@@ -64,6 +73,8 @@ export function NewMatch() {
       })
     } catch (error) {
       if (error instanceof ApiError && error.status === 422 && error.title) {
+        // A player may have merged since the list loaded.
+        void queryClient.invalidateQueries({ queryKey: OPPONENTS_KEY })
         dispatch({ type: 'refused', title: error.title })
       } else if (error instanceof ApiUnreachable) {
         dispatch({ type: 'offline' })

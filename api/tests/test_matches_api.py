@@ -6,10 +6,11 @@ from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
-from match_setup import add_player
+from match_setup import add_player, merge
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import sessionmaker
 
+from fortymm_api.accounts import PlayerId
 from fortymm_api.main import create_app
 from fortymm_api.matches import MatchId
 from fortymm_api.models import Player
@@ -119,14 +120,32 @@ def test_other_details_answer_409_with_what_differs(
 @pytest.mark.parametrize(
     ("other", "title"),
     [
-        (None, "A player of the match doesn't exist"),
-        (0, "Both sides of the match are the same player"),
+        ("unknown", "A player of the match doesn't exist"),
+        (
+            "merged",
+            "A player of the match merged into another player. Pick them again",
+        ),
+        ("same", "Both sides of the match are the same player"),
     ],
 )
 def test_players_that_cannot_play_answer_422_in_the_errors_shape(
-    client: TestClient, players: list[dict[str, str]], other: int | None, title: str
+    client: TestClient,
+    migrated_database: Engine,
+    players: list[dict[str, str]],
+    other: str,
+    title: str,
 ) -> None:
-    second = {"id": str(uuid.uuid4())} if other is None else players[other]
+    second = {"id": str(uuid.uuid4())}
+    if other == "merged":
+        with sessionmaker(migrated_database).begin() as session:
+            merge(
+                session,
+                PlayerId(uuid.UUID(players[1]["id"])),
+                PlayerId(uuid.UUID(players[0]["id"])),
+            )
+        second = players[1]
+    elif other == "same":
+        second = players[0]
 
     response = client.post(
         "/v1/matches", headers=JSON, json=create_body([players[0], second])

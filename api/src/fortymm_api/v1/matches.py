@@ -147,9 +147,9 @@ CREATE_ERRORS: Responses = {
     # This entry replaces FastAPI's own 422, so it repeats its body.
     422: {
         "description": (
-            "The body is invalid. If a player doesn't exist, or both sides are"
-            " the same player after merges, the body is in the `errors` shape"
-            " instead"
+            "The body is invalid. If a player doesn't exist, merged into"
+            " another player, or plays both sides, the body is in the `errors`"
+            " shape instead"
         ),
         "content": {
             "application/json": {

@@ -1,9 +1,10 @@
 import { cleanup, screen, waitFor } from '@testing-library/react'
+import { http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { HomePage } from '../../test/pages/HomePage'
 import { NewMatchPage } from '../../test/pages/NewMatchPage'
 import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
-import { mockMatches, sessionResponse } from '../../test/server'
+import { API_BASE_URL, mockMatches, server, sessionResponse } from '../../test/server'
 
 const self = sessionResponse.data.account.player
 const badger = { id: '6f1d2c43-8b5e-4a0f-9c71-2e4b8d0a5f13', display_name: 'brave badger 214' }
@@ -196,6 +197,49 @@ describe('NewMatch', () => {
     expect(scores.heading).toHaveTextContent('Game 1')
     expect(scores.gameCount).toBe(3)
     expect(scores.sides).toEqual(['You', 'Your opponent'])
+  })
+
+  it('keeps the match it made when its scores start over', async () => {
+    mockMatches({ recent: [badger] })
+    const page = await NewMatchPage.render()
+    await page.findRecent()
+    await page.pick(badger.display_name)
+    page.lengthOption('3 Short').click()
+    await page.start()
+    await waitFor(() => expect(page.pathname).toMatch(/\/scores\/game\/1\/edit$/))
+    const scores = new ScoreGamePage(page.router)
+    await scores.enter({ You: '11', 'Your opponent': '5' })
+    await scores.save()
+    expect(scores.tally).toBe('1–0')
+
+    await scores.click('Reset match')
+
+    expect(scores.heading).toHaveTextContent('Game 1')
+    expect(scores.gameCount).toBe(3)
+    expect(scores.tally).toBe('0–0')
+    expect(scores.sides).toEqual(['You', 'Your opponent'])
+  })
+
+  it('opens nothing when the person leaves before the match is made', async () => {
+    mockMatches({ recent: [badger] })
+    let answer = () => {}
+    server.use(
+      http.post(`${API_BASE_URL}/v1/matches`, async ({ request }) => {
+        const { id } = (await request.json()) as { id: string }
+        await new Promise<void>((resolve) => (answer = resolve))
+        return HttpResponse.json({ data: { id } }, { status: 201 })
+      }),
+    )
+    const page = await NewMatchPage.render()
+    await page.findRecent()
+    await page.pick(badger.display_name)
+    await page.start()
+
+    await page.router.navigate({ to: '/' })
+    answer()
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(page.pathname).toBe('/')
   })
 
   it('shows the API’s reason when it refuses the match', async () => {
