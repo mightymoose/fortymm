@@ -334,30 +334,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/matches/{match_id}/approvals": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Create Match Approval
-         * @description Check a result that the match's players signed, and accept it.
-         *
-         *     It needs no session: the signatures are the authority. Today it checks
-         *     the envelope's format, the match, every signature and that the scores
-         *     are a legal ending, and stores nothing.
-         */
-        post: operations["create_match_approval"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/matches/opponents": {
         parameters: {
             query?: never;
@@ -403,6 +379,60 @@ export interface paths {
          *     match.
          */
         post: operations["create_match"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/matches/{match_id}/boards": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Push Match Board
+         * @description Keep the scorer's board, so spectators can follow the match.
+         *
+         *     Anyone may push one, with or without a session. The newest board wins,
+         *     and nothing about it is checked but its format: its signatures, if any,
+         *     and its scores settle nothing. A board for a match that doesn't exist
+         *     answers 404 and writes nothing. Every other push is logged, refused or
+         *     not.
+         */
+        post: operations["push_match_board"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/matches/{match_id}/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Match Approval
+         * @description Record a result that the match's players signed, with its approvals.
+         *
+         *     It needs no session: the signatures are the authority, and each one's
+         *     account must play as or manage the player it signs for. A rated result
+         *     counts once both sides approve it, and an unrated one once either side
+         *     does. A correction of a final match needs both sides. A result for a
+         *     match that doesn't exist answers 404 and writes nothing. An exact retry
+         *     answers the result again, whatever its keys' state. Every other upload
+         *     is logged, refused or not.
+         */
+        post: operations["create_match_approval"];
         delete?: never;
         options?: never;
         head?: never;
@@ -684,6 +714,31 @@ export interface paths {
         get: operations["admin_player"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/matches/{match_id}/override": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Override Match Result
+         * @description Impose a result on the match, with a reason. Needs `matches.override`.
+         *
+         *     The server encodes the scores as a result that replaces the match's
+         *     newest one and counts at once, with no approvals. The match is final
+         *     with it. A device still holding a result it replaced gets a 409, and
+         *     players can still correct it the normal way.
+         */
+        post: operations["override_match_result"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1095,6 +1150,17 @@ export interface components {
         ApprovalResponse: {
             data: components["schemas"]["CheckedResult"];
         };
+        /** @enum {string} */
+        Authority: "self" | "representative";
+        /** BoardRequest */
+        BoardRequest: {
+            /** Board */
+            board: string;
+        };
+        /** BoardResponse */
+        BoardResponse: {
+            data: components["schemas"]["PushedBoard"];
+        };
         /** CheckedResult */
         CheckedResult: {
             /** Hash */
@@ -1106,6 +1172,11 @@ export interface components {
             match_id: string;
             /** Approvals */
             approvals: components["schemas"]["MatchApproval"][];
+            /**
+             * Accepted At
+             * Format: date-time
+             */
+            accepted_at: string | null;
         };
         /** Error */
         Error: {
@@ -1172,6 +1243,9 @@ export interface components {
              * Format: uuid
              */
             player_id: string;
+            /** Side */
+            side: number;
+            authority: components["schemas"]["Authority"];
         };
         /** MatchRequest */
         MatchRequest: {
@@ -1237,6 +1311,42 @@ export interface components {
             /** Data */
             data: components["schemas"]["Opponent"][];
         };
+        /** OverriddenResult */
+        OverriddenResult: {
+            /** Hash */
+            hash: string;
+            /**
+             * Match Id
+             * Format: uuid
+             */
+            match_id: string;
+            /**
+             * Accepted At
+             * Format: date-time
+             */
+            accepted_at: string | null;
+        };
+        /** OverrideRequest */
+        OverrideRequest: {
+            /** Games */
+            games: number[][];
+            /**
+             * Ending
+             * @enum {string}
+             */
+            ending: "completed" | "retired";
+            /**
+             * Retired By
+             * @enum {integer|null}
+             */
+            retired_by?: 0 | 1 | null;
+            /** Reason */
+            reason: string;
+        };
+        /** OverrideResponse */
+        OverrideResponse: {
+            data: components["schemas"]["OverriddenResult"];
+        };
         /** PermissionRequest */
         PermissionRequest: {
             /**
@@ -1244,6 +1354,19 @@ export interface components {
              * @default
              */
             description: string;
+        };
+        /** PushedBoard */
+        PushedBoard: {
+            /**
+             * Match Id
+             * Format: uuid
+             */
+            match_id: string;
+            /**
+             * Received At
+             * Format: date-time
+             */
+            received_at: string;
         };
         /** RecentMatch */
         RecentMatch: {
@@ -1912,50 +2035,6 @@ export interface operations {
             };
         };
     };
-    create_match_approval: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                match_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ApprovalRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApprovalResponse"];
-                };
-            };
-            /** @description The request's Content-Type isn't application/json */
-            415: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorsResponse"];
-                };
-            };
-            /** @description The body is invalid. If the envelope isn't a signed result, is for another match, cites a key that isn't registered or was revoked, has a signature that doesn't verify, or its scores aren't a legal ending, the body is in the `errors` shape instead */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     match_opponents: {
         parameters: {
             query?: {
@@ -2064,6 +2143,130 @@ export interface operations {
                 };
             };
             /** @description The body is invalid. If a player doesn't exist, merged into another player, or plays both sides, the body is in the `errors` shape instead */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    push_match_board: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                match_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BoardRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoardResponse"];
+                };
+            };
+            /** @description No match has this id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The match has other players, best of or rated status, and the title says which. Or the match is final */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The request's Content-Type isn't application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The body is invalid. If the board isn't a draft payload or an envelope of the format, or is for another match, the body is in the `errors` shape instead */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_match_approval: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                match_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalResponse"];
+                };
+            };
+            /** @description No match has this id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The match has other players, best of or rated status, and the title says which. Or another result replaced this one, the result doesn't replace the match's newest result, or a merge made both sides one player */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The request's Content-Type isn't application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The body is invalid. If the envelope isn't a signed result, is for another match, cites a key that isn't registered or was revoked, has a signature that doesn't verify, its scores aren't a legal ending, or a signature's account may not approve for its player, the body is in the `errors` shape instead */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -2988,6 +3191,77 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    override_match_result: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                match_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OverrideRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OverrideResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description No match has this id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The request's Content-Type isn't application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The body is invalid. If the reason is blank or the scores aren't a legal ending to the match, the body is in the `errors` shape instead */
             422: {
                 headers: {
                     [name: string]: unknown;

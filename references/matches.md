@@ -5,7 +5,8 @@ how a score turns into a result, and why the rules are what they are. It
 covers the server's tables and the rules the services apply to them. The
 signed result format itself is specified in
 `api/signed-results/README.md`. The tables are in
-`api/src/fortymm_api/models.py`.
+`api/src/fortymm_api/models.py`, and the rules in
+`api/src/fortymm_api/services/matches.py` and `match_results.py`.
 
 The decisions behind this design are in the epic, #181, and in #187 and
 #188.
@@ -45,11 +46,16 @@ The match's id is made on the device (a UUIDv7), so a retry names the
 match the first try made. `POST /v1/matches` creates it, with the id in
 its body. It answers with only the id, `{"data": {"id": "<uuid>"}}`, 201
 for a new match. A retry with the same details finds the match and answers
-200, and one with other details gets a 409. No route reads a match back.
-The web client's scoring page reads the match from its URL fragment alone,
-which holds the id, the format, `rated` and the players from the first
-draft on. So it opens with no signal, and a fragment that is empty, can't
-be read or names another match shows the not-found page.
+200, and one with other details gets a 409. The web client's scoring page
+reads the match from its URL fragment alone, which holds the id, the
+format, `rated` and the players from the first draft on. So it opens with
+no signal, and a fragment that is empty, can't be read or names another
+match shows the not-found page.
+
+Only `POST /v1/matches` makes a match. A board or a result for a match
+the server doesn't know gets a 404, and nothing is written. Both carry
+the match id, the format, `rated` and the players, so the server can tell
+one that doesn't fit the match it names.
 
 A match is best of 1, 3, 5 or 7, with games to 11, won by 2. Only singles
 for now (`team_size` 1). The tables already have sides of players, so
@@ -184,8 +190,7 @@ or nothing if it's the first.
 | A correction of an accepted result | Both sides, rated or not. |
 
 The last row stops a ping-pong. Without it, two players in an unrated
-match could each overwrite the other forever with one signature. It's the
-default until #188 settles it.
+match could each overwrite the other forever with one signature.
 
 The service checks the rule when the last needed approval arrives. It
 locks the match first, so two approvals arriving at once can't both move
@@ -221,7 +226,9 @@ replaced or cut off gets a 409.
 - **Player merge.** Rows keep the player ids they were written with. Reads
   and comparisons resolve `merged_into` first, so a result signed before a
   merge still matches its match. Two players who played each other, in a
-  match with a result, never merge, so the two sides stay two people.
+  match with a result, never merge, so the two sides stay two people. A
+  merge of two players who share only a match with no result still can, and
+  a result for that match is then refused with `same_player`.
 - **Guest adoption.** A match, a submission and an approval keep naming the
   guest account that acted. The guest's row stays, with `adopted_into` set,
   so the history can still be followed. These columns are `KEPT_AS_RECORD`
@@ -238,25 +245,32 @@ replaced or cut off gets a 409.
 - The server judges every upload when it arrives. A time the device
   claims bypasses nothing.
 
-## For whoever builds the services
+## How the services keep the rules
 
-- **Refusals and the log.** A refusal that raises inside the request's
-  transaction rolls back its own submission row. Write the refusal's row
-  in a transaction of its own, or don't raise until the row is written.
-- **The database's own refusals.** `one_successor` can refuse an insert
-  when two counters race. Catch it, answer 409, and still log the
-  submission.
+- **Refusals and the log.** A refusal that raised inside the request's
+  transaction would roll back its own submission row. So a service
+  returns a refusal as a value, `Refused`, once the match exists, and the
+  route answers it without raising. The row commits with the request.
+- **The match's lock.** Every write to a match locks its row first, so
+  two counters take turns. The second counter finds a new head and gets
+  a 409, logged. `one_successor` stays as the database's backstop.
 - **Who sent a result, and when.** That's its first submission
   (`min(id)` where `result_id` is the result). The result row doesn't
   store it.
-- **Find a result by hash.** Write `sha256(payload) = :hash` exactly, so
-  the index applies.
+- **Find a result by hash.** The services write `sha256(payload) =
+  :hash` exactly, so the index applies.
+- **A retry.** A signature already recorded with the same bytes needs no
+  key, so an exact retry converges whatever happened to its keys.
 
 ## Not built yet
 
-- The routes and services that record boards, results, approvals and
-  overrides (#187, #188). Only `POST /v1/matches` writes these tables
-  yet.
+- Reading a match. No route reads one yet. The reads come with the match
+  pages that need them, so spectators can't follow a board yet.
+- The clients sending boards and results to these routes, rather than to
+  the demo server (#195).
+- Player short codes for picking an opponent (#187).
+- Counting a match as a player's activity for "Is this you?" (#124), and
+  a player's match count.
 - Doubles: a v2 payload and the doubles approval rule.
 - Walkovers, voids, pre-play states such as scheduled and called, and
   director rulings, which come with tournaments (#189).

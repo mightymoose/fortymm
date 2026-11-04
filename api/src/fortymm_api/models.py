@@ -452,7 +452,7 @@ class Match(Base):
         Index("ix_matches_created_at", text("created_at DESC")),
     )
 
-    # Made on the client, so a result can reach the server before its match.
+    # Made on the client, so a match can start with no signal.
     id: Mapped[MatchId] = mapped_column(primary_key=True)
     settings_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("match_settings.id", ondelete="RESTRICT"), unique=True

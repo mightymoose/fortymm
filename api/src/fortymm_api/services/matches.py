@@ -1,13 +1,19 @@
-"""Matches: making one, and comparing what a request says about it with what
-it is (#187).
+"""Matches: making one, taking its lock, comparing what a request says about
+it with what it is, and its boards (#187).
+services/match_results.py records results (#188).
 
-A device makes the match id, so a match can start with no signal. A create
-whose details differ from the match's is refused, and says what differs.
-Players are compared through merged_into, so a request from before a merge
-still fits.
+Only `create_match()` makes a match, so a board, result or override for a
+match that doesn't exist raises MatchNotFound and writes nothing. One whose
+details differ from the match's is refused, and says what differs. Players
+are compared through merged_into, so a request from before a merge still
+fits.
+
+A write that a refusal can follow returns Refused rather than raising, so
+the request's transaction still commits the submission that logs it.
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
@@ -15,22 +21,36 @@ from sqlalchemy import func, insert, select
 from sqlalchemy.orm import Session, aliased
 
 from fortymm_api.accounts import AccountId, PlayerId
-from fortymm_api.matches import BestOf, MatchId
+from fortymm_api.matches import BestOf, MatchId, MatchResultId
 from fortymm_api.models import (
     League,
     Match,
+    MatchApproval,
     MatchSettings,
     MatchSide,
     MatchSidePlayer,
+    MatchSubmission,
     Player,
 )
-from fortymm_api.services.sessions import lock_account_for_write
+from fortymm_api.services.sessions import ClientNetwork, lock_account_for_write
+from fortymm_api.signed_results import (
+    Malformed,
+    MatchResult,
+    Side,
+    decode_envelope,
+    decode_payload,
+)
+from fortymm_api.signing_keys import KeyId
 
 # The class key of pg_advisory_xact_lock(int, int), whose keyspace doesn't
 # meet the one-key locks of sign-in and roles.
 MATCH_LOCK = int.from_bytes(b"MTCH")
 
 type Difference = Literal["players", "best_of", "rated"]
+type SubmissionKind = Literal["board", "result", "override"]
+# `self` for the account's own player, `representative` for one it manages.
+type Authority = Literal["self", "representative"]
+ACCEPTED = "accepted"
 
 
 @dataclass(frozen=True)
@@ -41,11 +61,43 @@ class MatchDetails:
     rated: bool
     players: tuple[PlayerId, PlayerId]
 
+    @staticmethod
+    def of(result: MatchResult) -> MatchDetails:
+        return MatchDetails(result.best_of, result.rated, result.players)
+
+
+@dataclass(frozen=True)
+class Sender:
+    """Who sent a request: the account of its session, if it had one, and
+    the network it came from."""
+
+    account: AccountId | None
+    network: ClientNetwork | None
+
 
 class Refusal(StrEnum):
-    """Why a request for a match was refused."""
+    """Why a request for a match was refused. Its value is the submission's
+    `outcome`."""
 
+    # The bytes aren't the signed result format.
+    MALFORMED = "malformed"
+    # The payload names another match than the request's.
+    WRONG_MATCH = "wrong_match"
+    # A signature's key isn't registered, or was revoked.
+    UNKNOWN_KEY = "unknown_key"
+    BAD_SIGNATURE = "bad_signature"
+    ILLEGAL_ENDING = "illegal_ending"
+    # A new signature's account neither plays as its player nor manages it.
+    NO_AUTHORITY = "no_authority"
     MATCH_DIFFERS = "match_differs"
+    # Both sides are one player since a merge.
+    SAME_PLAYER = "same_player"
+    # New approvals for a result that another result replaced.
+    NOT_HEAD = "not_head"
+    # A new result that doesn't replace the match's head.
+    STALE = "stale"
+    # A board for a match whose result is accepted.
+    MATCH_FINAL = "match_final"
 
 
 @dataclass(frozen=True)
@@ -53,6 +105,23 @@ class Refused:
     refusal: Refusal
     # What differs, for MATCH_DIFFERS.
     differences: frozenset[Difference] = frozenset()
+
+
+@dataclass(frozen=True)
+class RecordedApproval:
+    """A signature a result counts, with the player it approved for and the
+    authority, as they were when it was accepted."""
+
+    key_id: KeyId
+    side: Side
+    # The player that survived any merge then.
+    player: PlayerId
+    authority: Authority
+
+
+@dataclass(frozen=True)
+class BoardPushed:
+    received_at: datetime
 
 
 @dataclass(frozen=True)
@@ -80,6 +149,10 @@ class MergedPlayer(Exception):
 class SamePlayer(Exception):
     """Both sides of a match would be one player. `create_app()` answers
     422."""
+
+
+class MatchNotFound(Exception):
+    """No match has this id. `create_app()` answers 404."""
 
 
 def create_match(
@@ -141,6 +214,16 @@ def create_match(
     return Created(match_id)
 
 
+def lock_match(session: Session, match_id: MatchId) -> Match:
+    """Lock the match's row FOR UPDATE until the transaction ends, and
+    return the match. Raises MatchNotFound if it doesn't exist. Every write
+    to a match's results and submissions holds it, so they take turns."""
+    match = session.scalar(select(Match).where(Match.id == match_id).with_for_update())
+    if match is None:
+        raise MatchNotFound
+    return match
+
+
 def match_differences(
     session: Session, match: Match, details: MatchDetails
 ) -> frozenset[Difference]:
@@ -159,6 +242,20 @@ def match_differences(
     return frozenset(differences)
 
 
+def sides_are_one_player(session: Session, match_id: MatchId) -> bool:
+    """Whether a merge made both sides of the match one player. Holds the
+    side players FOR SHARE until the transaction ends, so a merge of them,
+    which locks them FOR UPDATE, takes turns with the caller."""
+    survivors = session.scalars(
+        select(func.coalesce(Player.merged_into, Player.id))
+        .select_from(Player)
+        .join(MatchSidePlayer, MatchSidePlayer.player_id == Player.id)
+        .where(MatchSidePlayer.match_id == match_id)
+        .with_for_update(read=True, of=Player)
+    ).all()
+    return len(set(survivors)) < len(survivors)
+
+
 def stored_details(session: Session, match: Match) -> MatchDetails:
     """The match's details, with each side's player as it survives any
     merge."""
@@ -168,6 +265,112 @@ def stored_details(session: Session, match: Match) -> MatchDetails:
         )
     ).one()
     return MatchDetails(_best_of(best_of), rated, _side_players(session, match.id))
+
+
+def push_board(
+    session: Session, match_id: MatchId, body: bytes, sender: Sender
+) -> BoardPushed | Refused:
+    """Keep `body` as the match's board, the newest one wins. It is a draft
+    payload or an envelope, whose signatures nobody checks, because a board
+    settles nothing.
+
+    Raises MatchNotFound, and writes nothing, for a match that doesn't
+    exist. Every other push is logged, refused or not. Refused for bytes
+    that aren't the format, another match, other details than the match's,
+    or a match that is final.
+    """
+    match = lock_match(session, match_id)
+
+    def refuse(refusal: Refused | Refusal) -> Refused:
+        return log_refusal(session, match_id, "board", body, sender, refusal)
+
+    try:
+        result = _board_result(body)
+    except Malformed:
+        return refuse(Refusal.MALFORMED)
+    if result.match != match_id:
+        return refuse(Refusal.WRONG_MATCH)
+    if differences := match_differences(session, match, MatchDetails.of(result)):
+        return refuse(Refused(Refusal.MATCH_DIFFERS, differences))
+    if match.current_result_id is not None:
+        return refuse(Refusal.MATCH_FINAL)
+    submission = log_submission(session, match_id, "board", body, sender, ACCEPTED)
+    return BoardPushed(submission.received_at)
+
+
+def log_submission(
+    session: Session,
+    match_id: MatchId,
+    kind: SubmissionKind,
+    body: bytes,
+    sender: Sender,
+    outcome: str,
+    result_id: MatchResultId | None = None,
+) -> MatchSubmission:
+    """Log one request for the match, with what it sent, who sent it and its
+    outcome: ACCEPTED or a Refusal."""
+    return session.scalars(
+        insert(MatchSubmission)
+        .values(
+            match_id=match_id,
+            kind=kind,
+            body=body,
+            account_id=sender.account,
+            network=None if sender.network is None else str(sender.network),
+            outcome=outcome,
+            result_id=result_id,
+        )
+        .returning(MatchSubmission)
+    ).one()
+
+
+def log_refusal(
+    session: Session,
+    match_id: MatchId,
+    kind: SubmissionKind,
+    body: bytes,
+    sender: Sender,
+    refusal: Refused | Refusal,
+    result_id: MatchResultId | None = None,
+) -> Refused:
+    """The refusal, logged with the result it was about if it got that
+    far."""
+    refused = refusal if isinstance(refusal, Refused) else Refused(refusal)
+    log_submission(session, match_id, kind, body, sender, refused.refusal, result_id)
+    return refused
+
+
+def result_approvals(
+    session: Session, results: list[MatchResultId]
+) -> dict[MatchResultId, tuple[RecordedApproval, ...]]:
+    """Each result's approvals, sorted by key id, then side."""
+    found: dict[MatchResultId, list[RecordedApproval]] = {id: [] for id in results}
+    rows = session.execute(
+        select(
+            MatchApproval.result_id,
+            MatchApproval.key_id,
+            MatchApproval.side,
+            MatchApproval.player_id,
+            MatchApproval.authority,
+        )
+        .where(MatchApproval.result_id.in_(results))
+        .order_by(MatchApproval.key_id, MatchApproval.side)
+    )
+    for result, key, side, player, authority in rows:
+        found[result].append(
+            RecordedApproval(key, _side(side), player, _authority(authority))
+        )
+    return {id: tuple(approvals) for id, approvals in found.items()}
+
+
+def _board_result(body: bytes) -> MatchResult:
+    """The scores a board holds, read from its payload. An envelope's
+    signatures stay unchecked."""
+    try:
+        payload = decode_envelope(body).payload
+    except Malformed:
+        payload = body
+    return decode_payload(payload).result
 
 
 def _best_of(value: int) -> BestOf:
@@ -182,6 +385,14 @@ def _best_of(value: int) -> BestOf:
         case 7:
             return 7
     raise ValueError(f"best of {value} isn't a match's format")
+
+
+def _side(value: int) -> Side:
+    return 0 if value == 0 else 1
+
+
+def _authority(value: str) -> Authority:
+    return "self" if value == "self" else "representative"
 
 
 def _survivors(

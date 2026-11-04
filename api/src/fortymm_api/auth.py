@@ -83,6 +83,17 @@ def require_account(session: DatabaseSession, token: SessionToken) -> CurrentAcc
 RequestAccount = Annotated[CurrentAccount, Depends(require_account)]
 
 
+def optional_account(
+    session: DatabaseSession, token: SessionToken
+) -> CurrentAccount | None:
+    return authenticate(session, token)
+
+
+# The account of the request's session, or None, for a route that anyone may
+# call but that records who called it.
+OptionalAccount = Annotated[CurrentAccount | None, Depends(optional_account)]
+
+
 def require_permission(permission: Permission) -> Any:
     """A dependency for a route that needs the permission. It gives the
     request's account, or raises MissingPermission, which `create_app()`

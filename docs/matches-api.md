@@ -4,13 +4,13 @@ The API's side of matches. `references/matches.md` explains the design, and `api
 
 ## Matches
 
-The tables that record matches (#187, #188). Only `POST /v1/matches`
-writes them yet, and nothing records a board or a result.
-`references/matches.md` explains how they fit together, with a match
-from start to finish.
-`models.py` holds them, and `tests/test_schema.py` checks each rule below
-that the database enforces. `services/matches.py` holds the rules of
-making a match, `services/opponents.py` those of picking an opponent, and
+The tables that record matches (#187, #188), and the routes that write
+them. `references/matches.md` explains how they fit together,
+with a match from start to finish. `models.py` holds the tables, and
+`tests/test_schema.py` checks each rule below that the database enforces.
+`services/matches.py` holds the rules of making a match, its lock and its
+boards, `services/opponents.py` those of picking an opponent,
+`services/match_results.py` those of its results, and
 `v1/matches.py` the routes, under `/v1/matches`.
 
 - `match_settings` holds a match's rules: `team_size`, `best_of` and
@@ -73,11 +73,49 @@ making a match, `services/opponents.py` those of picking an opponent, and
   again", `MergedPlayer`) and one player on both sides ("Both sides of
   the match are the same player", `SamePlayer`). So a new match stores
   exactly the players the device sent, which its scoring link names.
-  None of them writes anything. These checks are only for a new match. An existing id is looked up first, so a retry after
-  the two players merged still finds its match.
+  None of them writes anything. These checks are only for a new match.
+  An existing id is looked up first, so a retry after the two players
+  merged still finds its match.
 - Two creates of one id take turns on an advisory lock on the id
   (`MATCH_LOCK`), because a row lock can't hold a match that isn't there
   yet. The second finds the first's match.
+- Only `POST /v1/matches` makes a match. A board, a result or an
+  override for a match that doesn't exist answers 404 ("No match has this
+  id", `MatchNotFound`) and writes nothing. The other tests insert their
+  matches with `add_match()` in `tests/match_setup.py`.
+- A write to a match holds its lock, `lock_match()`: the match's row
+  `FOR UPDATE`. So every board, result and override for one match takes
+  turns. That is also why `one_successor` never fires from the service:
+  a second counter waits for the lock, then finds a new head. The index
+  stays as the backstop.
+- A board or a result carries the match's details, `MatchDetails`: best
+  of, rated and the two players in side order. One with other details
+  than the match's is refused with `match_differs`, a 409 whose title
+  names what differs, such as "The players and best of differ from the
+  match's". Players are compared side by side after resolving
+  `merged_into`, so a request from before a merge still fits.
+- A write that can be refused once its match exists returns an outcome,
+  `BoardPushed`, `Recorded` or `Refused`, rather than raising. A
+  `Refused` carries a `Refusal`, whose value is the submission's
+  `outcome`. So the refused request's submission commits with it. Each
+  route turns a `Refused` into an `errors` response through its own
+  table, such as `RESULT_REFUSALS`, and returns it rather than raising.
+- `POST /v1/matches/{match_id}/boards` takes `{"board": "<hex>"}`, the
+  URL fragment's bytes: a draft payload or an envelope. Anyone may push
+  one, with or without a session. Only its format is checked, never its
+  signatures, because a board settles nothing. It answers 201 with
+  `match_id` and `received_at`. The newest accepted board wins, with no
+  version (#227 moved the scores to the fragment). It refuses
+  `malformed`, `wrong_match`, `match_differs` and `match_final`, a board
+  for a match whose result is accepted.
+- Every board, result and override for a match that exists is logged in
+  `match_submissions`, refused or not, with its body, the session's
+  account, the network as the guest limit keys it (`client_network()`)
+  and its outcome. `log_submission()` and `log_refusal()` write them.
+- No route reads a match yet. The reads come with the pages that need
+  them, because `/v1` can't drop a field once a release uses it. The
+  tests read the rows through `result_chain()`, `current_result()`,
+  `approvals()` and `newest_board()` in `tests/match_setup.py`.
 - `GET /v1/matches/opponents` gives the players a new match can pick, as
   `id` and `display_name`. It needs a session. With no `search`, or one
   that trims to empty, it gives the players the account's `self` player
@@ -86,8 +124,8 @@ making a match, `services/opponents.py` those of picking an opponent, and
   display name contains it, whatever its case, by name, at most 20.
   `%` and `_` match themselves. Neither list holds the account's own
   `self` player.
-- No route reads a match yet. The tests insert their matches with
-  `add_match()` in `tests/match_setup.py`.
+- Pre-play states (scheduled, ready, called) wait for tournaments
+  (#189), and player short codes for later (#187).
 
 ## Signed match results
 
@@ -95,17 +133,22 @@ Every result reaches the server as an envelope that the players' devices
 signed. `api/signed-results/README.md` specifies the format, and
 `api/signed-results/vectors.json` holds the test vectors every client
 checks (#182). `POST /v1/matches/{match_id}/approvals` checks one and
-stores nothing (see Approving a result).
+records it (see Approving a result).
 
 - `signed_results.py` is the codec: `MatchResult`, `encode_payload()`,
-  `sign()`, `append_signature()`, `decode_envelope()`, `qr_text()`,
-  `link()` and `envelope_from_text()`. A payload is a CWT claims map in
-  deterministic CBOR, signed in a COSE_Sign envelope with ES256. The
-  result's hash is the SHA-256 of the payload bytes.
+  `decode_payload()`, `result_hash()`, `sign()`, `append_signature()`,
+  `decode_envelope()`, `qr_text()`, `link()` and `envelope_from_text()`.
+  A payload is a CWT claims map in deterministic CBOR, signed in a
+  COSE_Sign envelope with ES256. The result's hash is the SHA-256 of the
+  payload bytes.
 - `decode_envelope()` gives an `UnverifiedEnvelope`, which gives the
-  result out only through `verify(keys)`. Before that, it names only its
-  `kids` and its `match`. `verify()` takes each key's kid from the key, so
-  a caller can't pair a kid with the wrong key.
+  result out only through `verify(keys)`. Before that, it names its
+  `kids`, its `match`, its `payload` bytes and its `signatures`, each a
+  `Signature` with its kid, side, player and bytes. `verify()` takes each
+  key's kid from the key, so a caller can't pair a kid with the wrong
+  key. Its `verified` argument names signatures the caller already
+  checked over the same payload, such as stored approvals, which need no
+  key. `decode_payload()` reads a payload on its own, as a board's draft.
   `BestOf` is 1, 3, 5 or 7, as in the tables (#182).
 - A refusal is `Malformed`, `UnknownKey` or `BadSignature`, each with a
   `code`, in that order of precedence. `Malformed` is decided from the
@@ -142,21 +185,48 @@ stores nothing (see Approving a result).
 ## Approving a result
 
 `POST /v1/matches/{match_id}/approvals` takes a signed envelope as
-`{"envelope": "<hex>"}` and checks it. It stores nothing. #188 replaces
-its insides with real recording, and keeps the URL and the shapes.
-`services/match_results.py` holds the rules, and `v1/matches.py` the route.
+`{"envelope": "<hex>"}` and records it with `record_result()` in
+`services/match_results.py`. It kept the URL and the shapes from when it
+only checked, and added fields.
 
 - It needs no session. Anyone who holds the link may send it, so the
-  signatures are the only authority. It checks no authority either. Who
-  may approve for which player is #188's rule, and the demo match's
-  opponent is a player no account manages.
-- `check_approval()` runs the checks in this order, and the first that
-  fails answers 422 in the `errors` shape, through `APPROVAL_ERRORS` in
-  `main.py`: `Malformed` ("The envelope isn't a FortyMM signed result"),
-  `WrongMatch` ("The result is for another match"), `UnknownKey` ("A
-  signature's key isn't registered, or was revoked"), `BadSignature` ("A
-  signature doesn't match the result") and `IllegalEnding` ("The scores
-  aren't a legal ending to the match"). A signed-out key still verifies.
+  signatures are the authority. A session's account is only logged.
+- A result is one payload, stored once in `match_results` and found by
+  `sha256(payload) = :hash`. Each signature counts once per (result, key,
+  side), as a `match_approvals` row.
+- A match that doesn't exist answers 404 before anything else. Then the
+  checks run in this order, and the first that fails refuses the
+  result. 422: `malformed` ("The envelope isn't a FortyMM signed
+  result"), `wrong_match` ("The result is for another match"),
+  `unknown_key` ("A signature's key isn't registered, or was revoked"),
+  `bad_signature` ("A signature doesn't match the result") and
+  `illegal_ending` ("The scores aren't a legal ending to the match").
+  Then, under the match's lock, 409 `same_player` ("Both sides of the
+  match are now the same player", after a merge of its two players), 409
+  `match_differs`, 422 `no_authority` ("A signature's account doesn't
+  play as or manage the player it signs for"), 409 `not_head` ("Another
+  result replaced this one, so it can't be approved") and 409 `stale`
+  ("The result doesn't replace the match's newest result").
+- A signature already recorded with the same bytes needs no key. So an
+  exact retry answers the result again, whatever its keys' state since,
+  and a revoked key's new signatures are `unknown_key`. A signed-out key
+  still verifies, because results from a hall upload late.
+- A new approval's account must hold a `player_managers` row on the
+  player that survives `merged_into`: `self` gives authority `self`, and
+  `managed` with no `adopted_from` gives `representative`. An open "Is
+  this you?" question gives none, and nor does creating the match. One
+  statement reads the key's owner and its rows, so an adoption can't
+  come between them. The approval keeps that account, the surviving
+  player and the authority.
+- Known result, no new approvals: an exact retry, logged as `accepted`.
+  Known result with new approvals: it must be the head. New result: its
+  `replaces` must be the head's hash, or absent when the match has no
+  results.
+- A rated result counts once both sides approve it, and an unrated one
+  once either side does. A correction of a final match needs both sides,
+  rated or not, so two players can't overwrite each other with one
+  signature each. When it counts, `accepted_at` is set and
+  `matches.current_result_id` moves to it, and the match is final.
 - `check_ending()` is pure, with the rules of `checkGame()` and
   `reviewBoard()` in the web client's `board.ts`. A finished game isn't
   level, and its winner has 11 with at most 9 for the loser, or more than
@@ -164,16 +234,38 @@ its insides with real recording, and keeps the URL and the shapes.
   side reaches its wins at the last game. A retired match has finished
   games but its last, which may be unfinished, and no side has its wins.
   It may have no games.
-- It answers 201 with `{"data": {"hash", "match_id", "approvals"}}`. Each
-  approval is a `key_id` and a `player_id`, sorted by key id.
+- It answers 201 with `{"data": {"hash", "match_id", "approvals",
+  "accepted_at"}}`. `approvals` are every approval the result has, each a
+  `key_id`, `player_id`, `side` and `authority`, sorted by key id, then
+  side. `accepted_at` is null until the result counts, and for good once
+  another result replaces it first.
+
+## Overriding a result
+
+`POST /v1/admin/matches/{match_id}/override` imposes a result, and needs
+`matches.override`. It takes the `games`, the `ending` (`completed` or
+`retired` with `retired_by`) and a `reason`. `override_result()` in
+`services/match_results.py` holds the rules.
+
+- The server encodes the payload itself, from the match's details, with
+  the head's hash as `replaces` and now, in whole seconds, as its time.
+- It logs an `override` submission with the administrator's account and
+  the payload, and stores the result with the trimmed `override_reason`
+  and no approvals. It counts at once.
+- So it replaces the current result, or cuts off a counter that waits on
+  it. A device still holding a result it replaced gets a 409, and
+  players can correct the override the normal way.
+- A blank reason (`InvalidOverrideReason`) or scores that aren't a legal
+  ending (`IllegalEnding`) answer 422 in the `errors` shape, and an
+  unknown match 404, before anything is written.
 
 ## Signing keys
 
 Each device holds a P-256 signing key, and the account it signs for holds
 the public half, so a signed result's kid names an account (#183).
 `services/signing_keys.py` holds the rules, and `v1/signing_keys.py` the
-routes, under `/v1/account/signing-keys`. Guests may use them. Only the
-approval check reads a result yet (#188).
+routes, under `/v1/account/signing-keys`. Guests may use them. A
+result's signatures are checked against them (see Approving a result).
 
 - `signing_keys` holds one row per key. Its primary key `id` is the kid, 32
   bytes, typed `KeyId` through `Base.type_annotation_map`. `public_key` is
@@ -261,12 +353,12 @@ approval check reads a result yet (#188).
 - Adoption moves the guest's keys to the target account, as it moves every
   other `MOVES_ON_ADOPT` column. It doesn't trim. The target's next
   registration does.
-- `verification_keys(session, kids)` is #188's lookup. It returns the keys
-  among `kids` that aren't revoked, signed out or not, each with its
-  account and its `signed_out_at`, by kid. A kid missing from the result
-  is unknown or revoked, which `UnverifiedEnvelope.verify()` refuses as
-  `unknown_key`. Results from a hall upload late, so a sign-out refuses
-  nothing. #188 decides what a signature after it is worth.
+- `verification_keys(session, kids)` is the results' lookup. It returns
+  the keys among `kids` that aren't revoked, signed out or not, each with
+  its account and its `signed_out_at`, by kid. A kid missing from the
+  result is unknown or revoked, which `UnverifiedEnvelope.verify()`
+  refuses as `unknown_key`. Results from a hall upload late, so a
+  sign-out refuses nothing, and a signed-out key's signature counts.
 - A sign-in that switches accounts doesn't sign out the old account's key.
   The device re-registers its key with a proof for the new account, and
   reads 200 if adoption moved the key there, or 409 if another account owns

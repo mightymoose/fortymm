@@ -255,3 +255,34 @@ def test_the_upgrade_lets_each_role_that_grants_roles_revoke_signing_keys(
         ).all()
 
     assert granted == ["Owners"]
+
+
+def test_the_upgrade_lets_each_role_that_grants_roles_override_results(
+    throwaway_database_url: str,
+) -> None:
+    with connected(throwaway_database_url) as config:
+        command.upgrade(config, "7b3d9e1f2a64")
+        connection = config.attributes["connection"]
+        connection.execute(
+            text("UPDATE roles SET name = 'Owners' WHERE name = 'Administrator'")
+        )
+        connection.execute(text("INSERT INTO roles (name) VALUES ('Viewer')"))
+        connection.execute(
+            text(
+                "INSERT INTO role_permissions (role_id, permission_key)"
+                " SELECT id, 'admin.view' FROM roles WHERE name = 'Viewer'"
+            )
+        )
+        connection.commit()
+        command.upgrade(config, "head")
+        connection.commit()
+
+        granted = connection.scalars(
+            text(
+                "SELECT roles.name FROM role_permissions"
+                " JOIN roles ON roles.id = role_id"
+                " WHERE permission_key = 'matches.override'"
+            )
+        ).all()
+
+    assert granted == ["Owners"]

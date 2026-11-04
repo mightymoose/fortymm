@@ -8,10 +8,14 @@ from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
+from match_setup import add_match, add_player
 from sqlalchemy import Engine, text
+from sqlalchemy.orm import sessionmaker
 
-from fortymm_api.accounts import AccountId
+from fortymm_api.accounts import AccountId, PlayerId
 from fortymm_api.main import create_app
+from fortymm_api.matches import MatchId
+from fortymm_api.services.matches import MatchDetails
 from fortymm_api.signing_keys import SigningPrivateKey
 
 JSON = {"Content-Type": "application/json"}
@@ -187,6 +191,7 @@ def test_lists_the_roles(
                     "account_roles.manage",
                     "admin.view",
                     "matches.create",
+                    "matches.override",
                     "matches.view",
                     "players.view",
                     "roles.manage",
@@ -674,3 +679,81 @@ def test_a_revoke_without_json_is_unsupported(
     response = client.post(f"/v1/admin/signing-keys/{KID}/revoke")
 
     assert response.status_code == 415
+
+
+MATCH = "01970000-0000-7000-8000-0000000000c1"
+OVERRIDE = f"/v1/admin/matches/{MATCH}/override"
+
+
+@pytest.fixture
+def match(admin: dict[str, Any], migrated_database: Engine) -> str:
+    """A rated best of 3 between the admin's player and Bea, with no result."""
+    with sessionmaker(migrated_database).begin() as session:
+        ann = PlayerId(UUID(admin["player"]["id"]))
+        details = MatchDetails(3, True, (ann, add_player(session)))
+        add_match(session, MatchId(UUID(MATCH)), details)
+    return MATCH
+
+
+def test_an_override_answers_201_with_the_result(
+    client: TestClient, match: str
+) -> None:
+    body = {"games": [[11, 3], [11, 4]], "ending": "completed", "reason": "Sheet"}
+
+    response = client.post(OVERRIDE, headers=JSON, json=body)
+
+    assert response.status_code == 201
+    data = response.json()["data"]
+    assert data == {
+        "hash": data["hash"],
+        "match_id": match,
+        "accepted_at": data["accepted_at"],
+    }
+
+
+def test_overriding_needs_matches_override(
+    client: TestClient, viewer: dict[str, Any]
+) -> None:
+    body = {"games": [[11, 3], [11, 4]], "ending": "completed", "reason": "Sheet"}
+
+    response = client.post(OVERRIDE, headers=JSON, json=body)
+
+    assert response.status_code == 403
+    assert response.json() == FORBIDDEN
+
+
+def test_overriding_an_unknown_match_is_not_found(
+    client: TestClient, admin: dict[str, Any]
+) -> None:
+    body = {"games": [[11, 3], [11, 4]], "ending": "completed", "reason": "Sheet"}
+
+    response = client.post(OVERRIDE, headers=JSON, json=body)
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "errors": [{"status": "404", "title": "No match has this id"}]
+    }
+
+
+def test_an_illegal_override_answers_422_in_the_errors_shape(
+    client: TestClient, match: str
+) -> None:
+    body = {"games": [[11, 3], [11, 10]], "ending": "completed", "reason": "Sheet"}
+
+    response = client.post(OVERRIDE, headers=JSON, json=body)
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "errors": [
+            {"status": "422", "title": "The scores aren't a legal ending to the match"}
+        ]
+    }
+
+
+def test_a_retirement_names_who_retired(client: TestClient, match: str) -> None:
+    body = {"games": [[11, 3]], "ending": "retired", "reason": "Sheet"}
+
+    response = client.post(OVERRIDE, headers=JSON, json=body)
+
+    assert response.status_code == 422
+    assert "detail" in response.json()

@@ -21,3 +21,4 @@ class Permission(StrEnum):
     MATCHES_CREATE = "matches.create"
     MATCHES_VIEW = "matches.view"
     PLAYERS_VIEW = "players.view"
+    MATCHES_OVERRIDE = "matches.override"

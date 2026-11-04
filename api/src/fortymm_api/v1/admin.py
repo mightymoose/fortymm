@@ -1,20 +1,23 @@
 """The admin page's routes: permissions, the roles that grant them, the
-accounts that hold the roles, every player, and every account's signing
-keys."""
+accounts that hold the roles, every player, every account's signing keys,
+and overriding a match's result."""
 
 from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Path
-from pydantic import BaseModel, StringConstraints
+from fastapi import APIRouter, Path, Request
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 
 from fortymm_api.accounts import AccountId, CurrentAccount, PlayerId
 from fortymm_api.auth import require_permission
 from fortymm_api.database import DatabaseSession
+from fortymm_api.matches import MatchId
 from fortymm_api.permissions import Permission, RoleId
-from fortymm_api.services import player_admin, roles, signing_keys
+from fortymm_api.services import match_results, player_admin, roles, signing_keys
+from fortymm_api.services.sessions import client_network
 from fortymm_api.services.signing_keys import KeyState
+from fortymm_api.signed_results import Completed, Ending, Retired
 from fortymm_api.signing_keys import KeyId
 from fortymm_api.v1.errors import (
     FORBIDDEN,
@@ -23,6 +26,7 @@ from fortymm_api.v1.errors import (
     Responses,
     errors,
 )
+from fortymm_api.v1.session import client_address
 from fortymm_api.v1.signing_keys import KEY_ID_PATTERN
 from fortymm_api.v1.types import HexBytes
 
@@ -35,6 +39,9 @@ AccountRoleManager = Annotated[
 ]
 SigningKeyRevoker = Annotated[
     CurrentAccount, require_permission(Permission.SIGNING_KEYS_REVOKE)
+]
+MatchOverrider = Annotated[
+    CurrentAccount, require_permission(Permission.MATCHES_OVERRIDE)
 ]
 
 READ_ERRORS: Responses = {**NO_SESSION, **FORBIDDEN}
@@ -65,6 +72,21 @@ INVALID_ROLE = invalid(
 )
 NO_ACCOUNT = errors(404, "No account has this id")
 NO_KEY = errors(404, "No key has this id")
+# This entry replaces FastAPI's own 422, so it repeats its body.
+INVALID_OVERRIDE: Responses = {
+    422: {
+        "description": (
+            "The body is invalid. If the reason is blank or the scores aren't a"
+            " legal ending to the match, the body is in the `errors` shape"
+            " instead"
+        ),
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/HTTPValidationError"}
+            }
+        },
+    }
+}
 LAST_ADMINISTRATOR = errors(
     409,
     "The change would leave no account with `account_roles.manage`, so nobody"
@@ -627,5 +649,83 @@ def admin_player(
                 for manager in found.managers
             ],
             leagues=list(found.leagues),
+        )
+    )
+
+
+class OverrideRequest(BaseModel):
+    # Each game's points, side 0's then side 1's, in the order played.
+    games: Annotated[
+        list[
+            Annotated[
+                list[Annotated[int, Field(ge=0)]], Field(min_length=2, max_length=2)
+            ]
+        ],
+        Field(max_length=7),
+    ]
+    ending: Literal["completed", "retired"]
+    # The side that retired, with a retirement only.
+    retired_by: Literal[0, 1] | None = None
+    # Why the administrator imposes the result. Trimmed, and not blank.
+    reason: str
+
+    @model_validator(mode="after")
+    def retired_by_with_retired(self) -> OverrideRequest:
+        if (self.ending == "retired") != (self.retired_by is not None):
+            raise ValueError("retired_by comes with a retirement, and only then")
+        return self
+
+    def parsed_ending(self) -> Ending:
+        return Completed() if self.retired_by is None else Retired(self.retired_by)
+
+
+class OverriddenResult(BaseModel):
+    # The SHA-256 of the payload the server encoded, the result's identity.
+    hash: HexBytes
+    match_id: UUID
+    accepted_at: datetime | None
+
+
+class OverrideResponse(BaseModel):
+    data: OverriddenResult
+
+
+@router.post(
+    "/matches/{match_id}/override",
+    status_code=201,
+    responses={
+        **WRITE_ERRORS,
+        **errors(404, "No match has this id"),
+        **INVALID_OVERRIDE,
+    },
+)
+def override_match_result(
+    session: DatabaseSession,
+    request: Request,
+    account: MatchOverrider,
+    match_id: UUID,
+    body: OverrideRequest,
+) -> OverrideResponse:
+    """Impose a result on the match, with a reason. Needs `matches.override`.
+
+    The server encodes the scores as a result that replaces the match's
+    newest one and counts at once, with no approvals. The match is final
+    with it. A device still holding a result it replaced gets a 409, and
+    players can still correct it the normal way.
+    """
+    recorded = match_results.override_result(
+        session,
+        MatchId(match_id),
+        account.id,
+        client_network(client_address(request)),
+        tuple((first, second) for first, second in body.games),
+        body.parsed_ending(),
+        body.reason,
+    )
+    return OverrideResponse(
+        data=OverriddenResult(
+            hash=recorded.hash,
+            match_id=recorded.match_id,
+            accepted_at=recorded.accepted_at,
         )
     )

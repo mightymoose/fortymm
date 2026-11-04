@@ -55,7 +55,8 @@ created match answers 201 with its id, and a second create of that id
 with `holdRecent` they wait for `release()`. A default handler answers
 `POST /v1/matches/{match_id}/approvals` with a 201. `mockApprovals(answer)`
 records each check's match id and envelope, and answers `accepted`,
-`{ refused: title }` (a 422) or `unreachable`. A test can change its
+`{ refused: title }` (a 422, or `status` if it names one, such as 404
+or 409) or `unreachable`. A test can change its
 `answer`, and with `hold` each answer waits for `release()`.
 `src/signing/vectors.test.ts` runs the README's signer
 checks K1-K3, V1-V7, R1-R2 and I2 over every vector in
