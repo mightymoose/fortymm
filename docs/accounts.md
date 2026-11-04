@@ -312,11 +312,31 @@ routes, under `/v1/admin`.
   Deleting one takes it from every role (`ON DELETE CASCADE`).
 - A role is a named set of permissions. Its name is trimmed, at most 50
   characters, and unique whatever its case (`unique_role_name`). A role
-  that names an unknown permission gets a 422 in the `errors` shape.
-- Only a verified account holds a role (`account_roles`). A guest holds
-  no permission, whatever the table says.
+  that names an unknown permission gets a 422 in the `errors` shape. The
+  admin's list of roles gives each its `default` and its
+  `account_count`, the accounts `account_roles` grants it to. The default
+  role's count is 0.
+- Only a verified account holds a role in `account_roles`. A guest's rows
+  there grant nothing.
+- Every account holds the default role, guests too, with no
+  `account_roles` row. The migration makes it as `User`, with no
+  permissions. `roles.is_default` marks it, and the partial unique index
+  `one_default_role` allows at most one. A permission added to it reaches
+  every account at once, so an admin turns a feature on or off for
+  everyone there.
+- The default role grants no permission that administers FortyMM.
+  `REACH` in `permissions.py` says whether each built-in permission is
+  administration or a feature, and a test fails if one has no entry.
+  `matches.create` is a feature, and so is every custom permission. An
+  update that gives the default role an administrative permission answers
+  422. Its delete answers 409. Granting it to an account answers 422, and
+  a sign-in skips an email grant of it. It can be renamed.
+- `permissions_of()` in `services/authorization.py` is the one place that
+  says what an account holds: the default role's permissions, and a
+  verified account's roles' permissions.
 - `POST /v1/session` returns the account's `permissions`: the sorted keys
-  that its roles grant, custom ones included.
+  that `permissions_of()` gives, custom ones included. A guest's are the
+  default role's.
 - A route that needs a permission takes `require_permission()` from
   `auth.py`, such as `Annotated[CurrentAccount,
   require_permission(Permission.ADMIN_VIEW)]`. Without the permission, the
@@ -341,7 +361,7 @@ routes, under `/v1/admin`.
   with `meta.has_more`. `email` filters by a case-insensitive substring.
   `GET /v1/admin/accounts/{account_id}` is the account's page in one
   request: its email, player, `created_at`, `last_seen_at`, and every role
-  by name with `held`. It answers 404 for a guest. `PUT
+  but the default by name with `held`. It answers 404 for a guest. `PUT
   /v1/admin/accounts/{account_id}/roles` sets the exact set of roles.
 - `GET /v1/admin/signing-keys` and `POST
   /v1/admin/signing-keys/{key_id}/revoke` are the admin's view of the

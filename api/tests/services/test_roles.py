@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from fortymm_api.accounts import AccountId, Email, GuestAccount, VerifiedAccount
 from fortymm_api.models import Account
-from fortymm_api.permissions import Permission, RoleId
+from fortymm_api.permissions import REACH, Permission, Reach, RoleId
 from fortymm_api.services.authorization import (
     MissingPermission,
     authorize,
@@ -18,7 +18,10 @@ from fortymm_api.services.authorization import (
 from fortymm_api.services.roles import (
     ACCOUNT_PAGE_SIZE,
     AccountNotFound,
+    AdministrativeDefault,
     BuiltInPermission,
+    DefaultRole,
+    DefaultRoleGrant,
     LastAdministrator,
     PermissionKeyTaken,
     PermissionNotFound,
@@ -28,6 +31,7 @@ from fortymm_api.services.roles import (
     RoleNotFound,
     RoleSummary,
     UnknownPermission,
+    claim_email_role_grants,
     create_permission,
     create_role,
     delete_permission,
@@ -59,6 +63,27 @@ def administrator(database: Engine) -> RoleId:
             text("SELECT id FROM roles WHERE name = 'Administrator'")
         )
         return role
+
+
+def user_role(database: Engine) -> RoleId:
+    """The default role the migration made."""
+    with database.connect() as connection:
+        role: RoleId = connection.scalar(text("SELECT id FROM roles WHERE is_default"))
+        return role
+
+
+def guest(database: Engine) -> AccountId:
+    return in_transaction(
+        database, lambda session: start_session(session, None, ANN)
+    ).account.id
+
+
+def grant_to_everyone(database: Engine, actor: AccountId, *keys: str) -> None:
+    draft = RoleDraft("User", "", frozenset(keys))
+    in_transaction(
+        database,
+        lambda session: update_role(session, actor, user_role(database), draft),
+    )
 
 
 def verified(database: Engine, email: str, *roles: RoleId) -> AccountId:
@@ -120,7 +145,12 @@ def test_the_built_in_permissions_are_the_ones_the_code_checks(
     assert built_in == set(Permission)
 
 
-def test_the_migration_makes_an_administrator_role_with_every_permission(
+def test_every_built_in_permission_says_whether_every_account_may_hold_it() -> None:
+    assert set(REACH) == set(Permission)
+    assert REACH[Permission.MATCHES_CREATE] is Reach.FEATURE
+
+
+def test_the_migration_makes_an_administrator_role_and_the_default_role(
     migrated_database: Engine,
 ) -> None:
     assert roles(migrated_database) == [
@@ -130,7 +160,16 @@ def test_the_migration_makes_an_administrator_role_with_every_permission(
             "Manages roles, permissions and who holds them.",
             tuple(sorted(Permission)),
             account_count=0,
-        )
+            default=False,
+        ),
+        RoleSummary(
+            user_role(migrated_database),
+            "User",
+            "Every account holds this role, guests too.",
+            (),
+            account_count=0,
+            default=True,
+        ),
     ]
 
 
@@ -176,9 +215,140 @@ def test_authorize_refuses_an_account_without_the_permission(
     check(VerifiedAccount(ann, Email("ann@example.com")))
     with pytest.raises(MissingPermission):
         check(VerifiedAccount(bob, Email("bob@example.com")))
-    # A guest never holds a role, whatever account_roles says.
+
+
+def test_a_guest_holds_no_role_whatever_account_roles_says(
+    migrated_database: Engine,
+) -> None:
+    carl = guest(migrated_database)
+    with migrated_database.begin() as connection:
+        connection.execute(
+            text("INSERT INTO account_roles (account_id, role_id) VALUES (:id, :role)"),
+            {"id": carl, "role": administrator(migrated_database)},
+        )
+
     with pytest.raises(MissingPermission):
-        check(GuestAccount(ann))
+        in_transaction(
+            migrated_database,
+            lambda session: authorize(
+                session, GuestAccount(carl), Permission.ADMIN_VIEW
+            ),
+        )
+
+
+def test_every_account_holds_the_default_roles_permissions(
+    migrated_database: Engine,
+) -> None:
+    ann = admin(migrated_database)
+    bob = verified(migrated_database, "bob@example.com")
+    carl = guest(migrated_database)
+    in_transaction(
+        migrated_database,
+        lambda session: create_permission(session, ann, "games.record", ""),
+    )
+
+    grant_to_everyone(migrated_database, ann, Permission.MATCHES_CREATE, "games.record")
+
+    everyone = {Permission.MATCHES_CREATE, "games.record"}
+    assert (
+        in_transaction(migrated_database, lambda session: permissions_of(session, bob))
+        == everyone
+    )
+    assert (
+        in_transaction(migrated_database, lambda session: permissions_of(session, carl))
+        == everyone
+    )
+    assert role_ids(migrated_database, bob) == role_ids(migrated_database, carl) == []
+    in_transaction(
+        migrated_database,
+        lambda session: authorize(
+            session, GuestAccount(carl), Permission.MATCHES_CREATE
+        ),
+    )
+    assert (
+        in_transaction(
+            migrated_database, lambda session: start_session(session, None, ANN)
+        ).permissions
+        == everyone
+    )
+
+
+@pytest.mark.parametrize(
+    "permission", [p for p, reach in REACH.items() if reach is Reach.ADMINISTRATION]
+)
+def test_the_default_role_grants_no_permission_that_administers(
+    migrated_database: Engine, permission: Permission
+) -> None:
+    ann = admin(migrated_database)
+
+    with pytest.raises(AdministrativeDefault):
+        grant_to_everyone(migrated_database, ann, permission)
+
+
+def test_the_default_role_can_be_renamed(migrated_database: Engine) -> None:
+    ann = admin(migrated_database)
+    role = user_role(migrated_database)
+    draft = RoleDraft("Member", "Everyone.", frozenset())
+
+    updated = in_transaction(
+        migrated_database, lambda session: update_role(session, ann, role, draft)
+    )
+
+    assert (updated.name, updated.description, updated.default) == (
+        "Member",
+        "Everyone.",
+        True,
+    )
+
+
+def test_the_default_role_cannot_be_deleted(migrated_database: Engine) -> None:
+    ann = admin(migrated_database)
+
+    with pytest.raises(DefaultRole):
+        in_transaction(
+            migrated_database,
+            lambda session: delete_role(session, ann, user_role(migrated_database)),
+        )
+
+
+def test_nobody_grants_the_default_role(migrated_database: Engine) -> None:
+    ann = admin(migrated_database)
+    bob = verified(migrated_database, "bob@example.com")
+
+    with pytest.raises(DefaultRoleGrant):
+        in_transaction(
+            migrated_database,
+            lambda session: set_account_roles(
+                session, ann, bob, frozenset({user_role(migrated_database)})
+            ),
+        )
+
+
+def test_a_sign_in_skips_an_email_grant_of_the_default_role(
+    migrated_database: Engine,
+) -> None:
+    bob = verified(migrated_database, "bob@example.com")
+    with migrated_database.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO email_role_grants (email, role_id)"
+                " VALUES ('bob@example.com', :role)"
+            ),
+            {"role": user_role(migrated_database)},
+        )
+
+    in_transaction(
+        migrated_database, lambda session: claim_email_role_grants(session, bob)
+    )
+
+    assert role_ids(migrated_database, bob) == []
+    with migrated_database.connect() as connection:
+        waiting = connection.scalar(
+            text(
+                "SELECT count(*) FROM email_role_grants WHERE email = 'bob@example.com'"
+            )
+        )
+    assert waiting == 0
 
 
 def test_creates_a_role(migrated_database: Engine) -> None:
@@ -189,10 +359,11 @@ def test_creates_a_role(migrated_database: Engine) -> None:
     )
 
     assert created == RoleSummary(
-        created.id, "Viewer", "Looks around.", (Permission.ADMIN_VIEW,), 0
+        created.id, "Viewer", "Looks around.", (Permission.ADMIN_VIEW,), 0, False
     )
     assert [role.name for role in roles(migrated_database)] == [
         "Administrator",
+        "User",
         "Viewer",
     ]
 
@@ -208,6 +379,7 @@ def test_lists_roles_by_name_whatever_its_case_with_their_holders(
         ("Administrator", 1),
         ("Auditor", 0),
         ("banker", 0),
+        ("User", 0),
     ]
 
 
@@ -288,7 +460,10 @@ def test_deleting_a_role_takes_it_from_its_accounts(
 
     in_transaction(migrated_database, lambda session: delete_role(session, ann, viewer))
 
-    assert [role.name for role in roles(migrated_database)] == ["Administrator"]
+    assert [role.name for role in roles(migrated_database)] == [
+        "Administrator",
+        "User",
+    ]
     assert role_ids(migrated_database, bob) == []
 
 
@@ -595,6 +770,7 @@ def test_deleting_a_permission_takes_it_from_every_role(
 
     assert [role.permissions for role in roles(migrated_database)] == [
         tuple(sorted(Permission)),
+        (),
         (),
     ]
     assert (

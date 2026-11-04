@@ -260,6 +260,12 @@ class Role(Base):
     __table_args__ = (
         CheckConstraint("name = btrim(name) AND name <> ''", name="name_trimmed"),
         CheckConstraint("char_length(name) <= 50", name="name_length"),
+        Index(
+            "one_default_role",
+            "is_default",
+            unique=True,
+            postgresql_where=text("is_default"),
+        ),
     )
 
     id: Mapped[RoleId] = mapped_column(
@@ -267,6 +273,9 @@ class Role(Base):
     )
     name: Mapped[str] = mapped_column(Text)
     description: Mapped[str] = mapped_column(Text, server_default="")
+    # Every account holds the default role, guests too, with no
+    # account_roles row.
+    is_default: Mapped[bool] = mapped_column(server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

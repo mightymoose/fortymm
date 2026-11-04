@@ -471,6 +471,29 @@ def test_one_default_league_is_on_default_leagues_only(
     )
 
 
+def test_one_default_role_is_on_default_roles_only(connection: Connection) -> None:
+    indexdef = connection.scalar(
+        text(
+            "SELECT indexdef FROM pg_indexes"
+            " WHERE tablename = 'roles' AND indexname = 'one_default_role'"
+        )
+    )
+
+    assert indexdef == (
+        "CREATE UNIQUE INDEX one_default_role ON public.roles"
+        " USING btree (is_default) WHERE is_default"
+    )
+
+
+def test_there_is_at_most_one_default_role(connection: Connection) -> None:
+    with pytest.raises(IntegrityError) as error:
+        connection.execute(
+            text("INSERT INTO roles (name, is_default) VALUES ('Member', true)")
+        )
+
+    assert violated_constraint(error) == "one_default_role"
+
+
 def test_unique_league_name_is_on_the_lowercase_name(connection: Connection) -> None:
     indexdef = connection.scalar(
         text(

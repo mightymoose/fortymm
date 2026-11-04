@@ -3,6 +3,7 @@ import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 import type { AdminSigningKey } from '../../api/queries'
 import { AdminPage, type AdminTab } from '../../test/pages/AdminPage'
+import { HomePage } from '../../test/pages/HomePage'
 import {
   administrator,
   API_BASE_URL,
@@ -11,6 +12,7 @@ import {
   holdAdmin,
   mockAdmin,
   server,
+  userRole,
   type AdminList,
   type AdminState,
 } from '../../test/server'
@@ -20,6 +22,7 @@ const viewer = {
   name: 'Viewer',
   description: 'Sees the admin page.',
   permissions: ['admin.view'],
+  default: false,
 }
 const ann = {
   id: '0b9e3c1e-58f4-4c84-9a59-2d0b6f3f6a10',
@@ -77,7 +80,7 @@ const guestsOldBrowser = signingKey('e', 'Old browser', guest, {
 function admin(state: Partial<AdminState> = {}) {
   return mockAdmin({
     permissions: [...builtInPermissions, gamesRecord],
-    roles: [administrator, viewer],
+    roles: [administrator, userRole, viewer],
     accounts: [ann, ben],
     signingKeys: [annsPhone, guestsBrowser, bensLaptop, bensPhone, guestsOldBrowser],
     ...state,
@@ -102,6 +105,15 @@ describe('the admin page', () => {
     const page = await AdminPage.render()
     expect(page.href).toBe('/')
     expect(page.title).toBeNull()
+  })
+
+  it('gives every account the default role’s permissions', async () => {
+    admin({
+      roles: [administrator, { ...userRole, permissions: ['matches.create'] }],
+      accounts: [{ ...ann, role_ids: [] }, { ...ben, role_ids: [administrator.id] }],
+    })
+    const home = await HomePage.render()
+    expect(home.newMatchLink).toBeInTheDocument()
   })
 
   it('sends a guest to Home', async () => {
@@ -150,8 +162,70 @@ describe('roles', () => {
         '1',
         'EditDelete…',
       ],
+      ['UserDefaultEvery account holds this role, guests too.', 'None', 'Everyone', 'Edit'],
       ['ViewerSees the admin page.', 'admin.view', '0', 'EditDelete…'],
     ])
+    expect(page.button('Delete User')).toBeNull()
+  })
+
+  it('offers the default role only the permissions that don’t administer FortyMM', async () => {
+    const api = admin()
+    const page = await AdminPage.render()
+    await page.click('Edit User')
+    const sheet = page.dialog('Edit User')!
+    expect(
+      within(sheet)
+        .getAllByRole('checkbox')
+        .map((box) => box.getAttribute('value')),
+    ).toEqual(['matches.create', 'games.record'])
+
+    await page.toggle(sheet, 'games.record')
+    await page.press(sheet, 'Save role')
+
+    expect(await page.findToast('Role saved')).toBeInTheDocument()
+    expect(api.writes).toEqual([
+      {
+        method: 'PUT',
+        path: `/v1/admin/roles/${userRole.id}`,
+        body: {
+          name: 'User',
+          description: 'Every account holds this role, guests too.',
+          permissions: ['games.record'],
+        },
+      },
+    ])
+    expect(await page.findRow('User')).toHaveTextContent('games.record')
+  })
+
+  it('shows the API’s refusal of an administrative permission on the default role', async () => {
+    admin()
+    const page = await AdminPage.render()
+    await page.click('Edit User')
+    const sheet = page.dialog('Edit User')!
+    await page.toggle(sheet, 'games.record')
+    server.use(
+      http.put(`${API_BASE_URL}/v1/admin/roles/:id`, () =>
+        HttpResponse.json(
+          {
+            errors: [
+              {
+                status: '422',
+                title:
+                  'Every account holds the default role, guests too, so it can’t grant a permission that administers FortyMM',
+              },
+            ],
+          },
+          { status: 422 },
+        ),
+      ),
+    )
+    await page.press(sheet, 'Save role')
+
+    await waitFor(() =>
+      expect(sheet).toHaveTextContent(
+        'Every account holds the default role, guests too, so it can’t grant a permission that administers FortyMM',
+      ),
+    )
   })
 
   it('checks a new role before it sends it, then creates it', async () => {
@@ -189,7 +263,13 @@ describe('roles', () => {
     const api = admin()
     const page = await AdminPage.render()
     await page.click('New role')
-    api.state.roles.push({ id: crypto.randomUUID(), name: 'Umpire', description: '', permissions: [] })
+    api.state.roles.push({
+      id: crypto.randomUUID(),
+      name: 'Umpire',
+      description: '',
+      permissions: [],
+      default: false,
+    })
     const sheet = page.dialog('New role')!
     await page.type(sheet, 'Name', 'umpire')
     await page.press(sheet, 'Create role')
@@ -224,7 +304,10 @@ describe('roles', () => {
 
     expect(await page.findToast('Role deleted')).toBeInTheDocument()
     expect(api.writes).toEqual([{ method: 'DELETE', path: `/v1/admin/roles/${viewer.id}`, body: null }])
-    expect(page.rows.map(([name]) => name)).toEqual(['AdministratorEverything on the admin page.'])
+    expect(page.rows.map(([name]) => name)).toEqual([
+      'AdministratorEverything on the admin page.',
+      'UserDefaultEvery account holds this role, guests too.',
+    ])
   })
 
   it('refuses to delete the last role that grants roles', async () => {
@@ -487,6 +570,18 @@ describe('an account’s page', () => {
     expect(document.body).toHaveTextContent('Last seen')
   })
 
+  it('doesn’t offer the default role, which every account holds', async () => {
+    admin()
+    const page = await AdminPage.renderAccount(ben.id)
+    await page.findHeading('ben@example.com')
+    expect(
+      within(page.rolesCard)
+        .getAllByRole('checkbox')
+        .map((box) => box.getAttribute('value')),
+    ).toEqual([administrator.id, viewer.id])
+    expect(page.rolesCard).not.toHaveTextContent('User')
+  })
+
   it('sets the roles the account holds', async () => {
     const api = admin()
     const page = await AdminPage.renderAccount(ben.id)
@@ -521,6 +616,7 @@ describe('an account’s page', () => {
       name: 'Granter',
       description: '',
       permissions: ['account_roles.manage'],
+      default: false,
     }
     admin({
       roles: [administrator, viewer, granter],

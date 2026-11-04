@@ -23,7 +23,10 @@ from fortymm_api.services.players import (
 )
 from fortymm_api.services.roles import (
     AccountNotFound,
+    AdministrativeDefault,
     BuiltInPermission,
+    DefaultRole,
+    DefaultRoleGrant,
     LastAdministrator,
     PermissionKeyTaken,
     PermissionNotFound,
@@ -64,6 +67,16 @@ ROLE_ERRORS: dict[type[Exception], tuple[int, str]] = {
     PermissionKeyTaken: (409, "Another permission has this key"),
     BuiltInPermission: (409, "The code checks this permission, so it stays"),
     UnknownPermission: (422, "A permission in the role doesn't exist"),
+    DefaultRole: (409, "Every account holds the default role, so it stays"),
+    AdministrativeDefault: (
+        422,
+        "Every account holds the default role, guests too, so it can't grant"
+        " a permission that administers FortyMM",
+    ),
+    DefaultRoleGrant: (
+        422,
+        "Every account holds the default role, so nobody grants it",
+    ),
     LastAdministrator: (
         409,
         "At least one account must keep the permission to grant roles",

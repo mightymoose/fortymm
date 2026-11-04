@@ -194,8 +194,8 @@ def start_session(
     deleted. Its account stays. Raises GuestAccountLimitReached before any
     write when the address's network is at the limit.
 
-    It returns the permissions the account's roles grant. A guest account
-    has none.
+    It returns the permissions the account holds, through `permissions_of`.
+    A guest holds only the default role's.
 
     Every account it returns has a self player. A new guest account gets
     one with a name from `new_display_name`. So does a resumed account that
@@ -230,7 +230,13 @@ def start_session(
     session.flush()
     row, token = new_session(session, guest.id)
     player = _create_self_player(session, guest.id, new_display_name)
-    return StartedSession(row.id, GuestAccount(guest.id), player, token, frozenset())
+    return StartedSession(
+        row.id,
+        GuestAccount(guest.id),
+        player,
+        token,
+        permissions_of(session, guest.id),
+    )
 
 
 def count_start_without_session(session: Session, address: ClientAddress) -> None:
