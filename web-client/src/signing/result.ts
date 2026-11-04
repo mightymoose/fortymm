@@ -21,7 +21,7 @@ export type { Side }
 // server's rule.
 export type MatchResult = {
   match: string
-  bestOf: 3 | 5 | 7
+  bestOf: 1 | 3 | 5 | 7
   rated: boolean
   // Distinct. Their order fixes the order of each game's points.
   players: [string, string]
@@ -109,8 +109,8 @@ export function decodePayload(bytes: Uint8Array<ArrayBuffer>): {
 }
 
 function format(value: Cbor | undefined): MatchResult['bestOf'] {
-  if (value === 3 || value === 5 || value === 7) return value
-  throw new Malformed('best_of isn\'t 3, 5 or 7')
+  if (value === 1 || value === 3 || value === 5 || value === 7) return value
+  throw new Malformed('best_of isn\'t 1, 3, 5 or 7')
 }
 
 // The result's identity: the SHA-256 of the payload bytes.

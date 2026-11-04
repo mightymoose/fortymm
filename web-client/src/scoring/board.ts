@@ -7,7 +7,7 @@ export type Side = 0 | 1
 // A game's points in the match's `players` order.
 export type GamePoints = [number, number]
 
-export type BestOf = 3 | 5 | 7
+export type BestOf = 1 | 3 | 5 | 7
 
 export type LegalScore = { kind: 'legal'; points: GamePoints; winner: Side }
 
