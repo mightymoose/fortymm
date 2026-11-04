@@ -672,3 +672,488 @@ def test_a_signing_key_is_revoked_by_someone_and_only_a_revoked_one(
         connection.execute(text(f"UPDATE signing_keys SET {values}"))
 
     assert violated_constraint(error) == "ck_signing_keys_revoked_by_with_revoked_at"
+
+
+def add_match(
+    connection: Connection,
+    sides: list[list[uuid.UUID]] | None = None,
+    *,
+    best_of: int = 5,
+) -> uuid.UUID:
+    """A match whose sides hold `sides`' players, by default one new player
+    each. The sides check runs at commit."""
+    settings = connection.scalar(
+        text(
+            "INSERT INTO match_settings (team_size, best_of, rated)"
+            " VALUES (1, :best_of, true) RETURNING id"
+        ),
+        {"best_of": best_of},
+    )
+    match = uuid.uuid4()
+    connection.execute(
+        text(
+            "INSERT INTO matches (id, settings_id, league_id)"
+            " SELECT :id, :settings, id FROM leagues WHERE is_default"
+        ),
+        {"id": match, "settings": settings},
+    )
+    if sides is None:
+        sides = [
+            [add_player(connection, f"Ann {match}")],
+            [add_player(connection, f"Bea {match}")],
+        ]
+    for number, players in enumerate(sides):
+        side = connection.scalar(
+            text(
+                "INSERT INTO match_sides (match_id, side)"
+                " VALUES (:match, :side) RETURNING id"
+            ),
+            {"match": match, "side": number},
+        )
+        for player in players:
+            connection.execute(
+                text(
+                    "INSERT INTO match_side_players"
+                    " (match_side_id, match_id, player_id)"
+                    " VALUES (:side, :match, :player)"
+                ),
+                {"side": side, "match": match, "player": player},
+            )
+    return match
+
+
+def add_result(
+    connection: Connection,
+    match: uuid.UUID,
+    payload: bytes,
+    replaces: uuid.UUID | None = None,
+) -> uuid.UUID:
+    id: uuid.UUID = connection.scalar(
+        text(
+            "INSERT INTO match_results (match_id, payload, replaces_id)"
+            " VALUES (:match, :payload, :replaces) RETURNING id"
+        ),
+        {"match": match, "payload": payload, "replaces": replaces},
+    )
+    return id
+
+
+def add_submission(
+    connection: Connection, match: uuid.UUID, result: uuid.UUID | None = None
+) -> int:
+    id: int = connection.scalar(
+        text(
+            "INSERT INTO match_submissions (match_id, kind, body, outcome, result_id)"
+            " VALUES (:match, 'result', '\\x00', 'accepted', :result) RETURNING id"
+        ),
+        {"match": match, "result": result},
+    )
+    return id
+
+
+def accept(connection: Connection, result: uuid.UUID) -> None:
+    connection.execute(
+        text("UPDATE match_results SET accepted_at = now() WHERE id = :id"),
+        {"id": result},
+    )
+
+
+def test_a_match_has_two_sides_of_one_player_each(connection: Connection) -> None:
+    add_match(connection)
+
+    connection.commit()
+
+
+def test_a_match_with_one_side_is_refused_at_commit(connection: Connection) -> None:
+    add_match(connection, [[add_player(connection)]])
+
+    with pytest.raises(IntegrityError, match="two sides of team_size players"):
+        connection.commit()
+
+
+def test_a_match_has_no_third_side(connection: Connection) -> None:
+    players = [[add_player(connection, name)] for name in ("Ann", "Bea", "Cy")]
+
+    with pytest.raises(IntegrityError) as error:
+        add_match(connection, players)
+
+    assert violated_constraint(error) == "ck_match_sides_side"
+
+
+def test_a_singles_side_with_two_players_is_refused_at_commit(
+    connection: Connection,
+) -> None:
+    ann, bea, cy = (add_player(connection, name) for name in ("Ann", "Bea", "Cy"))
+    add_match(connection, [[ann, bea], [cy]])
+
+    with pytest.raises(IntegrityError, match="two sides of team_size players"):
+        connection.commit()
+
+
+def test_a_player_is_on_one_side_of_a_match(connection: Connection) -> None:
+    ann = add_player(connection)
+
+    with pytest.raises(IntegrityError) as error:
+        add_match(connection, [[ann], [ann]])
+
+    assert violated_constraint(error) == "uq_match_side_players_match_id"
+
+
+@pytest.mark.parametrize(
+    ("best_of", "allowed"), [(1, True), (3, True), (7, True), (2, False), (9, False)]
+)
+def test_a_match_is_best_of_1_3_5_or_7(
+    connection: Connection, best_of: int, allowed: bool
+) -> None:
+    if allowed:
+        add_match(connection, best_of=best_of)
+        return
+    with pytest.raises(IntegrityError) as error:
+        add_match(connection, best_of=best_of)
+
+    assert violated_constraint(error) == "ck_match_settings_best_of"
+
+
+def test_doubles_waits_for_the_next_result_format(connection: Connection) -> None:
+    with pytest.raises(IntegrityError) as error:
+        connection.execute(
+            text(
+                "INSERT INTO match_settings (team_size, best_of, rated)"
+                " VALUES (2, 5, true)"
+            )
+        )
+
+    assert violated_constraint(error) == "ck_match_settings_singles_only"
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE match_settings SET rated = false",
+        "DELETE FROM match_sides",
+        "UPDATE match_side_players SET player_id = player_id",
+    ],
+)
+def test_a_matchs_settings_and_sides_never_change(
+    connection: Connection, statement: str
+) -> None:
+    add_match(connection)
+
+    with pytest.raises(ProgrammingError, match="rows never change"):
+        connection.execute(text(statement))
+
+
+def test_a_match_is_never_deleted(connection: Connection) -> None:
+    add_match(connection)
+
+    with pytest.raises(ProgrammingError, match="matches are never deleted"):
+        connection.execute(text("DELETE FROM matches"))
+
+
+def test_a_match_changes_only_its_current_result(connection: Connection) -> None:
+    add_match(connection)
+
+    with pytest.raises(ProgrammingError, match="changes only its current result"):
+        connection.execute(
+            text("UPDATE matches SET created_at = created_at - interval '1 day'")
+        )
+
+
+def test_a_matchs_current_result_is_an_accepted_one(connection: Connection) -> None:
+    match = add_match(connection)
+    result = add_result(connection, match, b"first")
+    update = text("UPDATE matches SET current_result_id = :result WHERE id = :match")
+
+    with (
+        pytest.raises(ProgrammingError, match="current result is its accepted head"),
+        connection.begin_nested(),
+    ):
+        connection.execute(update, {"result": result, "match": match})
+
+    accept(connection, result)
+    connection.execute(update, {"result": result, "match": match})
+
+
+def test_a_matchs_current_result_is_its_own(connection: Connection) -> None:
+    match, other = add_match(connection), add_match(connection)
+    result = add_result(connection, other, b"other's")
+    accept(connection, result)
+
+    with pytest.raises(IntegrityError) as error:
+        connection.execute(
+            text("UPDATE matches SET current_result_id = :result WHERE id = :match"),
+            {"result": result, "match": match},
+        )
+
+    assert violated_constraint(error) == "fk_matches_current_result_id_match_results"
+
+
+def test_a_match_starts_with_no_current_result(connection: Connection) -> None:
+    settings = connection.scalar(
+        text(
+            "INSERT INTO match_settings (team_size, best_of, rated)"
+            " VALUES (1, 5, true) RETURNING id"
+        )
+    )
+
+    with pytest.raises(ProgrammingError, match="starts with no current result"):
+        connection.execute(
+            text(
+                "INSERT INTO matches (id, settings_id, league_id, current_result_id)"
+                " SELECT gen_random_uuid(), :settings, id, gen_random_uuid()"
+                " FROM leagues WHERE is_default"
+            ),
+            {"settings": settings},
+        )
+
+
+def make_current(connection: Connection, match: uuid.UUID, result: uuid.UUID) -> None:
+    connection.execute(
+        text("UPDATE matches SET current_result_id = :result WHERE id = :match"),
+        {"result": result, "match": match},
+    )
+
+
+def test_a_final_match_stays_final(connection: Connection) -> None:
+    match = add_match(connection)
+    result = add_result(connection, match, b"3-1")
+    accept(connection, result)
+    make_current(connection, match, result)
+
+    with pytest.raises(ProgrammingError, match="a final match stays final"):
+        connection.execute(text("UPDATE matches SET current_result_id = NULL"))
+
+
+def test_a_matchs_current_result_never_goes_back_to_a_replaced_one(
+    connection: Connection,
+) -> None:
+    match = add_match(connection)
+    first = add_result(connection, match, b"3-1")
+    accept(connection, first)
+    make_current(connection, match, first)
+    second = add_result(connection, match, b"3-2", replaces=first)
+    accept(connection, second)
+    make_current(connection, match, second)
+
+    with pytest.raises(ProgrammingError, match="current result is its accepted head"):
+        make_current(connection, match, first)
+
+
+def test_a_replaced_result_never_becomes_current(connection: Connection) -> None:
+    match = add_match(connection)
+    first = add_result(connection, match, b"3-1")
+    add_result(connection, match, b"3-2", replaces=first)
+    accept(connection, first)
+
+    with pytest.raises(ProgrammingError, match="current result is its accepted head"):
+        make_current(connection, match, first)
+
+
+def test_a_result_replaces_one_that_already_exists(connection: Connection) -> None:
+    match = add_match(connection)
+    a, b = uuid.uuid4(), uuid.uuid4()
+
+    with pytest.raises(ProgrammingError, match="replaces one that already exists"):
+        connection.execute(
+            text(
+                "INSERT INTO match_results (id, match_id, payload, replaces_id)"
+                " VALUES (:a, :match, 'A', :b), (:b, :match, 'B', :a)"
+            ),
+            {"a": a, "b": b, "match": match},
+        )
+
+
+def test_a_payload_is_stored_once(connection: Connection) -> None:
+    match = add_match(connection)
+    add_result(connection, match, b"same bytes")
+
+    with pytest.raises(IntegrityError) as error:
+        add_result(connection, match, b"same bytes")
+
+    assert violated_constraint(error) == "match_results_by_hash"
+
+
+def test_a_result_is_found_by_its_payloads_hash(connection: Connection) -> None:
+    match = add_match(connection)
+    result = add_result(connection, match, b"payload")
+    indexdef = connection.scalar(
+        text(
+            "SELECT indexdef FROM pg_indexes WHERE tablename = 'match_results'"
+            " AND indexname = 'match_results_by_hash'"
+        )
+    )
+
+    assert indexdef == (
+        "CREATE UNIQUE INDEX match_results_by_hash ON public.match_results"
+        " USING btree (sha256(payload))"
+    )
+    assert (
+        connection.scalar(
+            text("SELECT id FROM match_results WHERE sha256(payload) = :hash"),
+            {"hash": hashlib.sha256(b"payload").digest()},
+        )
+        == result
+    )
+
+
+def test_a_match_has_one_first_result(connection: Connection) -> None:
+    match = add_match(connection)
+    add_result(connection, match, b"3-1")
+
+    with pytest.raises(IntegrityError) as error:
+        add_result(connection, match, b"3-2")
+
+    assert violated_constraint(error) == "one_successor"
+
+
+def test_a_result_has_one_successor(connection: Connection) -> None:
+    match = add_match(connection)
+    first = add_result(connection, match, b"3-1")
+    add_result(connection, match, b"3-2", replaces=first)
+
+    with pytest.raises(IntegrityError) as error:
+        add_result(connection, match, b"3-0", replaces=first)
+
+    assert violated_constraint(error) == "one_successor"
+
+
+def test_one_successor_counts_every_result_and_treats_nulls_as_equal(
+    connection: Connection,
+) -> None:
+    indexdef = connection.scalar(
+        text(
+            "SELECT indexdef FROM pg_indexes WHERE tablename = 'match_results'"
+            " AND indexname = 'one_successor'"
+        )
+    )
+
+    assert indexdef == (
+        "CREATE UNIQUE INDEX one_successor ON public.match_results"
+        " USING btree (match_id, replaces_id) NULLS NOT DISTINCT"
+    )
+
+
+def test_a_result_replaces_a_result_of_its_own_match(connection: Connection) -> None:
+    match, other = add_match(connection), add_match(connection)
+    elsewhere = add_result(connection, other, b"elsewhere")
+
+    with pytest.raises(IntegrityError) as error:
+        add_result(connection, match, b"here", replaces=elsewhere)
+
+    assert violated_constraint(error) == "fk_match_results_replaces_id_match_results"
+
+
+def test_a_result_is_accepted_once_and_otherwise_never_changes(
+    connection: Connection,
+) -> None:
+    result = add_result(connection, add_match(connection), b"3-1")
+    accept(connection, result)
+
+    with pytest.raises(ProgrammingError, match="changes only when it is accepted"):
+        accept(connection, result)
+
+
+def test_a_results_payload_never_changes(connection: Connection) -> None:
+    result = add_result(connection, add_match(connection), b"3-1")
+
+    with pytest.raises(ProgrammingError, match="changes only when it is accepted"):
+        connection.execute(
+            text(
+                "UPDATE match_results SET payload = 'edited', accepted_at = now()"
+                " WHERE id = :id"
+            ),
+            {"id": result},
+        )
+
+
+def test_a_result_is_never_deleted(connection: Connection) -> None:
+    add_result(connection, add_match(connection), b"3-1")
+
+    with pytest.raises(ProgrammingError, match="match results are never deleted"):
+        connection.execute(text("DELETE FROM match_results"))
+
+
+def test_a_submission_never_changes(connection: Connection) -> None:
+    add_submission(connection, add_match(connection))
+
+    with pytest.raises(ProgrammingError, match="rows never change"):
+        connection.execute(text("UPDATE match_submissions SET outcome = 'stale'"))
+
+
+def test_a_submission_is_for_a_match_that_exists(connection: Connection) -> None:
+    with pytest.raises(IntegrityError) as error:
+        add_submission(connection, uuid.uuid4())
+
+    assert violated_constraint(error) == "fk_match_submissions_match_id_matches"
+
+
+def test_a_submissions_result_is_of_its_match(connection: Connection) -> None:
+    match, other = add_match(connection), add_match(connection)
+    result = add_result(connection, other, b"other's")
+
+    with pytest.raises(IntegrityError) as error:
+        add_submission(connection, match, result)
+
+    assert violated_constraint(error) == "fk_match_submissions_result_id_match_results"
+
+
+def add_approval(
+    connection: Connection,
+    result: uuid.UUID,
+    submission: int,
+    account: uuid.UUID,
+    player: uuid.UUID,
+) -> None:
+    connection.execute(
+        text(
+            "INSERT INTO match_approvals (result_id, key_id, side, signature,"
+            " account_id, player_id, authority, submission_id)"
+            " VALUES (:result, :key, 0, :signature, :account, :player, 'self',"
+            " :submission)"
+        ),
+        {
+            "result": result,
+            "key": COSE_KEY.kid,
+            "signature": bytes(64),
+            "account": account,
+            "player": player,
+            "submission": submission,
+        },
+    )
+
+
+def test_a_signature_counts_once_for_its_side(connection: Connection) -> None:
+    account, ann = add_account(connection), add_player(connection, "Ann")
+    add_signing_key(connection, account)
+    match = add_match(connection, [[ann], [add_player(connection, "Bea")]])
+    result = add_result(connection, match, b"3-1")
+    add_approval(
+        connection, result, add_submission(connection, match, result), account, ann
+    )
+
+    with pytest.raises(IntegrityError) as error:
+        add_approval(
+            connection, result, add_submission(connection, match, result), account, ann
+        )
+
+    assert violated_constraint(error) == "pk_match_approvals"
+
+
+def test_an_approval_came_in_a_submission_of_its_result(
+    connection: Connection,
+) -> None:
+    account, ann = add_account(connection), add_player(connection, "Ann")
+    add_signing_key(connection, account)
+    match = add_match(connection, [[ann], [add_player(connection, "Bea")]])
+    first = add_result(connection, match, b"3-1")
+    second = add_result(connection, match, b"3-2", replaces=first)
+
+    with pytest.raises(IntegrityError) as error:
+        add_approval(
+            connection, second, add_submission(connection, match, first), account, ann
+        )
+
+    assert (
+        violated_constraint(error)
+        == "fk_match_approvals_submission_id_match_submissions"
+    )
