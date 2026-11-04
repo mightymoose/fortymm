@@ -130,8 +130,20 @@ services:
       - .:/app
       - web-client-node-modules:/app/web-client/node_modules
 
+  # Builds and tests the Android client (`mise run android-client:ci`). The
+  # profile keeps `docker compose up` from starting it.
+  android:
+    build: android-client
+    platform: linux/amd64
+    profiles: ["android"]
+    working_dir: /app/android-client
+    volumes:
+      - .:/app
+      - android-gradle:/root/.gradle
+
 volumes:
   mise:
   web-client-node-modules:
   api-venv:
   postgres-data:
+  android-gradle:

@@ -1,14 +1,17 @@
 # CLAUDE.md
 
-Dev tools run inside a Docker Compose container managed by mise. Use the repo's
-bootstrap wrapper `./bin/mise` (it downloads the pinned mise on first use); a
-global `mise` install isn't required.
+Every dev tool runs in a Docker Compose container managed by mise, except the
+iOS client's.
+[.claude/rules/dev-tools-in-docker.md](.claude/rules/dev-tools-in-docker.md)
+says why. Use the repo's bootstrap wrapper `./bin/mise` (it downloads the
+pinned mise on first use); a global `mise` install isn't required.
 
 - `mise.toml`: host-side tasks, which drive the Docker Compose stack.
 - `mise.container.toml`: tool versions (Node, Python, uv) installed inside the
   dev container.
-- `compose.yaml` / `Dockerfile`: the `dev` service that every task runs in,
-  and the `api` service, built from the same image.
+- `compose.yaml` / `Dockerfile`: the `dev` service that most tasks run in,
+  and the `api` service, built from the same image. The `android` service
+  has its own image (see android-client).
 
 ## Dev stack
 
@@ -1969,6 +1972,50 @@ BUILD_NUMBER=7 ./bin/mise run ios-client:testflight  # archive and upload to Tes
 - `ITSAppUsesNonExemptEncryption` is false in the Info.plist, so TestFlight
   asks no export compliance question per build. An app that adds its own
   encryption must change it.
+
+## android-client
+
+`android-client/` is the Android app, in Kotlin and Jetpack Compose. For
+now it shows only a splash screen, as the iOS client does. It builds and
+tests in the `android` Compose service, so the host needs no Java, Gradle or
+Android SDK.
+
+```sh
+./bin/mise run android-client:test   # run the unit tests
+./bin/mise run android-client:e2e    # run the UI tests
+./bin/mise run android-client:ci     # run both and build the debug APK
+```
+
+- `android-client/Dockerfile` is the service's image: a JDK, Gradle and the
+  Android SDK, each pinned with an `ARG`. The project has no Gradle wrapper,
+  so the image pins Gradle. The build accepts the SDK licenses. The service
+  runs as `linux/amd64`, because Google ships `aapt2` for x86-64 Linux only.
+  So on a Mac it runs under Rosetta. Its profile, `android`, keeps `docker
+  compose up` from starting it. Gradle's cache lives in the `android-gradle`
+  volume.
+- The app is one module, `app`, with application ID `com.fortymm.android`
+  and min SDK 26. `MainActivity` shows `SplashScreen`. The window and the
+  system splash screen are ink-950 too, edge to edge with light bar icons.
+- `DesignToken` (`DesignToken.kt`) holds the colour tokens the app uses.
+  `Color.bgApp`, `Color.fg1` and `FontFamily.display` come from it. Gradle
+  copies Bebas Neue from `references/design-system/fonts/` into the app's
+  resources at build time, so the app has no copy to drift.
+- All tests run on the JVM, because Docker on a Mac can't run the emulator.
+  The UI tests are the classes whose names end in `UiTest`. Gradle's
+  `-Ptests=unit` or `-Ptests=ui` picks one kind.
+- `DesignTokenTest` fails if a token's hex differs from
+  `colors_and_type.css`. `MainActivityTest` fails if the window background
+  differs from `Color.bgApp`, or if the font isn't bundled.
+- `SplashUiTest` runs the activity on Robolectric and goes through page
+  objects such as `SplashScreen` in `src/test/.../pages/`, which find
+  elements by what TalkBack reads. Robolectric runs SDK 36
+  (`robolectric.properties`), because Espresso fails on its SDK 37.
+  It draws with Android's native graphics on a 411x891dp phone and saves
+  the screen to `app/build/screenshots/splash.png`.
+- `.github/workflows/android-client.yml` runs `android-client:ci` on Ubuntu,
+  only on a push that changes the app, its design-system inputs,
+  `compose.yaml`, `mise.toml`, `bin/mise` or the workflow. It uploads the
+  test reports and the screenshot as `android-client-results`.
 
 ## Deploy
 
