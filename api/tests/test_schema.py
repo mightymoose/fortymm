@@ -865,7 +865,7 @@ def test_a_matchs_current_result_is_an_accepted_one(connection: Connection) -> N
     update = text("UPDATE matches SET current_result_id = :result WHERE id = :match")
 
     with (
-        pytest.raises(ProgrammingError, match="current result is an accepted one"),
+        pytest.raises(ProgrammingError, match="current result is its accepted head"),
         connection.begin_nested(),
     ):
         connection.execute(update, {"result": result, "match": match})
@@ -886,6 +886,81 @@ def test_a_matchs_current_result_is_its_own(connection: Connection) -> None:
         )
 
     assert violated_constraint(error) == "fk_matches_current_result_id_match_results"
+
+
+def test_a_match_starts_with_no_current_result(connection: Connection) -> None:
+    settings = connection.scalar(
+        text(
+            "INSERT INTO match_settings (team_size, best_of, rated)"
+            " VALUES (1, 5, true) RETURNING id"
+        )
+    )
+
+    with pytest.raises(ProgrammingError, match="starts with no current result"):
+        connection.execute(
+            text(
+                "INSERT INTO matches (id, settings_id, league_id, current_result_id)"
+                " SELECT gen_random_uuid(), :settings, id, gen_random_uuid()"
+                " FROM leagues WHERE is_default"
+            ),
+            {"settings": settings},
+        )
+
+
+def make_current(connection: Connection, match: uuid.UUID, result: uuid.UUID) -> None:
+    connection.execute(
+        text("UPDATE matches SET current_result_id = :result WHERE id = :match"),
+        {"result": result, "match": match},
+    )
+
+
+def test_a_final_match_stays_final(connection: Connection) -> None:
+    match = add_match(connection)
+    result = add_result(connection, match, b"3-1")
+    accept(connection, result)
+    make_current(connection, match, result)
+
+    with pytest.raises(ProgrammingError, match="a final match stays final"):
+        connection.execute(text("UPDATE matches SET current_result_id = NULL"))
+
+
+def test_a_matchs_current_result_never_goes_back_to_a_replaced_one(
+    connection: Connection,
+) -> None:
+    match = add_match(connection)
+    first = add_result(connection, match, b"3-1")
+    accept(connection, first)
+    make_current(connection, match, first)
+    second = add_result(connection, match, b"3-2", replaces=first)
+    accept(connection, second)
+    make_current(connection, match, second)
+
+    with pytest.raises(ProgrammingError, match="current result is its accepted head"):
+        make_current(connection, match, first)
+
+
+def test_a_replaced_result_never_becomes_current(connection: Connection) -> None:
+    match = add_match(connection)
+    first = add_result(connection, match, b"3-1")
+    add_result(connection, match, b"3-2", replaces=first)
+    accept(connection, first)
+
+    with pytest.raises(ProgrammingError, match="current result is its accepted head"):
+        make_current(connection, match, first)
+
+
+def test_a_result_replaces_one_that_already_exists(connection: Connection) -> None:
+    match = add_match(connection)
+    a, b = uuid.uuid4(), uuid.uuid4()
+
+    with pytest.raises(ProgrammingError, match="replaces one that already exists"):
+        connection.execute(
+            text(
+                "INSERT INTO match_results (id, match_id, payload, replaces_id)"
+                " VALUES (:a, :match, 'A', :b), (:b, :match, 'B', :a)"
+            ),
+            {"a": a, "b": b, "match": match},
+        )
 
 
 def test_a_payload_is_stored_once(connection: Connection) -> None:

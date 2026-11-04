@@ -150,12 +150,21 @@ or nothing if it's the first.
   `one_successor` on `(match_id, replaces_id)`, with `NULLS NOT DISTINCT`,
   enforces it. If two devices counter the same result, the second gets a
   409, and that's a database rule, not just a service check.
-- **Only the head can be approved.** The head is the result nothing
-  replaces. Approving an older result changes nothing.
+- **Every new result replaces the head.** The head is the result nothing
+  replaces. That holds for a counter, a correction and an override alike.
+  Since a pending counter already takes the current result's successor
+  slot, a correction or override made while it waits replaces the
+  counter, and cuts it off.
+- **A result replaces only a row that already exists.** A trigger
+  refuses anything else, even within one multi-row insert, so the chain
+  can never loop.
+- **Only the head can be approved.** Approving an older result would
+  change nothing. The service checks this, not the database.
 - **Current means the newest accepted result**, never the newest result.
   The newest may be half-signed. `matches.current_result_id` names the
-  current one. A trigger makes sure it's accepted and belongs to the same
-  match.
+  current one. A match starts with none. A trigger lets the pointer move
+  only to an accepted head of the same match, and never back to NULL. So
+  a final match stays final, and the pointer only moves forward.
 - **A result changes once.** Its `accepted_at` is set when it becomes
   current, and nothing else about it ever changes. A trigger refuses
   everything else, and deletes.
@@ -190,15 +199,16 @@ An administrator with `matches.override` can impose a result, with a
 reason:
 
 1. The server encodes a payload for the given scores, with `replaces` set
-   to the current result's hash.
+   to the head's hash. That's usually the current result, or a counter
+   still waiting on it.
 2. It logs the request as an `override` submission, with the
    administrator's account.
 3. It stores the result with `override_reason` and no approvals, and
    accepts it at once.
 
 The override has a payload hash like any result, so players can still
-correct it the normal way, and a device holding the result it replaced
-gets a 409.
+correct it the normal way. A device still holding a result the override
+replaced or cut off gets a 409.
 
 ### Merges and adoption
 

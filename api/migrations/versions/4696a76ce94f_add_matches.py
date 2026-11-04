@@ -299,8 +299,9 @@ def upgrade() -> None:
             f"CREATE TRIGGER {table}_never_change BEFORE UPDATE OR DELETE ON {table}"
             " FOR EACH ROW EXECUTE FUNCTION refuse_match_record_change()"
         )
-    # A match's settings and sides are fixed, so only its current result moves,
-    # and only to a result that was accepted.
+    # A match's settings and sides are fixed, so only its current result moves.
+    # It starts empty, and once set it only moves forward along the chain: to
+    # an accepted result that nothing replaces.
     op.execute(
         """
         CREATE FUNCTION guard_match() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -308,24 +309,38 @@ def upgrade() -> None:
           IF TG_OP = 'DELETE' THEN
             RAISE EXCEPTION 'matches are never deleted';
           END IF;
+          IF TG_OP = 'INSERT' THEN
+            IF NEW.current_result_id IS NOT NULL THEN
+              RAISE EXCEPTION 'a match starts with no current result';
+            END IF;
+            RETURN NEW;
+          END IF;
           IF (NEW.id, NEW.settings_id, NEW.league_id, NEW.created_by, NEW.created_at)
              IS DISTINCT FROM
              (OLD.id, OLD.settings_id, OLD.league_id, OLD.created_by, OLD.created_at)
           THEN
             RAISE EXCEPTION 'a match changes only its current result';
           END IF;
-          IF NEW.current_result_id IS NOT NULL AND NOT EXISTS (
+          IF NEW.current_result_id IS NOT DISTINCT FROM OLD.current_result_id THEN
+            RETURN NEW;
+          END IF;
+          IF NEW.current_result_id IS NULL THEN
+            RAISE EXCEPTION 'a final match stays final';
+          END IF;
+          IF NOT EXISTS (
             SELECT FROM match_results
             WHERE id = NEW.current_result_id AND accepted_at IS NOT NULL
+          ) OR EXISTS (
+            SELECT FROM match_results WHERE replaces_id = NEW.current_result_id
           ) THEN
-            RAISE EXCEPTION 'a match''s current result is an accepted one';
+            RAISE EXCEPTION 'a match''s current result is its accepted head';
           END IF;
           RETURN NEW;
         END $$
         """
     )
     op.execute(
-        "CREATE TRIGGER matches_guard BEFORE UPDATE OR DELETE ON matches"
+        "CREATE TRIGGER matches_guard BEFORE INSERT OR UPDATE OR DELETE ON matches"
         " FOR EACH ROW EXECUTE FUNCTION guard_match()"
     )
     op.execute(
@@ -334,6 +349,17 @@ def upgrade() -> None:
         BEGIN
           IF TG_OP = 'DELETE' THEN
             RAISE EXCEPTION 'match results are never deleted';
+          END IF;
+          -- A row trigger sees the rows its statement inserted before it, so
+          -- naming a later row of the same INSERT is refused, and no chain
+          -- can loop.
+          IF TG_OP = 'INSERT' THEN
+            IF NEW.replaces_id IS NOT NULL AND NOT EXISTS (
+              SELECT FROM match_results WHERE id = NEW.replaces_id
+            ) THEN
+              RAISE EXCEPTION 'a result replaces one that already exists';
+            END IF;
+            RETURN NEW;
           END IF;
           IF OLD.accepted_at IS NOT NULL OR NEW.accepted_at IS NULL
              OR (NEW.id, NEW.match_id, NEW.payload, NEW.replaces_id,
@@ -349,7 +375,8 @@ def upgrade() -> None:
         """
     )
     op.execute(
-        "CREATE TRIGGER match_results_guard BEFORE UPDATE OR DELETE ON match_results"
+        "CREATE TRIGGER match_results_guard"
+        " BEFORE INSERT OR UPDATE OR DELETE ON match_results"
         " FOR EACH ROW EXECUTE FUNCTION guard_match_result()"
     )
     # Deferred, so one transaction can insert the match, its sides and their

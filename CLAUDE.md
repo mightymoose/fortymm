@@ -116,9 +116,9 @@ API's URL.
 
 `references/` holds reference material that isn't built or deployed (see
 `references/README.md`). `references/design-system/` is the FortyMM design
-system (v2.1), and the app matches it. `references/matches.md` explains
-how a match is recorded. Read its `README.md` and
+system (v2.1), and the app matches it. Read its `README.md` and
 `colors_and_type.css` before designing or styling UI.
+`references/matches.md` explains how a match is recorded.
 
 ## api
 
@@ -559,7 +559,8 @@ reads leagues yet.
 The tables that record matches (#187, #188). No route writes them yet.
 `references/matches.md` explains how they fit together, with a match
 from start to finish.
-`models.py` holds them, and `tests/test_schema.py` checks each rule below.
+`models.py` holds them, and `tests/test_schema.py` checks each rule below
+that the database enforces.
 
 - `match_settings` holds a match's rules: `team_size`, `best_of` and
   `rated`. A match is best of 1, 3, 5 or 7. `team_size` is 1, because
@@ -574,8 +575,10 @@ from start to finish.
   transaction inserts the match, its sides and their players.
 - Settings, sides, side players, submissions and approvals never change.
   A trigger refuses each UPDATE and DELETE. A match is never deleted, and
-  changes only its `current_result_id`, which must name an accepted result
-  of the same match.
+  changes only its `current_result_id`. That starts NULL, and once set it
+  only moves to an accepted result of the same match that nothing
+  replaces. So a final match stays final, and its current result only
+  moves forward.
 - `match_results` holds each distinct payload once, a signed result's or
   an override's. A client names a result by the SHA-256 of its payload,
   so the unique index `match_results_by_hash` is on `sha256(payload)`.
@@ -584,8 +587,13 @@ from start to finish.
   payload's `replaces` hash resolves to. The unique index `one_successor`,
   on `(match_id, replaces_id)` with `NULLS NOT DISTINCT`, gives a match one
   first result and each result at most one successor. So two counters to
-  one result can't both land. Only the head can be approved. A result
-  changes only once, when `accepted_at` is set.
+  one result can't both land, and every new result, a correction or an
+  override too, replaces the head, the result nothing replaces. A result
+  may only replace a row that already exists, so the chain can't loop. A
+  result changes only once, when `accepted_at` is set.
+- Only the head can be approved. #188's service checks that, under the
+  match's lock. The database doesn't, but it never lets a replaced result
+  become current.
 - `match_submissions` logs every request that sends a match a board, a
   result or an override, accepted or refused, with its body, account,
   network and outcome. A request for a match that never exists leaves no
