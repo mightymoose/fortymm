@@ -214,7 +214,8 @@ replaced or cut off gets a 409.
 
 - **Player merge.** Rows keep the player ids they were written with. Reads
   and comparisons resolve `merged_into` first, so a result signed before a
-  merge still matches its match.
+  merge still matches its match. Two players who played each other, in a
+  match with a result, never merge, so the two sides stay two people.
 - **Guest adoption.** A match, a submission and an approval keep naming the
   guest account that acted. The guest's row stays, with `adopted_into` set,
   so the history can still be followed. These columns are `KEPT_AS_RECORD`

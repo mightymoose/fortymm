@@ -297,7 +297,8 @@ question. No table records play yet, so today no sign-in asks it.
 
 - `GET /v1/account/players` lists the account's players, its `self`
   player first, then by display name. Each has `relationship`,
-  `open_question`, `match_count` and `recent_matches`. It leaves out merged
+  `open_question`, `match_count`, `recent_matches` and `played_against`,
+  the account's other listed players that it played. It leaves out merged
   players. No player has a match yet, so the service always gives
   `match_count` 0 and no `recent_matches`. The games work fills them.
 - `POST /v1/account/players/{player_id}/answer` takes `{"answer": "yes"}`,
@@ -316,7 +317,9 @@ question. No table records play yet, so today no sign-in asks it.
   `Settled` or `Merged`.
 - Every answer clears `adopted_from`. A second answer changes nothing,
   whatever the first answer was, and its outcome is `already_answered`.
-- The API answers 409 to `not_mine` for a question already answered. It
+- The API answers 409 to `not_mine` for a question already answered, and
+  to a `yes` or `same_as` that would merge two players who played each
+  other (see below). It
   answers 404 for a player the account doesn't manage, or a merged player.
   It also answers 404 if `same_as` names a player that isn't a `managed`
   player of the account with a closed question. It answers 422 if
@@ -337,6 +340,17 @@ question. No table records play yet, so today no sign-in asks it.
   stays, as `managed` (`STAYS_ON_PLAYER_MERGE`). The merge also points
   every player already merged into the merged player at the survivor. So
   `merged_into` always names a player that isn't merged.
+- Two players who played each other are two people, so they never merge.
+  `merge_players()` raises `PlayedEachOther`, before it writes anything,
+  when the two were on opposite sides of a match with a result, rated or
+  not. Each counts with the players already merged into it. A match with
+  no result doesn't count, because anyone may create one naming any two
+  players. `opponents()` in the same module holds the rule, and the list's
+  `played_against` comes from it. The merge locks both players and the
+  players merged into them `FOR UPDATE` before it checks, so a writer
+  that holds a match's side players `FOR SHARE` takes turns with it. No
+  route makes a match yet, so the tests make theirs with `played()` in
+  `tests/played_matches.py`.
 - A view that combines a player with the players merged into it comes
   with games.
 
@@ -429,8 +443,10 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   keeps it as it is, so the guest keeps its player and name. `AdoptGuest`
   merges the guest's `self` player into the target account's `self`
   player, as "Yes" does, so the older player survives. If the target
-  account has no `self` player, the guest's becomes it. A `managed` player
-  moves as `managed`. It locks the target account row and its
+  account has no `self` player, the guest's becomes it. If the two `self`
+  players played each other, the guest's stays `managed` with
+  `adopted_from` set, an open question, so the sign-in never fails. A
+  `managed` player moves as `managed`. It locks the target account row and its
   `player_managers` rows `FOR UPDATE` first, so a `POST /v1/session` that
   makes the account's `self` player meanwhile takes turns with it.
 - `AdoptGuest` calls `adopt_guest()` in `services/adoption.py`. It locks
@@ -978,12 +994,14 @@ it to `src/routes/`.
   guest goes to `/` before it asks for players. It asks "Is this you?"
   about one open question at a time. Under the question, a match preview
   shows "No matches yet". The games work adds the player's matches there.
-  "Yes, this is me" answers `yes`. "Someone else played" asks "Do you
+  "Yes, this is me" answers `yes`. A player whose `played_against` names
+  the account's `self` player gets no "Yes, this is me", and the page says
+  that it played that player. "Someone else played" asks "Do you
   manage this player?". There "Remove from my account" answers `not_mine`,
   and Back goes back. "I manage this player" answers `no`, unless the
   account manages another player with a closed question. Then it asks
-  "Which player?", with one button per such player, which answers
-  `same_as`. Its "Keep as a separate player" answers `no`, and its Back
+  "Which player?", with one button per such player that isn't in its
+  `played_against`, which answers `same_as`. Its "Keep as a separate player" answers `no`, and its Back
   goes back. "Review later" goes to `/` with no answer. A reducer holds the page's
   state: every player it has queued this visit, the last confirmation,
   and the step and failed answer of the player on screen. The counter
@@ -1006,8 +1024,11 @@ it to `src/routes/`.
   already answered in another tab." While players remain, the
   confirmation shows above the answers. After the last one, the page goes
   to `/` and shows it as a toast. A save that fails shows its error under
-  its button. A 409 means that another tab answered the player first, so
-  the page says so too, and refetches the players. A 404 can mean that
+  its button. A 409 to `not_mine` means that another tab answered the
+  player first, so the page says so too, and refetches the players. A 409
+  to `yes` or `same_as` means that another tab's answer made it a merge of
+  two players who played each other. The refetched players drop that
+  answer's button, so the page shows the API's title as its notice. A 404 can mean that
   another tab merged the player. Then the page refetches the players, and
   says so only if the player left the list. A 404 to `same_as` can also
   mean that another tab merged the chosen player away. Then "Which player?"
@@ -1448,7 +1469,9 @@ does, with `meta`, a merge into the older player and `same_as`. On a
 closed question it changes nothing and returns `already_answered`, except
 that `not_mine` gets a 409. It returns the answers it got, and
 `answerInAnotherTab()`, which answers a question without the page
-knowing. `failAnswers` makes every answer fail with a 500.
+knowing. `failAnswers` makes every answer fail with a 500. It refuses a merge of
+two players who played each other with the API's 409, and
+`playersChange()` replaces its players.
 A default handler answers `POST /v1/account/signing-keys` with a live
 key. `mockSigningKeys(answers)` records each registration and answers
 with `answers` in order, each a `KeyAnswer` (`live`, `revoked` or
