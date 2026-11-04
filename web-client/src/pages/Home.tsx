@@ -1,4 +1,4 @@
-import { useRouterState } from '@tanstack/react-router'
+import { Link, useRouterState } from '@tanstack/react-router'
 import { useEffect, useRef, type Ref } from 'react'
 import { Icon, type IconName } from '../components/Icon'
 import { AdoptionReview } from './adoption/AdoptionReview'
@@ -54,6 +54,12 @@ export function Home() {
   return (
     <div className="home">
       <AdoptionReview linkRef={reviewLink} />
+      <div>
+        <Link to="/matches/new" className="fm-btn fm-btn--primary">
+          <Icon name="plus" />
+          New match
+        </Link>
+      </div>
       <Roadmap titleRef={title} />
     </div>
   )

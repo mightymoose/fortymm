@@ -76,6 +76,11 @@ export class HomePage {
     return screen.queryByRole('status', { name: 'Loading FortyMM' })
   }
 
+  // The link that sets up a new match.
+  get newMatchLink(): HTMLElement {
+    return screen.getByRole('link', { name: 'New match' })
+  }
+
   // The sidebar's link to Home, or null.
   get homeLink(): HTMLElement | null {
     return screen.queryByRole('link', { name: 'Home' })

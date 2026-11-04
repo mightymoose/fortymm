@@ -72,6 +72,9 @@ export const server = setupServer(
   http.get(`${API_BASE_URL}/v1/account/players`, () =>
     HttpResponse.json<components['schemas']['AccountPlayersResponse']>({ data: [] }),
   ),
+  http.get(`${API_BASE_URL}/v1/matches/opponents`, () =>
+    HttpResponse.json<components['schemas']['OpponentsResponse']>({ data: [] }),
+  ),
   http.post<{ matchId: string }>(`${API_BASE_URL}/v1/matches/:matchId/approvals`, ({ params }) =>
     HttpResponse.json(approvalResponse(params.matchId), { status: 201 }),
   ),
@@ -652,4 +655,78 @@ export function failAdminOnce(list: AdminList, status: number) {
       { once: true },
     ),
   )
+}
+
+type Opponent = components['schemas']['Opponent']
+type MatchRequest = components['schemas']['MatchRequest']
+
+// How the mock API answers a new match: it makes it, refuses it with this
+// title (a 422, or `status`), or no response comes back.
+export type CreateAnswer = 'created' | { refused: string; status?: number } | 'unreachable'
+
+// The mock API's matches. `recent` are the session's recent opponents, and
+// a search finds the players of `everyone` whose name contains it. Each
+// POST is recorded in `creates` and answered with `create`, which a test can
+// change. A second create of one id answers 200. `recentFails` makes the
+// recent opponents answer 500 while it's set. With `holdRecent`, they
+// wait until the test calls release().
+export function mockMatches({
+  recent = [],
+  everyone = recent,
+  create = 'created',
+  holdRecent = false,
+}: {
+  recent?: Opponent[]
+  everyone?: Opponent[]
+  create?: CreateAnswer
+  holdRecent?: boolean
+} = {}) {
+  const pending: (() => void)[] = []
+  const made = new Set<string>()
+  const mock = {
+    create,
+    recentFails: false,
+    creates: [] as MatchRequest[],
+    searches: [] as string[],
+    async release(): Promise<void> {
+      await act(async () => pending.splice(0).forEach((resolve) => resolve()))
+    },
+  }
+  server.use(
+    http.get(`${API_BASE_URL}/v1/matches/opponents`, async ({ request }) => {
+      const search = new URL(request.url).searchParams.get('search')?.trim() ?? ''
+      if (search) {
+        mock.searches.push(search)
+        const found = everyone.filter((player) =>
+          player.display_name.toLowerCase().includes(search.toLowerCase()),
+        )
+        return HttpResponse.json<components['schemas']['OpponentsResponse']>({ data: found })
+      }
+      if (holdRecent) await new Promise<void>((resolve) => pending.push(resolve))
+      if (mock.recentFails) return new HttpResponse(null, { status: 500 })
+      return HttpResponse.json<components['schemas']['OpponentsResponse']>({ data: recent })
+    }),
+    http.post<never, MatchRequest>(
+      `${API_BASE_URL}/v1/matches`,
+      async ({ request }) => {
+        const body = await request.json()
+        mock.creates.push(body)
+        if (mock.create === 'unreachable') return HttpResponse.error()
+        if (mock.create !== 'created') {
+          const status = mock.create.status ?? 422
+          return HttpResponse.json(
+            { errors: [{ status: String(status), title: mock.create.refused }] },
+            { status },
+          )
+        }
+        const known = made.has(body.id)
+        made.add(body.id)
+        return HttpResponse.json<components['schemas']['MatchResponse']>(
+          { data: { id: body.id } },
+          { status: known ? 200 : 201 },
+        )
+      },
+    ),
+  )
+  return mock
 }

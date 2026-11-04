@@ -5,7 +5,6 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from sqlalchemy.orm import sessionmaker
 
@@ -15,6 +14,7 @@ from fortymm_api.database import create_database_engine, migrate
 from fortymm_api.identity_provider import IdentityProvider
 from fortymm_api.services.authorization import MissingPermission
 from fortymm_api.services.match_results import IllegalEnding, WrongMatch
+from fortymm_api.services.matches import SamePlayer, UnknownPlayer
 from fortymm_api.services.player_merge import PlayedEachOther
 from fortymm_api.services.players import (
     PlayerNotManaged,
@@ -42,7 +42,7 @@ from fortymm_api.services.signing_keys import (
 )
 from fortymm_api.signed_results import BadSignature, Malformed, UnknownKey
 from fortymm_api.v1.auth import SignInUnavailable
-from fortymm_api.v1.errors import Error, ErrorsResponse, retry_after_seconds
+from fortymm_api.v1.errors import error_response, retry_after_seconds
 
 WORKER_SECRET_HEADER = "X-FortyMM-Worker-Secret"
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -87,12 +87,11 @@ APPROVAL_ERRORS: dict[type[Exception], tuple[int, str]] = {
     BadSignature: (422, "A signature doesn't match the result"),
     IllegalEnding: (422, "The scores aren't a legal ending to the match"),
 }
+MATCH_ERRORS: dict[type[Exception], tuple[int, str]] = {
+    UnknownPlayer: (422, "A player of the match doesn't exist"),
+    SamePlayer: (422, "Both sides of the match are the same player"),
+}
 AUTH0_SETTINGS = ("AUTH0_DOMAIN", "AUTH0_CLIENT_ID", "AUTH0_CLIENT_SECRET")
-
-
-def error_response(status: int, title: str) -> JSONResponse:
-    body = ErrorsResponse(errors=[Error(status=str(status), title=title)])
-    return JSONResponse(body.model_dump(), status_code=status)
 
 
 def answers(status: int, title: str) -> Callable[[Request, Exception], Response]:
@@ -261,7 +260,11 @@ def create_app() -> FastAPI:
         lambda _request, _error: error_response(503, SIGN_IN_UNAVAILABLE),
     )
     for error, (status, title) in (
-        PLAYER_ERRORS | ROLE_ERRORS | SIGNING_KEY_ERRORS | APPROVAL_ERRORS
+        PLAYER_ERRORS
+        | ROLE_ERRORS
+        | SIGNING_KEY_ERRORS
+        | APPROVAL_ERRORS
+        | MATCH_ERRORS
     ).items():
         app.add_exception_handler(error, answers(status, title))
     require_json(app)

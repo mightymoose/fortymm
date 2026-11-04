@@ -1,7 +1,7 @@
 import { createFileRoute, redirect } from '@tanstack/react-router'
 import { sessionQuery } from '../../../../../../../api/queries'
 import { ScoreGame } from '../../../../../../../pages/scoring/ScoreGame'
-import { demoMatch } from '../../../../../../../scoring/demoMatches'
+import { matchOf, scoringMatch } from '../../../../../../../scoring/matches'
 import { gamesOf, readFragment } from '../../../../../../../scoring/fragment'
 
 const PATH = '/matches/$matchId/scores/game/$gameNumber/edit'
@@ -20,7 +20,8 @@ export const Route = createFileRoute('/_authenticated/matches/$matchId/scores/ga
     staleReloadMode: 'blocking',
     handler: async ({ context: { api, queryClient }, params, location }) => {
       const account = await queryClient.ensureQueryData(sessionQuery(api))
-      const match = demoMatch(params.matchId, { id: account.player.id, name: account.player.display_name })
+      const scoring = scoringMatch(params.matchId, location.hash)
+      const match = matchOf(scoring, { id: account.player.id, name: account.player.display_name }, null)
       const fragment = readFragment(location.hash, match)
       if (!fragment) {
         throw redirect({
@@ -43,7 +44,7 @@ export const Route = createFileRoute('/_authenticated/matches/$matchId/scores/ga
           replace: true,
         })
       }
-      return { fragment, gameNumber, last }
+      return { scoring, fragment, gameNumber, last }
     },
   },
   component: ScoreGame,

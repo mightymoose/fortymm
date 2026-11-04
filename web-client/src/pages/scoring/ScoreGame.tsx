@@ -4,7 +4,8 @@ import { useSyncExternalStore } from 'react'
 import { sessionQuery } from '../../api/queries'
 import { Icon } from '../../components/Icon'
 import { Wordmark } from '../../components/Wordmark'
-import { demoMatch, matchFor, viewerOf, type Match, type Viewer } from '../../scoring/demoMatches'
+import { viewerOf, type Match, type Viewer } from '../../scoring/demoMatches'
+import { matchOf } from '../../scoring/matches'
 import { adopts, boardsOf, learnBoard, subscribeBoards, unsyncedGames } from '../../scoring/boards'
 import { gamesOf, readFragment, type Fragment } from '../../scoring/fragment'
 import { slotsOf } from '../../scoring/planPress'
@@ -26,13 +27,12 @@ import './scoring.css'
 // score is legal. The match rules apply only when a player submits.
 export function ScoreGame() {
   const { matchId } = useParams({ from: ROUTE })
-  const { fragment, gameNumber, last } = useLoaderData({ from: ROUTE })
+  const { scoring, fragment, gameNumber, last } = useLoaderData({ from: ROUTE })
   const { hash, state } = useLocation()
   const { api } = useRouteContext({ from: '__root__' })
   const { data: account } = useSuspenseQuery(sessionQuery(api))
   const self = { id: account.player.id, name: account.player.display_name }
-  // The route checked the result is this match's, so matchFor() finds it.
-  const match = matchFor(matchId, self, fragment.kind === 'empty' ? null : fragment.result) ?? demoMatch(matchId, self)
+  const match = matchOf(scoring, self, fragment.kind === 'empty' ? null : fragment.result)
   const games = gamesOf(fragment)
   const viewer = viewerOf(match, self.id)
   const sides = sidesFor(viewer.role === 'player' ? viewer.side : 0)

@@ -349,8 +349,8 @@ question. No table records play yet, so today no sign-in asks it.
   `played_against` comes from it. The merge locks both players and the
   players merged into them `FOR UPDATE` before it checks, so a writer
   that holds a match's side players `FOR SHARE` takes turns with it. No
-  route makes a match yet, so the tests make theirs with `played()` in
-  `tests/played_matches.py`.
+  route records a result yet, so the tests make their matches with
+  `played()` in `tests/played_matches.py`.
 - A view that combines a player with the players merged into it comes
   with games.
 
@@ -572,17 +572,20 @@ reads leagues yet.
 
 ### Matches
 
-The tables that record matches (#187, #188). No route writes them yet.
+The tables that record matches (#187, #188). Only `POST /v1/matches`
+writes them yet, and nothing records a board or a result.
 `references/matches.md` explains how they fit together, with a match
 from start to finish.
 `models.py` holds them, and `tests/test_schema.py` checks each rule below
-that the database enforces.
+that the database enforces. `services/matches.py` holds the rules of
+making a match, `services/opponents.py` those of picking an opponent, and
+`v1/matches.py` the routes, under `/v1/matches`.
 
 - `match_settings` holds a match's rules: `team_size`, `best_of` and
   `rated`. A match is best of 1, 3, 5 or 7. `team_size` is 1, because
   doubles waits for a v2 of the signed result format.
 - `matches` names its settings (one row each) and its league. Its `id` is
-  made on the client. `created_by` is NULL when a result made the match.
+  made on the client. `created_by` is the account that made it.
   Its state isn't stored. It is final once `current_result_id` is set.
 - A match has two `match_sides`, 0 and 1, the indexes the signed result's
   `players` and signer headers use. `match_side_players` puts the players
@@ -621,6 +624,37 @@ that the database enforces.
 - The signer's and sender's accounts are `KEPT_AS_RECORD` in
   `OWNERSHIP_RULES`: adoption leaves them naming the guest. The players
   are `STAYS_ON_PLAYER_MERGE`.
+- `POST /v1/matches` makes a match, through `create_match()`. It takes
+  the match's `id`, made on the device, `best_of`, `rated` and `players`,
+  side 0's then side 1's. Nothing ever changes a match, so it isn't a
+  `PUT`. It needs a session, a guest's too, and the account needn't play
+  in it. The match goes in the default league with `team_size` 1. Each
+  side stores the player that survives any merge. A new match answers
+  201, and one that exists with the same details 200, both with only its
+  id, `{"data": {"id": "<uuid>"}}`. `create_match()` returns `Created` or
+  `Found` with the id, or `Refused`. Other details answer 409
+  `match_differs`, whose title names what differs, such as "The players
+  and best of differ from the match's". Players are compared side by
+  side after resolving `merged_into`, so a request from before a merge
+  still fits. A player that doesn't exist answers 422 ("A player of the
+  match doesn't exist", `UnknownPlayer`), and so do two sides that are
+  one player after merges ("Both sides of the match are the same
+  player", `SamePlayer`). Neither writes anything. Both checks are only
+  for a new match. An existing id is looked up first, so a retry after
+  the two players merged still finds its match.
+- Two creates of one id take turns on an advisory lock on the id
+  (`MATCH_LOCK`), because a row lock can't hold a match that isn't there
+  yet. The second finds the first's match.
+- `GET /v1/matches/opponents` gives the players a new match can pick, as
+  `id` and `display_name`. It needs a session. With no `search`, or one
+  that trims to empty, it gives the players the account's `self` player
+  faced, most recent match first, each once, at most 12. Merges resolve
+  on both sides. With text, it gives players with no `merged_into` whose
+  display name contains it, whatever its case, by name, at most 20.
+  `%` and `_` match themselves. Neither list holds the account's own
+  `self` player.
+- No route reads a match yet. The tests insert their matches with
+  `add_match()` in `tests/match_setup.py`.
 
 ### Signed match results
 
@@ -974,7 +1008,38 @@ it to `src/routes/`.
   or to its `returnTo` prop. It reads Try again, or Sign in for `used`,
   where nothing failed.
 - Home (`src/pages/Home.tsx`) shows `AdoptionReview`
-  (`src/pages/adoption/`) above the roadmap.
+  (`src/pages/adoption/`), then a New match link to `/matches/new`, above
+  the roadmap. The link stays until matches have a page of their own. The
+  sidebar doesn't list it.
+- `_shell/matches/new.tsx`: the page `NewMatch`
+  (`src/pages/matches/NewMatch.tsx`, with its parts in `newMatch/`),
+  which sets up a match. Its loader waits for the session, then starts
+  `opponentsQuery(api, '')` without waiting, so the page shows at once
+  and a failed request fails only the list. The card holds the session's
+  player, the opponent, the match length (1, 3, 5 or 7, a radiogroup
+  with one tab stop, 5 to start), Rated match and a summary with Cancel
+  and Start match. The opponent comes from the recent opponents, each in
+  its own `QueryBoundary`, or from Search all players. The search asks
+  `GET /v1/matches/opponents?search=` 200ms after the last key, and keeps
+  the last players up while the next ones load (`useDeferredValue`).
+  Back to recent opponents leaves it. A picked opponent shows with
+  Change. One reducer holds the form (`newMatch/setup.ts`): the opponent
+  as `none` or `picked`, the best of, rated, the last attempt and the
+  submit state. Rated is off and can't turn on without an opponent, and
+  Change turns it off. Start match is never off. Without an opponent it
+  says "Pick an opponent to start the match." and sends nothing. Each
+  press sends `POST /v1/matches` with a UUIDv7 (`uuidv7()` in
+  `src/api/uuidv7.ts`). A press with the same details as the last one
+  sends its id again, so a retry after a lost response finds the match
+  the first press made. Then the page opens game 1 of the match's
+  scores, with a draft of no games as the fragment, so the scores open
+  with no network. Nothing caches the match. A 409 or a 422 shows the
+  API's title. While `navigator.onLine` is false, Start match sends
+  nothing, and a request that gets no response is the same. Both say
+  "Making a match needs a connection. Connect, then press Start match
+  again." The form keeps its state, and the next press sends the same id.
+  Another failure shows its `failureMessages`, and Start match stays
+  pressable. The page has no guard against leaving it.
 - The sign-in links come from `useSignInHref()`
   (`src/pages/useSignInHref.ts`). Each is a full page load of
   `/api/v1/auth/login` with the current path and query as `return_to`,
@@ -1085,11 +1150,25 @@ it to `src/routes/`.
   built-in keys in `Permission`. The API checks every request again.
 - `matches/$matchId/scores/game/$gameNumber/edit.tsx`: the page
   `ScoreGame` (`src/pages/scoring/`), a match's scores, with the
-  wordmark, a link to Home and no `AppShell`. It edits one game. The
-  match comes from `demoMatch()` (`src/scoring/demoMatches.ts`), because
-  the API has no matches yet. `demo` is a best of 5 between the session's
-  player and `brave badger 214`. In `demo-spectator`, two other players
-  play, so the viewer is a spectator. Any other id throws `notFound()`.
+  wordmark, a link to Home and no `AppShell`. It edits one game. Each
+  scoring route's loader finds the match with `scoringMatch()`
+  (`src/scoring/matches.ts`), and the pages read it with `matchOf()`.
+  `demo` and `demo-spectator` come from `demoMatch()`
+  (`src/scoring/demoMatches.ts`). `demo` is a best of 5 between the
+  session's player and `brave badger 214`. In `demo-spectator`, two
+  other players play, so the viewer is a spectator. Any other id is a
+  match the API made, with nobody standing in. Its fragment holds its
+  uuid, best of, rated and players, because `draftHash()` keeps a draft
+  with no games for it (`Match.source` is `api`). A demo match's draft
+  with no games is still the empty fragment. So the loader reads the
+  match from the fragment and sends no request, which works offline.
+  No route reads a match, so the page has no player's name. A
+  player sees You and Your opponent, and a spectator sees `Player 1` and
+  `Player 2`. For an id that isn't a demo match, a fragment that is
+  empty, can't be read or names another match throws `notFound()`. So
+  the edit route's redirect after an unreadable fragment of the match
+  ends on the not-found page too. Board sync still goes to the demo
+  server for every match.
   One pad holds a big score input per player and the games tally
   between them, the viewer's player on the left, then the actions
   (`ScoreEntry.tsx`). To a player, the page names the players You and
@@ -1124,16 +1203,16 @@ it to `src/routes/`.
   read, so the scores start empty." A game number past the first game
   with no score, or one that isn't a whole number, goes to that game,
   with a replace, keeping the hash.
-- `matchFor()` in `demoMatches.ts` is the match a result names, as this
-  device knows it. Until matches come from the API, each device builds
+- `matchFor()` in `demoMatches.ts` is the demo match a result names, as
+  this device knows it. Each device builds
   `demo` as its own player against `brave badger 214`. So a result from
   another device names that device's player and the badger. The viewer
   stands in for the badger, unless the result already names the viewer.
   The points stay in the result's order, and the viewer's side goes on
   the left. A player this device can't name shows as `Player 1` or
   `Player 2`. Nobody stands in for a player of `demo-spectator`. The page
-  works out the players from the session on each render, not in the
-  loader, because a saved account can stand in for the session until
+  works out a demo match's players from the session on each render, not
+  in the loader, because a saved account can stand in for the session until
   the API answers with another player.
 - Anyone who can open the match can save any game that can open. The
   only check is that the game's score is legal (`parseGameScore()` in
@@ -1354,6 +1433,11 @@ error page as before. With nothing saved, every failure does. The query's
 browser is offline. `logout()` forgets the saved account once the API has
 ended the session.
 
+A match that the API made opens offline from its URL. Its scoring
+fragment always holds its details, from the first draft on (see
+Routing). Nothing else saves a match. Making a match needs a
+connection, and nothing queues it.
+
 Each request function in `queries.ts` goes through `send()`. It throws
 `ApiUnreachable` when no response came back, and `ApiError` when the
 response isn't ok. A bodyless `POST` or `DELETE` sends `JSON_HEADERS`.
@@ -1477,8 +1561,15 @@ A default handler answers `POST /v1/account/signing-keys` with a live
 key. `mockSigningKeys(answers)` records each registration and answers
 with `answers` in order, each a `KeyAnswer` (`live`, `revoked` or
 `taken`, a 409), then `live`. With `hold`, each answer waits for
-`release()`. A default handler answers `POST
-/v1/matches/{match_id}/approvals` with a 201. `mockApprovals(answer)`
+`release()`. A default handler answers `GET /v1/matches/opponents` with
+no players. `mockMatches()` answers the recent opponents with `recent`
+and a search from `everyone`, and records each `POST /v1/matches` in
+`creates`. It answers it with `create`: `created`, `{ refused: title }`
+(a 422, or `status`) or `unreachable`, which a test can change. A
+created match answers 201 with its id, and a second create of that id
+200. `recentFails` makes the recent opponents answer 500 while it's set, and
+with `holdRecent` they wait for `release()`. A default handler answers
+`POST /v1/matches/{match_id}/approvals` with a 201. `mockApprovals(answer)`
 records each check's match id and envelope, and answers `accepted`,
 `{ refused: title }` (a 422) or `unreachable`. A test can change its
 `answer`, and with `hold` each answer waits for `release()`.
@@ -1521,12 +1612,19 @@ strip isn't `aria-busy`, so the sync has stopped sending and pulling.
 `switchNetwork()` sets the demo network, `otherDeviceSyncs()` puts
 another device's board on the demo server, `serverBoard` reads it, and
 `slotSync()` reads what a screen reader hears about a game's sync.
+`gameCount` is how many games the strip shows, the match's best of.
 `AwaitingValidationPage` wraps the router after a submit, or renders the
 submission page at a path with its envelope, and finds its link, QR code
 and the link back to the scores.
 `AcceptResultPage` renders a link's path and fragment, approves the
 result or goes to edit the scores, and reads the game scores table, the
 approval status, the check with FortyMM and the URL's fragment.
+
+`NewMatchPage` renders `/matches/new`. It picks and changes the
+opponent, searches, sets the match length and rated, presses Start
+match, and reads the recent opponents, the search's players, the
+summary and the alerts. `findAlert()` matches an alert by its text,
+because a `<p role="alert">` takes no name from it.
 
 `HomePage.render({ path })` renders the app at another path, such as one
 with a query. `homePage.href` is the router's current path and query, so a
@@ -1631,7 +1729,13 @@ holds Administrator. A second test does the same at 390x844, where the
 sidebar is a tab bar, and checks that the toast sits 24px above the bar
 (#150).
 
-The suite counts about 26 guest accounts and sign-ins with no session,
+`e2e/new-match.spec.ts` starts a second guest account through the API,
+searches for its player on `/matches/new`, makes a best of 3 against it
+and lands on game 1 of the scores, with a strip of 3 games. Then it
+aborts every request under `/api/v1/matches/` and reloads. The scores
+still open, from the fragment, and the page sent no such request.
+
+The suite counts about 28 guest accounts and sign-ins with no session,
 under the limit of 30 a minute.
 
 The design system page is a copy of the reference's component gallery

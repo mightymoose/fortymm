@@ -61,6 +61,18 @@ export function readFragment(hash: string, match: MatchRules): Fragment | null {
   return fragmentResultSchema(match).safeParse(fragment.result).success ? fragment : null
 }
 
+// The result the fragment holds, whatever match it's for, or null when it's
+// empty or can't be read.
+export function fragmentResult(hash: string): MatchResult | null {
+  try {
+    const fragment = decodeFragment(hash)
+    return fragment.kind === 'empty' ? null : fragment.result
+  } catch (error) {
+    if (error instanceof Malformed) return null
+    throw error
+  }
+}
+
 function decodeFragment(hash: string): Fragment {
   if (hash === '') return { kind: 'empty' }
   const bytes = fromBase64url(hash)
@@ -107,15 +119,16 @@ export function resultOf(match: Match, games: GamePoints[], replaces: Uint8Array
   }
 }
 
-// The fragment of a draft with `games`. A draft with nothing in it is the
-// empty fragment.
+// The fragment of a draft with `games`. A demo match's draft with nothing
+// in it is the empty fragment. An API match's keeps its details, which the
+// scoring routes read from it offline.
 export function draftHash(
   match: Match,
   games: GamePoints[],
   replaces: Uint8Array<ArrayBuffer> | null,
   issuedAt: number,
 ): string {
-  if (games.length === 0 && !replaces) return ''
+  if (match.source === 'demo' && games.length === 0 && !replaces) return ''
   return base64url(encodePayload(issuedAt, resultOf(match, games, replaces)))
 }
 

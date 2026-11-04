@@ -358,6 +358,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/matches/opponents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Match Opponents
+         * @description The players the account may pick as its opponent. With no `search`,
+         *     or only spaces, the players its own player faced, most recent match
+         *     first, at most 12. With text, the players whose display name contains
+         *     it, whatever its case, by name, at most 20. Never the account's own
+         *     player.
+         */
+        get: operations["match_opponents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/matches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Match
+         * @description Make the match, with its id from the device, or find it.
+         *
+         *     A new match answers 201. One that already exists with the same details
+         *     answers 200, so a retry or a second device gets the match. One with
+         *     other players, best of or rated status answers 409, and the title says
+         *     what differs. Players are compared through any merge. Anyone with a
+         *     session may make a match, a guest too, and needn't play in it.
+         */
+        post: operations["create_match"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/permissions": {
         parameters: {
             query?: never;
@@ -944,6 +994,14 @@ export interface components {
         LogoutResponse: {
             data: components["schemas"]["LogoutData"];
         };
+        /** MadeMatch */
+        MadeMatch: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+        };
         /** MatchApproval */
         MatchApproval: {
             /** Key Id */
@@ -953,6 +1011,27 @@ export interface components {
              * Format: uuid
              */
             player_id: string;
+        };
+        /** MatchRequest */
+        MatchRequest: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Best Of
+             * @enum {integer}
+             */
+            best_of: 1 | 3 | 5 | 7;
+            /** Rated */
+            rated: boolean;
+            /** Players */
+            players: string[];
+        };
+        /** MatchResponse */
+        MatchResponse: {
+            data: components["schemas"]["MadeMatch"];
         };
         /** MergedOutcome */
         MergedOutcome: {
@@ -981,6 +1060,21 @@ export interface components {
              * @default
              */
             description: string;
+        };
+        /** Opponent */
+        Opponent: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Display Name */
+            display_name: string;
+        };
+        /** OpponentsResponse */
+        OpponentsResponse: {
+            /** Data */
+            data: components["schemas"]["Opponent"][];
         };
         /** PermissionRequest */
         PermissionRequest: {
@@ -1691,6 +1785,115 @@ export interface operations {
                 };
             };
             /** @description The body is invalid. If the envelope isn't a signed result, is for another match, cites a key that isn't registered or was revoked, has a signature that doesn't verify, or its scores aren't a legal ending, the body is in the `errors` shape instead */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    match_opponents: {
+        parameters: {
+            query?: {
+                search?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpponentsResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_match: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchResponse"];
+                };
+            };
+            /** @description The match was made */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The match has other players, best of or rated status, and the title says which */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The request's Content-Type isn't application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The body is invalid. If a player doesn't exist, or both sides are the same player after merges, the body is in the `errors` shape instead */
             422: {
                 headers: {
                     [name: string]: unknown;
