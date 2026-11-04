@@ -4,10 +4,14 @@ A permission is a row of the `permissions` table. The built-in ones are the
 members of `Permission`, which the code checks, and no admin can delete
 them. Admins add the others, for code that checks their keys later.
 
-Only a verified account holds a role. Every write takes RBAC_LOCK, so two
-writes take turns. Under the lock, a write checks that the acting account
-still holds the permission it needs, and after it, that some account still
-holds `account_roles.manage`. Otherwise nobody could grant a role again.
+Only a verified account holds a role in account_roles. Every account holds
+the default role, guests too, with no row. So it grants no permission that
+administers FortyMM, and nobody grants it or deletes it.
+
+Every write takes RBAC_LOCK, so two writes take turns. Under the lock, a
+write checks that the acting account still holds the permission it needs,
+and after it, that some account still holds `account_roles.manage`.
+Otherwise nobody could grant a role again.
 """
 
 from dataclasses import dataclass
@@ -28,7 +32,7 @@ from fortymm_api.models import (
     RolePermission,
     StoredPermission,
 )
-from fortymm_api.permissions import Permission, RoleId
+from fortymm_api.permissions import ADMINISTRATIVE, Permission, RoleId
 from fortymm_api.services.authorization import MissingPermission, permissions_of
 from fortymm_api.services.sessions import lock_account_for_write
 
@@ -55,8 +59,11 @@ class RoleSummary:
     description: str
     # Permission keys, sorted.
     permissions: tuple[str, ...]
-    # The accounts that hold the role.
+    # The accounts that account_roles grants it to. The default role's is 0,
+    # because every account holds it with no row.
     account_count: int
+    # Every account holds it.
+    default: bool
 
 
 @dataclass(frozen=True)
@@ -141,6 +148,21 @@ class BuiltInPermission(Exception):
     `create_app()` answers 409."""
 
 
+class DefaultRole(Exception):
+    """Every account holds the default role, so it can't be deleted.
+    `create_app()` answers 409."""
+
+
+class AdministrativeDefault(Exception):
+    """The default role would grant a permission that administers FortyMM to
+    every account, guests too. `create_app()` answers 422."""
+
+
+class DefaultRoleGrant(Exception):
+    """Every account holds the default role, so nobody grants it.
+    `create_app()` answers 422."""
+
+
 class LastAdministrator(Exception):
     """The write would leave no account holding `account_roles.manage`.
     `create_app()` answers 409."""
@@ -220,8 +242,11 @@ def update_role(
 ) -> RoleSummary:
     """Set the role's name, description and exact set of permissions."""
     _begin_write(session, actor, Permission.ROLES_MANAGE)
-    if session.scalar(select(Role.id).where(Role.id == role)) is None:
+    is_default = session.scalar(select(Role.is_default).where(Role.id == role))
+    if is_default is None:
         raise RoleNotFound
+    if is_default and not draft.permissions.isdisjoint(ADMINISTRATIVE):
+        raise AdministrativeDefault
     _require_free_name(session, draft.name, besides=role)
     session.execute(
         update(Role)
@@ -237,9 +262,12 @@ def update_role(
 def delete_role(session: Session, actor: AccountId, role: RoleId) -> None:
     """Delete the role. Its accounts lose it, and its email grants go."""
     _begin_write(session, actor, Permission.ROLES_MANAGE)
-    deleted = session.scalar(delete(Role).where(Role.id == role).returning(Role.id))
-    if deleted is None:
+    is_default = session.scalar(select(Role.is_default).where(Role.id == role))
+    if is_default is None:
         raise RoleNotFound
+    if is_default:
+        raise DefaultRole
+    session.execute(delete(Role).where(Role.id == role))
     _require_an_administrator(session)
 
 
@@ -258,7 +286,8 @@ def list_accounts(session: Session, email: str | None) -> AccountPage:
 
 
 def get_account(session: Session, account: AccountId) -> AccountDetail:
-    """The verified account, with every role and whether it holds each."""
+    """The verified account, with every role but the default and whether it
+    holds each."""
     found = _accounts(session, Account.id == account)
     if not found:
         raise AccountNotFound
@@ -275,7 +304,7 @@ def get_account(session: Session, account: AccountId) -> AccountDetail:
         last_seen_at,
         tuple(
             RoleChoice(role.id, role.name, role.description, role.id in held)
-            for role in _roles(session)
+            for role in _roles(session, Role.is_default.is_(False))
         ),
     )
 
@@ -289,11 +318,13 @@ def set_account_roles(
     found = _accounts(session, Account.id == account)
     if not found:
         raise AccountNotFound
-    known = session.scalar(
-        select(func.count()).select_from(Role).where(Role.id.in_(roles))
-    )
-    if known != len(roles):
+    found_roles = session.execute(
+        select(Role.id, Role.is_default).where(Role.id.in_(roles))
+    ).all()
+    if len(found_roles) != len(roles):
         raise RoleNotFound
+    if any(is_default for _, is_default in found_roles):
+        raise DefaultRoleGrant
     session.execute(
         delete(AccountRole).where(
             AccountRole.account_id == account, AccountRole.role_id.not_in(roles)
@@ -319,7 +350,8 @@ def claim_email_role_grants(session: Session, account: AccountId) -> None:
     grants. A sign-in calls it for the account it ends on.
 
     KEY SHARE on each role keeps a role delete from slipping between the read
-    and the insert. A role that a delete removed meanwhile is skipped.
+    and the insert. A role that a delete removed meanwhile is skipped, and
+    so is the default role, which every account holds with no row.
     """
     email = session.scalar(select(Account.email).where(Account.id == account))
     if email is None:
@@ -327,16 +359,15 @@ def claim_email_role_grants(session: Session, account: AccountId) -> None:
     roles = session.scalars(
         select(Role.id)
         .join(EmailRoleGrant, EmailRoleGrant.role_id == Role.id)
-        .where(EmailRoleGrant.email == email)
+        .where(EmailRoleGrant.email == email, Role.is_default.is_(False))
         .with_for_update(of=Role, key_share=True)
     ).all()
-    if not roles:
-        return
-    session.execute(
-        upsert(AccountRole)
-        .values([{"account_id": account, "role_id": role} for role in roles])
-        .on_conflict_do_nothing()
-    )
+    if roles:
+        session.execute(
+            upsert(AccountRole)
+            .values([{"account_id": account, "role_id": role} for role in roles])
+            .on_conflict_do_nothing()
+        )
     session.execute(delete(EmailRoleGrant).where(EmailRoleGrant.email == email))
 
 
@@ -406,7 +437,12 @@ def _roles(
         select(func.count()).where(AccountRole.role_id == Role.id).scalar_subquery()
     )
     query = select(
-        Role.id, Role.name, Role.description, permissions, account_count
+        Role.id,
+        Role.name,
+        Role.description,
+        permissions,
+        account_count,
+        Role.is_default,
     ).order_by(func.lower(Role.name))
     if where is not None:
         query = query.where(where)
@@ -417,8 +453,9 @@ def _roles(
             description,
             tuple(sorted(keys or ())),
             count,
+            is_default,
         )
-        for id, name, description, keys, count in session.execute(query)
+        for id, name, description, keys, count, is_default in session.execute(query)
     ]
 
 

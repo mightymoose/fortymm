@@ -12,6 +12,15 @@ export const Permission = {
 
 export type BuiltInPermission = (typeof Permission)[keyof typeof Permission]
 
+// The built-in permissions that administer FortyMM. Every account holds the
+// default role, guests too, so the API refuses it these.
+export const administrative: ReadonlySet<string> = new Set<BuiltInPermission>([
+  Permission.adminView,
+  Permission.rolesManage,
+  Permission.accountRolesManage,
+  Permission.signingKeysRevoke,
+])
+
 // Whether the session's account holds `permission`. The page only hides what
 // the account can't do. The API checks every request again.
 export function can(

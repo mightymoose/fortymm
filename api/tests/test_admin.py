@@ -41,6 +41,11 @@ def administrator(database: Engine) -> str:
         )
 
 
+def user_role(database: Engine) -> str:
+    with database.connect() as connection:
+        return str(connection.scalar(text("SELECT id FROM roles WHERE is_default")))
+
+
 @pytest.fixture
 def admin(client: TestClient, migrated_database: Engine) -> dict[str, Any]:
     """The session's account, verified and holding Administrator."""
@@ -186,7 +191,16 @@ def test_lists_the_roles(
                     "signing_keys.revoke",
                 ],
                 "account_count": 1,
-            }
+                "default": False,
+            },
+            {
+                "id": user_role(migrated_database),
+                "name": "User",
+                "description": "Every account holds this role, guests too.",
+                "permissions": [],
+                "account_count": 0,
+                "default": True,
+            },
         ]
     }
 
@@ -206,6 +220,7 @@ def test_creates_a_role(client: TestClient, admin: dict[str, Any]) -> None:
             "description": "",
             "permissions": ["admin.view"],
             "account_count": 0,
+            "default": False,
         }
     }
 
@@ -259,6 +274,45 @@ def test_updates_a_role(
         "description": "Runs it.",
         "permissions": ["account_roles.manage"],
         "account_count": 1,
+        "default": False,
+    }
+
+
+def test_the_default_role_granting_an_administrative_permission_is_unprocessable(
+    client: TestClient, admin: dict[str, Any], migrated_database: Engine
+) -> None:
+    response = client.put(
+        f"/v1/admin/roles/{user_role(migrated_database)}",
+        json={"name": "User", "permissions": ["admin.view"]},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "errors": [
+            {
+                "status": "422",
+                "title": "Every account holds the default role, guests too, so it"
+                " can't grant a permission that administers FortyMM",
+            }
+        ]
+    }
+
+
+def test_deleting_the_default_role_conflicts(
+    client: TestClient, admin: dict[str, Any], migrated_database: Engine
+) -> None:
+    response = client.delete(
+        f"/v1/admin/roles/{user_role(migrated_database)}", headers=JSON
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "errors": [
+            {
+                "status": "409",
+                "title": "Every account holds the default role, so it stays",
+            }
+        ]
     }
 
 
@@ -353,6 +407,25 @@ def test_sets_an_accounts_roles(
 
     assert response.status_code == 200
     assert response.json()["data"]["role_ids"] == [role]
+
+
+def test_granting_the_default_role_is_unprocessable(
+    client: TestClient, admin: dict[str, Any], migrated_database: Engine
+) -> None:
+    response = client.put(
+        f"/v1/admin/accounts/{admin['id']}/roles",
+        json={"role_ids": [user_role(migrated_database)]},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "errors": [
+            {
+                "status": "422",
+                "title": "Every account holds the default role, so nobody grants it",
+            }
+        ]
+    }
 
 
 def test_a_guest_account_is_not_found(

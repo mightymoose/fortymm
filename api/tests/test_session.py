@@ -128,6 +128,22 @@ def test_answers_with_a_verified_accounts_email_player_and_permissions(
     }
 
 
+def test_a_guest_has_the_default_roles_permissions(
+    client: TestClient, migrated_database: Engine
+) -> None:
+    with migrated_database.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO role_permissions (role_id, permission_key)"
+                " SELECT id, 'matches.create' FROM roles WHERE is_default"
+            )
+        )
+
+    response = start_session(client)
+
+    assert response.json()["data"]["account"]["permissions"] == ["matches.create"]
+
+
 def test_reads_the_cookie_and_sets_it_again(client: TestClient) -> None:
     first = start_session(client)
 

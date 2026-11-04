@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { ApiError } from '../../api/errors'
-import { Permission } from '../../api/permissions'
+import { administrative, Permission } from '../../api/permissions'
 import {
   adminPermissionsQuery,
   adminRolesQuery,
@@ -93,7 +93,10 @@ function Roles() {
               {roles.map((role) => (
                 <tr key={role.id}>
                   <td>
-                    <span className="admin-name">{role.name}</span>
+                    <span className="admin-check__key">
+                      <span className="admin-name">{role.name}</span>
+                      {role.default && <span className="fm-tag">Default</span>}
+                    </span>
                     {role.description && <span className="admin-desc">{role.description}</span>}
                   </td>
                   <td>
@@ -106,7 +109,7 @@ function Roles() {
                       ))}
                     </span>
                   </td>
-                  <td className="n">{role.account_count}</td>
+                  <td className="n">{role.default ? 'Everyone' : role.account_count}</td>
                   {manage && (
                     <td className="admin-actions">
                       <Button
@@ -117,14 +120,16 @@ function Roles() {
                       >
                         Edit
                       </Button>
-                      <Button
-                        variant="danger"
-                        size="sm"
-                        aria-label={`Delete ${role.name}`}
-                        onClick={() => setDeleting(role)}
-                      >
-                        Delete…
-                      </Button>
+                      {!role.default && (
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          aria-label={`Delete ${role.name}`}
+                          onClick={() => setDeleting(role)}
+                        >
+                          Delete…
+                        </Button>
+                      )}
                     </td>
                   )}
                 </tr>
@@ -158,6 +163,9 @@ function RoleSheet({
   const showToast = useToast()
   const [failure, setFailure] = useState<unknown>(null)
   const [saved, setSaved] = useState(false)
+  const offered = role?.default
+    ? permissions.filter((permission) => !administrative.has(permission.key))
+    : permissions
   const save = useAdminWrite((api, draft: RoleDraft) =>
     role ? updateRole(api, { id: role.id, ...draft }) : createRole(api, draft),
   )
@@ -194,7 +202,11 @@ function RoleSheet({
   return (
     <FormSheet
       title={role ? `Edit ${role.name}` : 'New role'}
-      subtitle="Accounts that hold the role get its permissions."
+      subtitle={
+        role?.default
+          ? 'Every account holds this role, guests too, so it can’t grant a permission that administers FortyMM.'
+          : 'Accounts that hold the role get its permissions.'
+      }
       submitLabel={role ? 'Save role' : 'Create role'}
       submitting={isSubmitting}
       saved={saved}
@@ -217,7 +229,7 @@ function RoleSheet({
       />
       <fieldset className="fm-choices">
         <legend>Permissions</legend>
-        {permissions.map((permission) => (
+        {offered.map((permission) => (
           <label key={permission.key} className="fm-check admin-check">
             <input type="checkbox" value={permission.key} {...register('permissions')} />
             <span className="admin-check__text">
