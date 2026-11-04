@@ -187,9 +187,16 @@ function Questions() {
   if (shown.size > state.shown.size) dispatch({ type: 'queued', shown })
   const total = shown.size
   const own = selfPlayer(players)
+  // Two players who played each other are two people, so the API refuses
+  // to merge them.
+  const playedOwn = own !== undefined && current?.played_against.includes(own.id) === true
   // The players that "I manage this player" can merge the player into.
   const targets = players.filter(
-    (found) => found.relationship === 'managed' && !found.open_question && found.id !== current?.id,
+    (found) =>
+      found.relationship === 'managed' &&
+      !found.open_question &&
+      found.id !== current?.id &&
+      !current?.played_against.includes(found.id),
   )
 
   useEffect(() => {
@@ -211,7 +218,7 @@ function Questions() {
     try {
       answered = await answer.mutateAsync({ player, reply })
     } catch (error) {
-      if (!(await answeredElsewhere(error, reply))) {
+      if (!(await refusedMerge(error, reply)) && !(await answeredElsewhere(error, reply))) {
         dispatch({ type: 'failed', playerId: player.id, reply: replyKey(reply) })
       }
       return
@@ -221,12 +228,26 @@ function Questions() {
     finish(confirmation(answered.meta, player, before, answered.players), answered.players)
   }
 
+  // Whether `error` refused a merge of two players who played each other,
+  // which another tab's answer can cause. The refetched players leave the
+  // answer out, and its button with it, so the page says why in place of an
+  // error under the button.
+  async function refusedMerge(error: unknown, reply: Reply): Promise<boolean> {
+    if (!(error instanceof ApiError && error.status === 409 && reply.answer !== 'not_mine')) {
+      return false
+    }
+    await queryClient.refetchQueries({ queryKey: accountPlayersQuery(api).queryKey })
+    dispatch({ type: 'saved', notice: { text: error.title ?? SAVE_ERROR, icon: 'info' } })
+    return true
+  }
+
   // Whether `error` means another tab answered the player first. The API
-  // answers 409 only to "Remove from my account" on a closed question. A 404
-  // can mean that another tab merged the player, so the refetched players
-  // must leave it out. Then the page says so in place of an error that would
-  // go with the player. A 404 to `same_as` can instead mean that the chosen
-  // player is gone, and its button with it, so the page says that.
+  // answers another 409 only to "Remove from my account" on a closed
+  // question. A 404 can mean that another tab merged the player, so the
+  // refetched players must leave it out. Then the page says so in place of
+  // an error that would go with the player. A 404 to `same_as` can instead
+  // mean that the chosen player is gone, and its button with it, so the page
+  // says that.
   async function answeredElsewhere(error: unknown, reply: Reply): Promise<boolean> {
     if (!(error instanceof ApiError && (error.status === 404 || error.status === 409))) return false
     const { queryKey } = accountPlayersQuery(api)
@@ -310,13 +331,19 @@ function Questions() {
         </main>
         <div className="review-actions" role="group" aria-label="Your answer">
           {notice}
-          {own && (
+          {own && playedOwn && (
+            <p className="review-outcome">
+              <b>{current.display_name}</b> played <b>{own.display_name}</b>, your player, so
+              it isn’t you.
+            </p>
+          )}
+          {own && !playedOwn && (
             <p className="review-outcome">
               <b>{current.display_name}</b> and <b>{own.display_name}</b> will become
               one player, your player.
             </p>
           )}
-          {answerButton({ answer: 'yes' }, 'primary', 'Yes, this is me')}
+          {!playedOwn && answerButton({ answer: 'yes' }, 'primary', 'Yes, this is me')}
           <Button
             variant="secondary"
             size="lg"
