@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SignedOutPage } from '../test/pages/SignedOutPage'
-import { server } from '../test/server'
+import { API_BASE_URL, server } from '../test/server'
 
 describe('SignedOut', () => {
   afterEach(() => {
@@ -33,8 +33,13 @@ describe('SignedOut', () => {
 
     fireEvent.click(signedOutPage.guestLink)
     expect(await screen.findByRole('navigation', { name: 'Main' })).toBeInTheDocument()
+    await waitFor(() =>
+      expect(requests).toEqual([
+        `${API_BASE_URL}/v1/session`,
+        `${API_BASE_URL}/v1/account/signing-keys`,
+      ]),
+    )
     server.events.removeListener('request:start', record)
-    expect(requests.filter((url) => url.endsWith('/v1/session'))).toHaveLength(1)
   })
 
   it('signs in back to Home, or plays as a guest on Home', async () => {
