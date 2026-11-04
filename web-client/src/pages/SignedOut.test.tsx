@@ -1,4 +1,4 @@
-import { cleanup, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SignedOutPage } from '../test/pages/SignedOutPage'
 import { server } from '../test/server'
@@ -18,6 +18,23 @@ describe('SignedOut', () => {
     expect(signedOutPage.title).toHaveTextContent('You’re signed out')
     expect(signedOutPage.sidebar).toBeNull()
     expect(requests).toEqual([])
+  })
+
+  it('starts no session when the visitor points at or focuses Play as a guest, only on a click', async () => {
+    const requests: string[] = []
+    const record = ({ request }: { request: Request }) => void requests.push(request.url)
+    server.events.on('request:start', record)
+    const signedOutPage = await SignedOutPage.render()
+
+    fireEvent.mouseEnter(signedOutPage.guestLink)
+    fireEvent.focus(signedOutPage.guestLink)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(requests).toEqual([])
+
+    fireEvent.click(signedOutPage.guestLink)
+    expect(await screen.findByRole('navigation', { name: 'Main' })).toBeInTheDocument()
+    server.events.removeListener('request:start', record)
+    expect(requests.filter((url) => url.endsWith('/v1/session'))).toHaveLength(1)
   })
 
   it('signs in back to Home, or plays as a guest on Home', async () => {

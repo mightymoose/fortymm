@@ -891,7 +891,10 @@ builds the router from that tree. Its `defaultPreload: 'intent'` makes every
 or it takes focus. `defaultPreloadStaleTime: 0` leaves the caching to TanStack
 Query, so the click runs the loaders again. A loader must stay safe to run
 early: it reads, and starts nothing the visitor didn't ask for. A redirect a
-preload throws is dropped.
+preload throws is dropped. A preload never starts the session. With none
+cached, `_authenticated`'s `beforeLoad` throws `notFound()`, which the router
+drops quietly. So a hover on `/signed-out`'s Play as a guest makes no guest
+account. The click still loads the route.
 
 The plugin writes the tree when Vite starts: the dev server (which also
 watches the directory), `vite build` and Vitest. Commit
