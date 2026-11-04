@@ -512,13 +512,15 @@ def _array(value: object, length: int | None = None) -> Sequence[object]:
 
 def _best_of(value: object) -> BestOf:
     match _int(value):
+        case 1:
+            return 1
         case 3:
             return 3
         case 5:
             return 5
         case 7:
             return 7
-    raise Malformed("best_of isn't 3, 5 or 7")
+    raise Malformed("best_of isn't 1, 3, 5 or 7")
 
 
 def _side(value: object) -> Side:

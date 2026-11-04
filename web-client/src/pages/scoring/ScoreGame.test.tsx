@@ -5,6 +5,7 @@ import { saveAccount } from '../../api/savedSession'
 import type { GamePoints } from '../../scoring/board'
 import { demoMatch } from '../../scoring/demoMatches'
 import { draftHash, nowSeconds, resultOf } from '../../scoring/fragment'
+import { apiMatch } from '../../scoring/matches'
 import { PULL_MS } from '../../scoring/sync'
 import { hex } from '../../signing/bytes'
 import { takeKey } from '../../signing/deviceKey'
@@ -362,6 +363,39 @@ describe('ScoreGame', () => {
     const page = await ErrorPage.render('/matches/nope/scores/game/1/edit')
 
     expect(page.title).toHaveTextContent('We can’t find that page')
+  })
+
+  describe('a match the API made, opened from its fragment', () => {
+    const id = '01970000-0000-7000-8000-0000000000b4'
+    const crane = '0c9e7b21-3d4a-4f68-a1b5-7e2f9c8d6a40'
+    const gecko = 'a4d8f0e6-1b2c-4e3d-8f5a-9c7b6e1d2f08'
+    const spectated = apiMatch(id, 7, false, [crane, gecko])
+    const path = (match = spectated, games: GamePoints[] = []) =>
+      `/matches/${id}/scores/game/1/edit#${draftHash(match, games, null, 1_793_700_000)}`
+
+    it('shows the match with no request, naming the players by side', async () => {
+      const page = await ScoreGamePage.render(path())
+
+      expect(page.heading).toHaveTextContent('Game 1')
+      expect(page.gameCount).toBe(7)
+      expect(page.sides).toEqual(['Player 1', 'Player 2'])
+    })
+
+    it('shows the not-found page for a fragment for another match', async () => {
+      const other = apiMatch('01970000-0000-7000-8000-0000000000b6', 3, false, [crane, gecko])
+      const page = await ErrorPage.render(path(other, [[11, 3]]))
+
+      expect(page.title).toHaveTextContent('We can’t find that page')
+    })
+
+    it.each([
+      ['no fragment', ''],
+      ['a fragment it can’t read', '#not-a-result'],
+    ])('shows the not-found page with %s', async (_, hash) => {
+      const page = await ErrorPage.render(`/matches/${id}/scores/game/1/edit${hash}`)
+
+      expect(page.title).toHaveTextContent('We can’t find that page')
+    })
   })
 
   describe('background sync', () => {

@@ -4,6 +4,7 @@ entries that document it on each route."""
 from math import ceil
 from typing import Any
 
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from fortymm_api.services.sessions import GuestAccountLimitReached
@@ -19,6 +20,11 @@ class Error(BaseModel):
 
 class ErrorsResponse(BaseModel):
     errors: list[Error]
+
+
+def error_response(status: int, title: str) -> JSONResponse:
+    body = ErrorsResponse(errors=[Error(status=str(status), title=title)])
+    return JSONResponse(body.model_dump(), status_code=status)
 
 
 def errors(status: int, description: str, **extra: Any) -> Responses:

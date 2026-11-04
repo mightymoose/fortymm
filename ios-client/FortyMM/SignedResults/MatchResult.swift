@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 
 enum BestOf: UInt64, Sendable {
+    case one = 1
     case three = 3
     case five = 5
     case seven = 7
@@ -146,7 +147,7 @@ enum Payload {
         case (1, let side?): end = .retired(by: try Self.side(side))
         default: throw Malformed("ending isn't 0 without retired_by or 1 with it")
         }
-        guard let format = BestOf(rawValue: try r[bestOf]!.uint()) else { throw Malformed("best_of isn't 3, 5 or 7") }
+        guard let format = BestOf(rawValue: try r[bestOf]!.uint()) else { throw Malformed("best_of isn't 1, 3, 5 or 7") }
         let pair = try r[players]!.array(count: 2)
         guard let players = Players(try uuid(pair[0]), try uuid(pair[1])) else {
             throw Malformed("the players are the same player")

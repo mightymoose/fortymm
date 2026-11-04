@@ -26,7 +26,7 @@ from pycose.messages.signer import CoseSignature
 from pycose.messages.signmessage import SignMessage
 
 from fortymm_api.accounts import AccountId, PlayerId
-from fortymm_api.matches import MatchId
+from fortymm_api.matches import BestOf, MatchId
 from fortymm_api.signed_results import (
     DOMAIN_TAG,
     LINK_PREFIX,
@@ -65,7 +65,7 @@ class KeyJson(TypedDict):
 
 class ResultJson(TypedDict):
     match: str  # UUID, lowercase with hyphens
-    best_of: Literal[3, 5, 7]
+    best_of: BestOf
     rated: bool
     players: list[str]
     games: list[list[int]]
@@ -229,6 +229,22 @@ BEST_OF_5 = MatchResult(
     games=((11, 5), (11, 6), (11, 7)),
     ending=Completed(),
 )
+BEST_OF_1 = MatchResult(
+    match=_match("best-of-1"),
+    best_of=1,
+    rated=True,
+    players=(ANN, BO),
+    games=((11, 6),),
+    ending=Completed(),
+)
+RETIRED_IN_BEST_OF_1 = MatchResult(
+    match=_match("retired-in-best-of-1"),
+    best_of=1,
+    rated=True,
+    players=(ANN, BO),
+    games=((5, 8),),
+    ending=Retired(by=0),
+)
 MERGED_PLAYER = MatchResult(
     match=_match("merged-player"),
     best_of=3,
@@ -334,6 +350,18 @@ VALID: tuple[ValidCase, ...] = (
         "The same COSE_Signature twice. approvals has one entry.",
         BEST_OF_3,
         (("ann", ANN), ("ann", ANN)),
+    ),
+    ValidCase(
+        "completed-best-of-1",
+        "A completed best-of-1 rated match: one game, approved by both players.",
+        BEST_OF_1,
+        (("ann", ANN), ("bo", BO)),
+    ),
+    ValidCase(
+        "retired-in-best-of-1",
+        "Best of 1, retired by player 0 in its one game, which is unfinished.",
+        RETIRED_IN_BEST_OF_1,
+        (("ann", ANN), ("bo", BO)),
     ),
 )
 
@@ -810,6 +838,12 @@ INVALID: tuple[InvalidCase, ...] = (
         "iat 253402300800, one second after 9999-12-31T23:59:59Z.",
         "malformed",
         _claims_change("completed-best-of-3", _set(6, 253402300800)),
+    ),
+    InvalidCase(
+        "best-of-2",
+        "best_of 2 in completed-best-of-1. A match is best of an odd number.",
+        "malformed",
+        _result_change("completed-best-of-1", _set(2, 2)),
     ),
 )
 

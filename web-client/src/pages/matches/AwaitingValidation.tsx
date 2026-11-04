@@ -7,7 +7,7 @@ import { QrCode } from '../../components/QrCode'
 import { useToast } from '../../components/toastContext'
 import { Wordmark } from '../../components/Wordmark'
 import { matchWinner, otherSide, tally } from '../../scoring/board'
-import { demoMatch, matchFor } from '../../scoring/demoMatches'
+import { matchOf } from '../../scoring/matches'
 import { qrText } from '../../signing/text'
 import { sessionQuery } from '../../api/queries'
 import { gamesWon, PATH, shown, sidesFor } from '../scoring/sides'
@@ -25,7 +25,9 @@ export function AwaitingValidation() {
   const { data: account } = useSuspenseQuery(sessionQuery(api))
   const showToast = useToast()
   const router = useRouter()
-  const { fragment } = useLoaderData({ from: ROUTE })
+  const { scoring, fragment } = useLoaderData({ from: ROUTE })
+  const self = { id: account.player.id, name: account.player.display_name }
+  const match = matchOf(scoring, self, fragment?.result ?? null)
   if (!fragment) {
     return (
       <ErrorScreen
@@ -41,9 +43,6 @@ export function AwaitingValidation() {
     )
   }
   const { envelope, result, signers } = fragment
-  const self = { id: account.player.id, name: account.player.display_name }
-  // The route checked the result is this match's, so matchFor() finds it.
-  const match = matchFor(matchId, self, result) ?? demoMatch(matchId, self)
   const side = signers[signers.length - 1]
   const other = match.players[otherSide(side)]
   const winner = matchWinner(result.games)

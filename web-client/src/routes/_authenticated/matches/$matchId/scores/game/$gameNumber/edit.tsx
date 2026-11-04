@@ -1,8 +1,8 @@
 import { createFileRoute, redirect } from '@tanstack/react-router'
 import { sessionQuery } from '../../../../../../../api/queries'
 import { ScoreGame } from '../../../../../../../pages/scoring/ScoreGame'
-import { demoMatch } from '../../../../../../../scoring/demoMatches'
-import { gamesOf, readFragment } from '../../../../../../../scoring/fragment'
+import { matchOf, scoringMatch } from '../../../../../../../scoring/matches'
+import { draftHash, gamesOf, nowSeconds, readFragment } from '../../../../../../../scoring/fragment'
 
 const PATH = '/matches/$matchId/scores/game/$gameNumber/edit'
 
@@ -20,14 +20,16 @@ export const Route = createFileRoute('/_authenticated/matches/$matchId/scores/ga
     staleReloadMode: 'blocking',
     handler: async ({ context: { api, queryClient }, params, location }) => {
       const account = await queryClient.ensureQueryData(sessionQuery(api))
-      const match = demoMatch(params.matchId, { id: account.player.id, name: account.player.display_name })
+      const scoring = scoringMatch(params.matchId, location.hash)
+      const match = matchOf(scoring, { id: account.player.id, name: account.player.display_name }, null)
       const fragment = readFragment(location.hash, match)
       if (!fragment) {
         throw redirect({
           to: PATH,
           params: { matchId: params.matchId, gameNumber: '1' },
           search: true,
-          hash: '',
+          // An API match's details stay, because nothing else knows them.
+          hash: draftHash(match, [], null, nowSeconds()),
           state: { discardedScores: true },
           replace: true,
         })
@@ -43,7 +45,7 @@ export const Route = createFileRoute('/_authenticated/matches/$matchId/scores/ga
           replace: true,
         })
       }
-      return { fragment, gameNumber, last }
+      return { scoring, fragment, gameNumber, last }
     },
   },
   component: ScoreGame,

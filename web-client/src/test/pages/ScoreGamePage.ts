@@ -89,6 +89,11 @@ export class ScoreGamePage {
     return screen.getByRole('navigation', { name: 'Games' })
   }
 
+  // How many games the strip shows, the match's best of.
+  get gameCount(): number {
+    return within(this.strip).getAllByRole('listitem').length
+  }
+
   // The strip's cell for game `game`.
   private cell(game: number): HTMLElement {
     const cell = within(this.strip).getAllByRole('listitem')[game - 1]

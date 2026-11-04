@@ -146,7 +146,7 @@ describe('roles', () => {
     expect(page.rows).toEqual([
       [
         'AdministratorEverything on the admin page.',
-        'account_roles.manageadmin.viewroles.managesigning_keys.revoke',
+        'account_roles.manageadmin.viewmatches.createroles.managesigning_keys.revoke',
         '1',
         'EditDelete…',
       ],

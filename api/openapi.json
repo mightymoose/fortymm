@@ -868,6 +868,169 @@
         }
       }
     },
+    "/v1/matches/opponents": {
+      "get": {
+        "tags": [
+          "matches"
+        ],
+        "summary": "Match Opponents",
+        "description": "The players the account may pick as its opponent. With no `search`,\nor only spaces, the players its own player faced, most recent match\nfirst, at most 12. With text, the players whose display name contains\nit, whatever its case, by name, at most 20. Never the account's own\nplayer.",
+        "operationId": "match_opponents",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpponentsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/matches": {
+      "post": {
+        "tags": [
+          "matches"
+        ],
+        "summary": "Create Match",
+        "description": "Make the match, with its id from the device, or find it.\n\nA new match answers 201. One that already exists with the same details\nanswers 200, so a retry or a second device gets the match. One with\nother players, best of or rated status answers 409, and the title says\nwhat differs. Players are compared through any merge. It needs\n`matches.create`, which no guest holds. The account needn't play in the\nmatch.",
+        "operationId": "create_match",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The match was made",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The match has other players, best of or rated status, and the title says which",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is invalid. If a player doesn't exist, merged into another player, or plays both sides, the body is in the `errors` shape instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/v1/admin/permissions": {
       "get": {
         "tags": [
@@ -2835,6 +2998,20 @@
         ],
         "title": "LogoutResponse"
       },
+      "MadeMatch": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "MadeMatch"
+      },
       "MatchApproval": {
         "properties": {
           "key_id": {
@@ -2854,6 +3031,59 @@
           "player_id"
         ],
         "title": "MatchApproval"
+      },
+      "MatchRequest": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "best_of": {
+            "type": "integer",
+            "enum": [
+              1,
+              3,
+              5,
+              7
+            ],
+            "title": "Best Of"
+          },
+          "rated": {
+            "type": "boolean",
+            "title": "Rated"
+          },
+          "players": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "title": "Players"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "best_of",
+          "rated",
+          "players"
+        ],
+        "title": "MatchRequest"
+      },
+      "MatchResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/MadeMatch"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "MatchResponse"
       },
       "MergedOutcome": {
         "properties": {
@@ -2901,6 +3131,41 @@
           "key"
         ],
         "title": "NewPermissionRequest"
+      },
+      "Opponent": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "display_name"
+        ],
+        "title": "Opponent"
+      },
+      "OpponentsResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/Opponent"
+            },
+            "type": "array",
+            "title": "Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "OpponentsResponse"
       },
       "PermissionRequest": {
         "properties": {

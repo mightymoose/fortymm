@@ -421,3 +421,34 @@ export async function refreshAfterAdminWrite(
     queryClient.refetchQueries({ queryKey: sessionQuery(api).queryKey }),
   ])
 }
+
+export type MatchRequest = components['schemas']['MatchRequest']
+export type Opponent = components['schemas']['Opponent']
+
+const MATCHES_KEY = ['v1', 'matches'] as const
+// Every opponents list starts with this key, so a new match can refresh them.
+export const OPPONENTS_KEY = [...MATCHES_KEY, 'opponents'] as const
+
+// The players the account can pick to play. With no search, its recent
+// opponents, most recent first. With a search, the players whose name
+// contains it.
+export function opponentsQuery(api: ApiClient, search: string) {
+  return queryOptions({
+    queryKey: [...OPPONENTS_KEY, search],
+    // The lists change only when the account makes a match, which refreshes them.
+    staleTime: 60_000,
+    queryFn: async ({ signal }) => {
+      const data = await send(
+        'GET /v1/matches/opponents',
+        api.GET('/v1/matches/opponents', { params: { query: search ? { search } : {} }, signal }),
+      )
+      return data.data
+    },
+  })
+}
+
+// Makes the match. Its id is made on the client, so the same request
+// again finds the match it made and answers it the same.
+export async function createMatch(api: ApiClient, request: MatchRequest): Promise<void> {
+  await send('POST /v1/matches', api.POST('/v1/matches', { body: request }))
+}

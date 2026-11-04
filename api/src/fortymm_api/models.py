@@ -452,7 +452,7 @@ class Match(Base):
     league_id: Mapped[LeagueId] = mapped_column(
         ForeignKey("leagues.id", ondelete="RESTRICT"), index=True
     )
-    # NULL when a result made the match, since a result needs no session.
+    # The account that made the match, kept as a record through adoption.
     created_by: Mapped[AccountId | None] = mapped_column(ForeignKey("accounts.id"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

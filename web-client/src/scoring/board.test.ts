@@ -73,6 +73,20 @@ describe('matchWinner', () => {
 })
 
 describe('reviewBoard', () => {
+  it('decides a best of 1 in its one game', () => {
+    expect(reviewBoard([B], 1)).toEqual({
+      kind: 'decided',
+      decidedAtGame: 1,
+      winner: 1,
+      games: [B],
+      tally: [0, 1],
+    })
+  })
+
+  it('needs one game to win a best of 1', () => {
+    expect(reviewBoard([null], 1)).toEqual({ kind: 'undecided', tally: [0, 0], gamesToWin: 1 })
+  })
+
   it('decides a best of 3 in two games', () => {
     expect(reviewBoard([A, A, null], 3)).toEqual({
       kind: 'decided',

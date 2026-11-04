@@ -11,4 +11,4 @@ MatchId = NewType("MatchId", UUID)
 # instead, since it can't know this id.
 MatchResultId = NewType("MatchResultId", UUID)
 
-type BestOf = Literal[3, 5, 7]
+type BestOf = Literal[1, 3, 5, 7]

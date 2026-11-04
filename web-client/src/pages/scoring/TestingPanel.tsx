@@ -9,6 +9,8 @@ import {
   useDemoNetwork,
   type Network,
 } from '../../scoring/demoServer'
+import type { Match } from '../../scoring/demoMatches'
+import { draftHash, nowSeconds } from '../../scoring/fragment'
 import { PATH, ROUTE } from './sides'
 
 const LABELS: Record<Network, string> = {
@@ -21,14 +23,21 @@ const LABELS: Record<Network, string> = {
 
 // Tools for trying the background sync against the demo server: the
 // network it answers on, and starting over. They go when the API has
-// matches.
-export function TestingPanel() {
+// matches. Starting over keeps an API match's details in the fragment,
+// because nothing else on the device knows them.
+export function TestingPanel({ match }: { match: Match }) {
   const { matchId } = useParams({ from: ROUTE })
   const network = useDemoNetwork()
   const navigate = useNavigate()
   const startOver = (clear: () => void) => {
     clear()
-    void navigate({ to: PATH, params: { matchId, gameNumber: '1' }, search: true, hash: '', replace: true })
+    void navigate({
+      to: PATH,
+      params: { matchId, gameNumber: '1' },
+      search: true,
+      hash: draftHash(match, [], null, nowSeconds()),
+      replace: true,
+    })
   }
 
   return (

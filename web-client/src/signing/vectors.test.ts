@@ -25,7 +25,7 @@ const keys: Record<string, VectorKey> = vectors.keys
 function matchResult(result: VectorResult): MatchResult {
   const base = {
     match: result.match,
-    bestOf: result.best_of as 3 | 5 | 7,
+    bestOf: result.best_of as MatchResult['bestOf'],
     rated: result.rated,
     players: result.players as [string, string],
     games: result.games as [number, number][],

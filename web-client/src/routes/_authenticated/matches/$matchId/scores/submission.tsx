@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { sessionQuery } from '../../../../../api/queries'
 import { AwaitingValidation } from '../../../../../pages/matches/AwaitingValidation'
-import { demoMatch } from '../../../../../scoring/demoMatches'
+import { matchOf, scoringMatch } from '../../../../../scoring/matches'
 import { readFragment } from '../../../../../scoring/fragment'
 
 // The fragment is the signed result. Anything else gives a null fragment,
@@ -12,9 +12,10 @@ export const Route = createFileRoute('/_authenticated/matches/$matchId/scores/su
     staleReloadMode: 'blocking',
     handler: async ({ context: { api, queryClient }, params, location }) => {
       const account = await queryClient.ensureQueryData(sessionQuery(api))
-      const match = demoMatch(params.matchId, { id: account.player.id, name: account.player.display_name })
+      const scoring = scoringMatch(params.matchId, location.hash)
+      const match = matchOf(scoring, { id: account.player.id, name: account.player.display_name }, null)
       const fragment = readFragment(location.hash, match)
-      return { fragment: fragment?.kind === 'signed' ? fragment : null }
+      return { scoring, fragment: fragment?.kind === 'signed' ? fragment : null }
     },
   },
   component: AwaitingValidation,

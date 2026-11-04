@@ -18,6 +18,7 @@ import { Route as AuthenticatedReviewPlayersRouteImport } from './routes/_authen
 import { Route as AuthenticatedShellIndexRouteImport } from './routes/_authenticated/_shell/index'
 import { Route as AuthenticatedShellAdminRouteRouteImport } from './routes/_authenticated/_shell/admin/route'
 import { Route as AuthenticatedShellAdminIndexRouteImport } from './routes/_authenticated/_shell/admin/index'
+import { Route as AuthenticatedShellMatchesNewRouteImport } from './routes/_authenticated/_shell/matches/new'
 import { Route as AuthenticatedShellAdminAccountsAccountIdRouteImport } from './routes/_authenticated/_shell/admin/accounts/$accountId'
 import { Route as AuthenticatedMatchesMatchIdScoresSubmissionRouteImport } from './routes/_authenticated/matches/$matchId/scores/submission'
 import { Route as AuthenticatedMatchesMatchIdScoresApprovalsNewRouteImport } from './routes/_authenticated/matches/$matchId/scores/approvals/new'
@@ -69,6 +70,12 @@ const AuthenticatedShellAdminIndexRoute =
     path: '/',
     getParentRoute: () => AuthenticatedShellAdminRouteRoute,
   } as any)
+const AuthenticatedShellMatchesNewRoute =
+  AuthenticatedShellMatchesNewRouteImport.update({
+    id: '/matches/new',
+    path: '/matches/new',
+    getParentRoute: () => AuthenticatedShellRoute,
+  } as any)
 const AuthenticatedShellAdminAccountsAccountIdRoute =
   AuthenticatedShellAdminAccountsAccountIdRouteImport.update({
     id: '/accounts/$accountId',
@@ -101,6 +108,7 @@ export interface FileRoutesByFullPath {
   '/signed-out': typeof SignedOutRoute
   '/review-players': typeof AuthenticatedReviewPlayersRoute
   '/admin': typeof AuthenticatedShellAdminRouteRouteWithChildren
+  '/matches/new': typeof AuthenticatedShellMatchesNewRoute
   '/admin/': typeof AuthenticatedShellAdminIndexRoute
   '/admin/accounts/$accountId': typeof AuthenticatedShellAdminAccountsAccountIdRoute
   '/matches/$matchId/scores/submission': typeof AuthenticatedMatchesMatchIdScoresSubmissionRoute
@@ -113,6 +121,7 @@ export interface FileRoutesByTo {
   '/sign-in-stopped': typeof SignInStoppedRoute
   '/signed-out': typeof SignedOutRoute
   '/review-players': typeof AuthenticatedReviewPlayersRoute
+  '/matches/new': typeof AuthenticatedShellMatchesNewRoute
   '/admin': typeof AuthenticatedShellAdminIndexRoute
   '/admin/accounts/$accountId': typeof AuthenticatedShellAdminAccountsAccountIdRoute
   '/matches/$matchId/scores/submission': typeof AuthenticatedMatchesMatchIdScoresSubmissionRoute
@@ -129,6 +138,7 @@ export interface FileRoutesById {
   '/_authenticated/review-players': typeof AuthenticatedReviewPlayersRoute
   '/_authenticated/_shell/admin': typeof AuthenticatedShellAdminRouteRouteWithChildren
   '/_authenticated/_shell/': typeof AuthenticatedShellIndexRoute
+  '/_authenticated/_shell/matches/new': typeof AuthenticatedShellMatchesNewRoute
   '/_authenticated/_shell/admin/': typeof AuthenticatedShellAdminIndexRoute
   '/_authenticated/_shell/admin/accounts/$accountId': typeof AuthenticatedShellAdminAccountsAccountIdRoute
   '/_authenticated/matches/$matchId/scores/submission': typeof AuthenticatedMatchesMatchIdScoresSubmissionRoute
@@ -144,6 +154,7 @@ export interface FileRouteTypes {
     | '/signed-out'
     | '/review-players'
     | '/admin'
+    | '/matches/new'
     | '/admin/'
     | '/admin/accounts/$accountId'
     | '/matches/$matchId/scores/submission'
@@ -156,6 +167,7 @@ export interface FileRouteTypes {
     | '/sign-in-stopped'
     | '/signed-out'
     | '/review-players'
+    | '/matches/new'
     | '/admin'
     | '/admin/accounts/$accountId'
     | '/matches/$matchId/scores/submission'
@@ -171,6 +183,7 @@ export interface FileRouteTypes {
     | '/_authenticated/review-players'
     | '/_authenticated/_shell/admin'
     | '/_authenticated/_shell/'
+    | '/_authenticated/_shell/matches/new'
     | '/_authenticated/_shell/admin/'
     | '/_authenticated/_shell/admin/accounts/$accountId'
     | '/_authenticated/matches/$matchId/scores/submission'
@@ -250,6 +263,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedShellAdminIndexRouteImport
       parentRoute: typeof AuthenticatedShellAdminRouteRoute
     }
+    '/_authenticated/_shell/matches/new': {
+      id: '/_authenticated/_shell/matches/new'
+      path: '/matches/new'
+      fullPath: '/matches/new'
+      preLoaderRoute: typeof AuthenticatedShellMatchesNewRouteImport
+      parentRoute: typeof AuthenticatedShellRoute
+    }
     '/_authenticated/_shell/admin/accounts/$accountId': {
       id: '/_authenticated/_shell/admin/accounts/$accountId'
       path: '/accounts/$accountId'
@@ -301,12 +321,14 @@ const AuthenticatedShellAdminRouteRouteWithChildren =
 interface AuthenticatedShellRouteChildren {
   AuthenticatedShellAdminRouteRoute: typeof AuthenticatedShellAdminRouteRouteWithChildren
   AuthenticatedShellIndexRoute: typeof AuthenticatedShellIndexRoute
+  AuthenticatedShellMatchesNewRoute: typeof AuthenticatedShellMatchesNewRoute
 }
 
 const AuthenticatedShellRouteChildren: AuthenticatedShellRouteChildren = {
   AuthenticatedShellAdminRouteRoute:
     AuthenticatedShellAdminRouteRouteWithChildren,
   AuthenticatedShellIndexRoute: AuthenticatedShellIndexRoute,
+  AuthenticatedShellMatchesNewRoute: AuthenticatedShellMatchesNewRoute,
 }
 
 const AuthenticatedShellRouteWithChildren =

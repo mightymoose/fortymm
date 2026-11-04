@@ -41,10 +41,15 @@ them changes afterwards. The players, the format and whether the match is
 rated are fixed. A trigger refuses any change, and a deferred trigger
 checks at commit that the match has two sides of `team_size` players each.
 
-The match's id is made on the device (a UUIDv7). So a match can start in a
-hall with no signal, and its board or result can reach the server before
-anything else does. Whichever arrives first creates the match, because
-both carry the match id, the format, `rated` and the players.
+The match's id is made on the device (a UUIDv7), so a retry names the
+match the first try made. `POST /v1/matches` creates it, with the id in
+its body. It answers with only the id, `{"data": {"id": "<uuid>"}}`, 201
+for a new match. A retry with the same details finds the match and answers
+200, and one with other details gets a 409. No route reads a match back.
+The web client's scoring page reads the match from its URL fragment alone,
+which holds the id, the format, `rated` and the players from the first
+draft on. So it opens with no signal, and a fragment that is empty, can't
+be read or names another match shows the not-found page.
 
 A match is best of 1, 3, 5 or 7, with games to 11, won by 2. Only singles
 for now (`team_size` 1). The tables already have sides of players, so
@@ -114,7 +119,8 @@ noise with nothing to attach to.
 Ann and Bea play a rated best of 5.
 
 1. **Ann's phone creates the match.** The match, its settings, two sides
-   and one player on each are written in one transaction.
+   and one player on each are written in one transaction, by
+   `POST /v1/matches`.
 2. **Ann saves games.** Each save sends the board. Each push is a `board`
    submission, and the newest accepted one is what spectators see.
 3. **Ann submits 3–1.** Her phone signs the scores, then uploads the
@@ -248,9 +254,9 @@ replaced or cut off gets a 409.
 
 ## Not built yet
 
-- The routes and services that write these tables (#187, #188).
-- Best of 1 in the signed result format (#182). The tables already allow
-  it.
+- The routes and services that record boards, results, approvals and
+  overrides (#187, #188). Only `POST /v1/matches` writes these tables
+  yet.
 - Doubles: a v2 payload and the doubles approval rule.
 - Walkovers, voids, pre-play states such as scheduled and called, and
   director rulings, which come with tournaments (#189).
