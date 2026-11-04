@@ -886,7 +886,12 @@ gives the URL (see TanStack Router's file naming conventions). The
 `@tanstack/router-plugin` Vite plugin (in `vite.config.ts`, before the React
 plugin) reads the directory and writes the route tree to
 `web-client/src/routeTree.gen.ts`. `createAppRouter()` in `src/router.tsx`
-builds the router from that tree.
+builds the router from that tree. Its `defaultPreload: 'intent'` makes every
+`Link` load its route's chunk and run its loaders when the pointer rests on it
+or it takes focus. `defaultPreloadStaleTime: 0` leaves the caching to TanStack
+Query, so the click runs the loaders again. A loader must stay safe to run
+early: it reads, and starts nothing the visitor didn't ask for. A redirect a
+preload throws is dropped.
 
 The plugin writes the tree when Vite starts: the dev server (which also
 watches the directory), `vite build` and Vitest. Commit
