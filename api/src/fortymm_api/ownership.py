@@ -18,6 +18,9 @@ class OwnershipRule(StrEnum):
     STAYS_ON_PLAYER_MERGE = "stays_on_player_merge"
     SET_BY_PLAYER_MERGE = "set_by_player_merge"
     GUEST_HAS_NONE = "guest_has_none"
+    # Who did something to a match. Adoption leaves it naming the guest,
+    # whose row stays with adopted_into set.
+    KEPT_AS_RECORD = "kept_as_record"
 
 
 OWNERSHIP_RULES: dict[tuple[str, str], OwnershipRule] = {
@@ -34,4 +37,9 @@ OWNERSHIP_RULES: dict[tuple[str, str], OwnershipRule] = {
     ("league_members", "player_id"): OwnershipRule.STAYS_ON_PLAYER_MERGE,
     ("players", "merged_into"): OwnershipRule.SET_BY_PLAYER_MERGE,
     ("accounts", "adopted_into"): OwnershipRule.SET_BY_ADOPT,
+    ("matches", "created_by"): OwnershipRule.KEPT_AS_RECORD,
+    ("match_side_players", "player_id"): OwnershipRule.STAYS_ON_PLAYER_MERGE,
+    ("match_approvals", "account_id"): OwnershipRule.KEPT_AS_RECORD,
+    ("match_approvals", "player_id"): OwnershipRule.STAYS_ON_PLAYER_MERGE,
+    ("match_submissions", "account_id"): OwnershipRule.KEPT_AS_RECORD,
 }

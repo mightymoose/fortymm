@@ -6,12 +6,15 @@ from datetime import datetime
 from typing import Any, ClassVar
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     LargeBinary,
     MetaData,
+    SmallInteger,
     Text,
     UniqueConstraint,
     Uuid,
@@ -19,11 +22,13 @@ from sqlalchemy import (
     orm,
     text,
 )
+from sqlalchemy import Identity as GeneratedIdentity
 from sqlalchemy.dialects.postgresql import CIDR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from fortymm_api.accounts import AccountId, Email, PlayerId
 from fortymm_api.leagues import LeagueId
+from fortymm_api.matches import MatchId, MatchResultId
 from fortymm_api.permissions import RoleId
 from fortymm_api.signing_keys import KeyId
 
@@ -47,6 +52,8 @@ class Base(DeclarativeBase):
         LeagueId: Uuid,
         Email: Text,
         KeyId: LargeBinary,
+        MatchId: Uuid,
+        MatchResultId: Uuid,
     }
 
 
@@ -397,3 +404,227 @@ class SigningKey(Base):
     revoked_by: Mapped[AccountId | None] = mapped_column(
         ForeignKey("accounts.id", ondelete="RESTRICT")
     )
+
+
+class MatchSettings(Base):
+    """A match's rules, fixed when the match is made. A trigger refuses every
+    UPDATE and DELETE."""
+
+    __tablename__ = "match_settings"
+    __table_args__ = (
+        # Doubles waits for a v2 of the signed result format, whose players
+        # are sides of player ids.
+        CheckConstraint("team_size = 1", name="singles_only"),
+        CheckConstraint("best_of IN (1, 3, 5, 7)", name="best_of"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, server_default=func.gen_random_uuid()
+    )
+    team_size: Mapped[int] = mapped_column(SmallInteger)
+    best_of: Mapped[int] = mapped_column(SmallInteger)
+    rated: Mapped[bool]
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class Match(Base):
+    """A match between two sides. Its state is derived, not stored: it is
+    final once current_result_id is set (#181)."""
+
+    __tablename__ = "matches"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["current_result_id", "id"],
+            ["match_results.id", "match_results.match_id"],
+            name="fk_matches_current_result_id_match_results",
+            use_alter=True,
+        ),
+        Index("ix_matches_created_at", text("created_at DESC")),
+    )
+
+    # Made on the client, so a result can reach the server before its match.
+    id: Mapped[MatchId] = mapped_column(primary_key=True)
+    settings_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("match_settings.id", ondelete="RESTRICT"), unique=True
+    )
+    league_id: Mapped[LeagueId] = mapped_column(
+        ForeignKey("leagues.id", ondelete="RESTRICT"), index=True
+    )
+    # NULL when a result made the match, since a result needs no session.
+    created_by: Mapped[AccountId | None] = mapped_column(ForeignKey("accounts.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    current_result_id: Mapped[MatchResultId | None]
+
+
+class MatchSide(Base):
+    """One of a match's two sides. `side` is the index the signed result's
+    players and signer headers use. A trigger refuses every UPDATE and
+    DELETE."""
+
+    __tablename__ = "match_sides"
+    __table_args__ = (
+        CheckConstraint("side IN (0, 1)", name="side"),
+        UniqueConstraint("match_id", "side"),
+        UniqueConstraint("id", "match_id", name="uq_match_sides_id_match_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, server_default=func.gen_random_uuid()
+    )
+    match_id: Mapped[MatchId] = mapped_column(ForeignKey("matches.id"))
+    side: Mapped[int] = mapped_column(SmallInteger)
+
+
+class MatchSidePlayer(Base):
+    """A player on a side. A trigger refuses every UPDATE and DELETE, and a
+    deferred one checks at commit that the match has two sides of
+    team_size players each."""
+
+    __tablename__ = "match_side_players"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["match_side_id", "match_id"],
+            ["match_sides.id", "match_sides.match_id"],
+            name="fk_match_side_players_match_side_id_match_sides",
+        ),
+        UniqueConstraint("match_id", "player_id"),
+    )
+
+    match_side_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    match_id: Mapped[MatchId]
+    player_id: Mapped[PlayerId] = mapped_column(
+        ForeignKey("players.id"), primary_key=True, index=True
+    )
+
+
+class StoredMatchResult(Base):
+    """A signed result, or an administrator's override. A client names a
+    result by the SHA-256 of its payload, which match_results_by_hash
+    indexes, so look one up with `sha256(payload) = :hash`.
+
+    A match's results form one chain through replaces_id, and each has at
+    most one successor. Only the head, the result nothing replaces, can be
+    approved. The match's current_result_id names its newest accepted
+    result. Who sent a result, and when, is its first submission. A trigger
+    refuses DELETE, and every UPDATE but the one that sets accepted_at.
+    """
+
+    __tablename__ = "match_results"
+    __table_args__ = (
+        CheckConstraint("replaces_id <> id", name="not_replacing_itself"),
+        CheckConstraint(
+            "override_reason = btrim(override_reason) AND override_reason <> ''",
+            name="override_reason_trimmed",
+        ),
+        UniqueConstraint("id", "match_id", name="uq_match_results_id_match_id"),
+        ForeignKeyConstraint(
+            ["replaces_id", "match_id"],
+            ["match_results.id", "match_results.match_id"],
+            name="fk_match_results_replaces_id_match_results",
+        ),
+        Index(
+            "one_successor",
+            "match_id",
+            "replaces_id",
+            unique=True,
+            postgresql_nulls_not_distinct=True,
+        ),
+    )
+
+    id: Mapped[MatchResultId] = mapped_column(
+        primary_key=True, server_default=func.gen_random_uuid()
+    )
+    match_id: Mapped[MatchId] = mapped_column(ForeignKey("matches.id"))
+    # The CBOR payload, the only copy of the scores.
+    payload: Mapped[bytes] = mapped_column(LargeBinary)
+    replaces_id: Mapped[MatchResultId | None]
+    override_reason: Mapped[str | None] = mapped_column(Text)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+Index(
+    "match_results_by_hash",
+    func.sha256(StoredMatchResult.payload),
+    unique=True,
+)
+
+
+class MatchSubmission(Base):
+    """Every request that sent a match a board, a result or an override,
+    accepted or refused, so a match's history shows who sent what and from
+    where. A request for a match that never exists leaves no row. The
+    current board is the newest accepted board. A trigger refuses every UPDATE and
+    DELETE."""
+
+    __tablename__ = "match_submissions"
+    __table_args__ = (
+        CheckConstraint("kind IN ('board', 'result', 'override')", name="kind"),
+        CheckConstraint("outcome ~ '^[a-z_]+$'", name="outcome_is_a_code"),
+        UniqueConstraint("id", "result_id", name="uq_match_submissions_id_result_id"),
+        ForeignKeyConstraint(
+            ["result_id", "match_id"],
+            ["match_results.id", "match_results.match_id"],
+            name="fk_match_submissions_result_id_match_results",
+        ),
+        Index(
+            "ix_match_submissions_match_id_kind",
+            "match_id",
+            "kind",
+            text("id DESC"),
+        ),
+        Index("ix_match_submissions_result_id", "result_id"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger, GeneratedIdentity(always=True), primary_key=True
+    )
+    match_id: Mapped[MatchId] = mapped_column(ForeignKey("matches.id"))
+    kind: Mapped[str] = mapped_column(Text)
+    # The URL fragment's bytes for a board, the envelope's for a result, and
+    # the payload the server encoded for an override.
+    body: Mapped[bytes] = mapped_column(LargeBinary)
+    account_id: Mapped[AccountId | None] = mapped_column(ForeignKey("accounts.id"))
+    # An IPv6 client's /64, or an IPv4 address, as the guest limit keys it.
+    network: Mapped[str | None] = mapped_column(CIDR)
+    # "accepted", or the refusal's code.
+    outcome: Mapped[str] = mapped_column(Text)
+    result_id: Mapped[MatchResultId | None]
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class MatchApproval(Base):
+    """A signature that approves a result for one side, counted once however
+    many envelopes carry it. It keeps who signed and for whom as they were
+    when it was accepted, and the submission that first brought it. A
+    trigger refuses every UPDATE and DELETE."""
+
+    __tablename__ = "match_approvals"
+    __table_args__ = (
+        CheckConstraint("side IN (0, 1)", name="side"),
+        CheckConstraint("octet_length(signature) = 64", name="signature_length"),
+        CheckConstraint("authority IN ('self', 'representative')", name="authority"),
+        ForeignKeyConstraint(
+            ["submission_id", "result_id"],
+            ["match_submissions.id", "match_submissions.result_id"],
+            name="fk_match_approvals_submission_id_match_submissions",
+        ),
+    )
+
+    result_id: Mapped[MatchResultId] = mapped_column(
+        ForeignKey("match_results.id"), primary_key=True
+    )
+    key_id: Mapped[KeyId] = mapped_column(
+        ForeignKey("signing_keys.id", ondelete="RESTRICT"), primary_key=True
+    )
+    side: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    signature: Mapped[bytes] = mapped_column(LargeBinary)
+    account_id: Mapped[AccountId] = mapped_column(ForeignKey("accounts.id"))
+    player_id: Mapped[PlayerId] = mapped_column(ForeignKey("players.id"))
+    authority: Mapped[str] = mapped_column(Text)
+    submission_id: Mapped[int] = mapped_column(BigInteger)
