@@ -8,3 +8,5 @@ Material the app is built against. Nothing here is built, linted or deployed.
   component library, and `ui_kits/tournament/` holds the screens built from
   it. The app's `/design-system` page is a copy of
   `ui_kits/components/index.html`.
+- `matches.md`: how a match is recorded, from the scratchpad to a
+  settled result, and why the rules are what they are.

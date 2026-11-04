@@ -116,7 +116,8 @@ API's URL.
 
 `references/` holds reference material that isn't built or deployed (see
 `references/README.md`). `references/design-system/` is the FortyMM design
-system (v2.1), and the app matches it. Read its `README.md` and
+system (v2.1), and the app matches it. `references/matches.md` explains
+how a match is recorded. Read its `README.md` and
 `colors_and_type.css` before designing or styling UI.
 
 ## api
@@ -556,6 +557,8 @@ reads leagues yet.
 ### Matches
 
 The tables that record matches (#187, #188). No route writes them yet.
+`references/matches.md` explains how they fit together, with a match
+from start to finish.
 `models.py` holds them, and `tests/test_schema.py` checks each rule below.
 
 - `match_settings` holds a match's rules: `team_size`, `best_of` and
