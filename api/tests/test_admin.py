@@ -396,6 +396,65 @@ def test_gets_an_account(
     ]
 
 
+def test_lists_the_players(client: TestClient, admin: dict[str, Any]) -> None:
+    player = admin["player"]
+
+    response = client.get(
+        "/v1/admin/players", params={"name": player["display_name"].upper()}
+    )
+
+    assert response.json() == {
+        "data": [
+            {
+                "id": player["id"],
+                "display_name": player["display_name"],
+                "account_id": admin["id"],
+                "account_email": "ann@example.com",
+                "manager_count": 1,
+            }
+        ],
+        "meta": {"has_more": False},
+    }
+
+
+def test_gets_a_player(client: TestClient, admin: dict[str, Any]) -> None:
+    player = admin["player"]
+
+    response = client.get(f"/v1/admin/players/{player['id']}")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert "created_at" in data
+    del data["created_at"]
+    assert data == {
+        "id": player["id"],
+        "display_name": player["display_name"],
+        "merged_into": None,
+        "merged_into_display_name": None,
+        "match_count": 0,
+        "managers": [
+            {
+                "id": admin["id"],
+                "email": "ann@example.com",
+                "relationship": "self",
+                "open_question": False,
+            }
+        ],
+        "leagues": ["FortyMM"],
+    }
+
+
+def test_an_unknown_player_is_not_found(
+    client: TestClient, admin: dict[str, Any]
+) -> None:
+    response = client.get(f"/v1/admin/players/{UUID(int=0)}")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "errors": [{"status": "404", "title": "No player has this id"}]
+    }
+
+
 def test_sets_an_accounts_roles(
     client: TestClient, admin: dict[str, Any], migrated_database: Engine
 ) -> None:

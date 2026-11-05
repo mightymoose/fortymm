@@ -2,9 +2,10 @@ import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderRoute, type AppRouter } from '../renderRoute'
 
-export type AdminTab = 'Roles' | 'Permissions' | 'Accounts' | 'Signing keys'
+export type AdminTab = 'Roles' | 'Permissions' | 'Accounts' | 'Players' | 'Signing keys'
 
-// Page object for the admin page and an account's admin page in unit tests.
+// Page object for the admin page and an account's or a player's admin page
+// in unit tests.
 // Mock the admin routes with mockAdmin() from ../server first. Only the
 // selected tab's panel is visible, so open a tab before reading it.
 export class AdminPage {
@@ -14,6 +15,10 @@ export class AdminPage {
 
   static renderAccount(id: string): Promise<AdminPage> {
     return AdminPage.render(`/admin/accounts/${id}`)
+  }
+
+  static renderPlayer(id: string): Promise<AdminPage> {
+    return AdminPage.render(`/admin/players/${id}`)
   }
 
   readonly router: AppRouter
@@ -48,7 +53,7 @@ export class AdminPage {
     await this.user.click(screen.getByRole('link', { name }))
   }
 
-  // An account's page: its heading, once it loads.
+  // An account's or a player's page: its heading, once it loads.
   findHeading(name: string): Promise<HTMLElement> {
     return screen.findByRole('heading', { level: 1, name })
   }
@@ -139,6 +144,19 @@ export class AdminPage {
   async search(email: string): Promise<void> {
     await this.type(this.panel, 'Email', email)
     await this.click('Search')
+  }
+
+  // Searches the players by name.
+  async searchPlayers(name: string): Promise<void> {
+    const field = within(this.panel).getByRole('searchbox', { name: /^Name/ })
+    await this.user.clear(field)
+    if (name) await this.user.type(field, name)
+    await this.click('Search')
+  }
+
+  // A player's page: its Accounts card.
+  get accountsCard(): HTMLElement {
+    return screen.getByRole('region', { name: 'Accounts' })
   }
 
   async searchKeys(text: string): Promise<void> {

@@ -1,18 +1,19 @@
 """The admin page's routes: permissions, the roles that grant them, the
-accounts that hold the roles, and every account's signing keys."""
+accounts that hold the roles, every player, and every account's signing
+keys."""
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Path
 from pydantic import BaseModel, StringConstraints
 
-from fortymm_api.accounts import AccountId, CurrentAccount
+from fortymm_api.accounts import AccountId, CurrentAccount, PlayerId
 from fortymm_api.auth import require_permission
 from fortymm_api.database import DatabaseSession
 from fortymm_api.permissions import Permission, RoleId
-from fortymm_api.services import roles, signing_keys
+from fortymm_api.services import player_admin, roles, signing_keys
 from fortymm_api.services.signing_keys import KeyState
 from fortymm_api.signing_keys import KeyId
 from fortymm_api.v1.errors import (
@@ -520,3 +521,118 @@ def revoke_any_signing_key(
     """
     key = signing_keys.revoke_any_key(session, account.id, KeyId(bytes.fromhex(key_id)))
     return AdminSigningKeyResponse(data=signing_key_model(key))
+
+
+class AdminPlayer(BaseModel):
+    id: UUID
+    display_name: str
+    # The account that plays as the player, if any. Its email is null for a
+    # guest.
+    account_id: UUID | None
+    account_email: str | None
+    # How many accounts manage it, the one that plays as it included.
+    manager_count: int
+
+
+class AdminPlayersMeta(BaseModel):
+    # More players match than `data` holds. Narrow `name` to see them.
+    has_more: bool
+
+
+class AdminPlayersResponse(BaseModel):
+    data: list[AdminPlayer]
+    meta: AdminPlayersMeta
+
+
+class AdminPlayerManager(BaseModel):
+    id: UUID
+    # Null for a guest.
+    email: str | None
+    # `self` plays as the player. `managed` manages it for someone else.
+    relationship: Literal["self", "managed"]
+    # The account hasn't answered "Is this you?" for the player yet.
+    open_question: bool
+
+
+class AdminPlayerDetail(BaseModel):
+    id: UUID
+    display_name: str
+    created_at: datetime
+    # The player it merged into, or null. Flat rather than a nullable
+    # object, because the schema has no `anyOf` with null
+    # (tests/test_openapi.py).
+    merged_into: UUID | None
+    merged_into_display_name: str | None
+    # The matches it was named in, with a result or not, a player merged
+    # into it's too.
+    match_count: int
+    # The account that plays as it first, then verified accounts by email,
+    # then guests.
+    managers: list[AdminPlayerManager]
+    # The names of its leagues, sorted.
+    leagues: list[str]
+
+
+class AdminPlayerDetailResponse(BaseModel):
+    data: AdminPlayerDetail
+
+
+@router.get("/players", responses=READ_ERRORS)
+def admin_players(
+    session: DatabaseSession, account: AdminViewer, name: str | None = None
+) -> AdminPlayersResponse:
+    """List the players by display name, with the account that plays as
+    each and how many accounts manage it. Needs `admin.view`. A merged
+    player isn't listed.
+
+    `name` keeps the players whose display name contains it, whatever its
+    case. The list holds at most 50. `meta.has_more` says that more match.
+    """
+    page = player_admin.list_players(session, name)
+    return AdminPlayersResponse(
+        data=[
+            AdminPlayer(
+                id=player.id,
+                display_name=player.display_name,
+                account_id=player.account,
+                account_email=player.account_email,
+                manager_count=player.manager_count,
+            )
+            for player in page.players
+        ],
+        meta=AdminPlayersMeta(has_more=page.has_more),
+    )
+
+
+@router.get(
+    "/players/{player_id}",
+    responses={**READ_ERRORS, **errors(404, "No player has this id")},
+)
+def admin_player(
+    session: DatabaseSession, account: AdminViewer, player_id: UUID
+) -> AdminPlayerDetailResponse:
+    """The player, merged or not, for its admin page: the accounts that
+    manage it, its leagues and how many matches it was in. Needs
+    `admin.view`."""
+    found = player_admin.get_player(session, PlayerId(player_id))
+    survivor = found.merged_into
+    return AdminPlayerDetailResponse(
+        data=AdminPlayerDetail(
+            id=found.id,
+            display_name=found.display_name,
+            created_at=found.created_at,
+            merged_into=survivor.id if survivor else None,
+            merged_into_display_name=survivor.display_name if survivor else None,
+            match_count=found.match_count,
+            managers=[
+                AdminPlayerManager(
+                    id=manager.id,
+                    email=manager.email,
+                    relationship=manager.relationship,
+                    open_question=manager.open_question,
+                )
+                for manager in found.managers
+            ],
+            leagues=list(found.leagues),
+        )
+    )

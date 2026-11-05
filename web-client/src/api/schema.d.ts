@@ -645,6 +645,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/players": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Players
+         * @description List the players by display name, with the account that plays as
+         *     each and how many accounts manage it. Needs `admin.view`. A merged
+         *     player isn't listed.
+         *
+         *     `name` keeps the players whose display name contains it, whatever its
+         *     case. The list holds at most 50. `meta.has_more` says that more match.
+         */
+        get: operations["admin_players"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/players/{player_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Player
+         * @description The player, merged or not, for its admin page: the accounts that
+         *     manage it, its leagues and how many matches it was in. Needs
+         *     `admin.view`.
+         */
+        get: operations["admin_player"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -806,6 +853,85 @@ export interface components {
         AdminPermissionsResponse: {
             /** Data */
             data: components["schemas"]["AdminPermission"][];
+        };
+        /** AdminPlayer */
+        AdminPlayer: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Display Name */
+            display_name: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string | null;
+            /** Account Email */
+            account_email: string | null;
+            /** Manager Count */
+            manager_count: number;
+        };
+        /** AdminPlayerDetail */
+        AdminPlayerDetail: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Display Name */
+            display_name: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Merged Into
+             * Format: uuid
+             */
+            merged_into: string | null;
+            /** Merged Into Display Name */
+            merged_into_display_name: string | null;
+            /** Match Count */
+            match_count: number;
+            /** Managers */
+            managers: components["schemas"]["AdminPlayerManager"][];
+            /** Leagues */
+            leagues: string[];
+        };
+        /** AdminPlayerDetailResponse */
+        AdminPlayerDetailResponse: {
+            data: components["schemas"]["AdminPlayerDetail"];
+        };
+        /** AdminPlayerManager */
+        AdminPlayerManager: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Email */
+            email: string | null;
+            /**
+             * Relationship
+             * @enum {string}
+             */
+            relationship: "self" | "managed";
+            /** Open Question */
+            open_question: boolean;
+        };
+        /** AdminPlayersMeta */
+        AdminPlayersMeta: {
+            /** Has More */
+            has_more: boolean;
+        };
+        /** AdminPlayersResponse */
+        AdminPlayersResponse: {
+            /** Data */
+            data: components["schemas"]["AdminPlayer"][];
+            meta: components["schemas"]["AdminPlayersMeta"];
         };
         /** AdminRole */
         AdminRole: {
@@ -2718,6 +2844,113 @@ export interface operations {
             };
             /** @description The request's Content-Type isn't application/json */
             415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_players: {
+        parameters: {
+            query?: {
+                name?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPlayersResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_player: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                player_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPlayerDetailResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description No player has this id */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

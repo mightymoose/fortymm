@@ -148,7 +148,7 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   with `admin.view`. `route.tsx` has no component. Its loader reads the
   session and sends any other account to `/`.
 - `_shell/admin/index.tsx`: the page `Admin`. It has a tab each for roles,
-  permissions, accounts and signing keys. The `tab` search param names the
+  permissions, accounts, players and signing keys. The `tab` search param names the
   open tab (`src/pages/admin/tabs.ts`), and a tab change replaces it.
   `Admin.tsx` keeps each tab's label and panel in a `Record` of the tab
   ids, so a tab without a panel fails `tsc`. `Tabs` is
@@ -161,6 +161,9 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   `src/api/permissions.ts`). An account's page doesn't list it. The
   accounts tab searches by email, says when
   it shows only the first 50, and links each email to the account's page.
+  The players tab (`PlayersSection`) does the same for players by name,
+  each with the account that plays as it (linked, "Guest" or None) and how
+  many accounts manage it.
   The signing keys tab (`SigningKeysSection`) lists every account's keys,
   searched by email or player name, each with its account (linked, or
   "Guest"), registration and state from the API's `state`. With
@@ -176,6 +179,15 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   `account_roles.manage` makes the card a form of every role's checkbox
   with Save roles. Without it, the card lists the roles the account holds.
   Add the account's other admin tools to this page.
+- `_shell/admin/players/$playerId.tsx`: the page `PlayerAdmin`, one
+  player's admin page, built like an account's. Its breadcrumb goes to
+  `/admin?tab=players`, and it loads from `GET
+  /v1/admin/players/{player_id}`. A 404, or a 422 for an id that isn't a
+  UUID, shows "No such player". It shows the player's name, when it was
+  added, its matches and leagues, then an Accounts card that lists each
+  account that plays as it or manages it, a verified one linked to its
+  page, with a tag for an unanswered "Is this you?". A merged player's
+  page links to the player it merged into. The page changes nothing yet.
 - The admin forms use react-hook-form and zod. Each zod schema repeats the
   API's rules, such as the role name's 50 characters and the permission
   key's pattern, so a mistake shows before the request. `TextField` marks
