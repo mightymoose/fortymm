@@ -4,7 +4,7 @@ the rules. A refused write answers in the `errors` shape without raising, so
 the request still commits the submission that logs it."""
 
 from datetime import datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Request, Response
