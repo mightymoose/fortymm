@@ -3,7 +3,7 @@ accounts that hold the roles, every player, and every account's signing
 keys."""
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Path
@@ -63,7 +63,7 @@ INVALID_ROLE = invalid(
     "The body is invalid. If a permission key names no permission, the body is"
     " in the `errors` shape instead"
 )
-NO_ACCOUNT = errors(404, "No verified account has this id")
+NO_ACCOUNT = errors(404, "No account has this id")
 NO_KEY = errors(404, "No key has this id")
 LAST_ADMINISTRATOR = errors(
     409,
@@ -140,18 +140,28 @@ class RoleRequest(BaseModel):
         return roles.RoleDraft(self.name, self.description, frozenset(self.permissions))
 
 
-class AdminAccount(BaseModel):
+class AdminAccountFields(BaseModel):
     id: UUID
-    email: str
+    kind: Literal["guest", "verified"]
+    # Null for a guest.
+    email: str | None
     # The account's own player's name. Null for a moment after a sign-in
     # makes the account, until its first POST /v1/session.
     display_name: str | None
+    created_at: datetime
+    last_seen_at: datetime
+    # The matches its own player played, with those of the players merged
+    # into it. 0 with no player.
+    match_count: int
+
+
+class AdminAccount(AdminAccountFields):
     # The ids of the roles it holds, sorted.
     role_ids: list[UUID]
 
 
 class AdminAccountsMeta(BaseModel):
-    # More accounts match than `data` holds. Narrow `email` to see them.
+    # More accounts match than `data` holds. Narrow `search` to see them.
     has_more: bool
 
 
@@ -172,13 +182,7 @@ class AdminAccountRole(BaseModel):
     held: bool
 
 
-class AdminAccountDetail(BaseModel):
-    id: UUID
-    email: str
-    # As in AdminAccount.
-    display_name: str | None
-    created_at: datetime
-    last_seen_at: datetime
+class AdminAccountDetail(AdminAccountFields):
     # Every role, by name, with whether the account holds it.
     roles: list[AdminAccountRole]
 
@@ -245,13 +249,20 @@ def role_model(role: roles.RoleSummary) -> AdminRole:
     )
 
 
+def account_fields(account: roles.AdminAccount) -> dict[str, Any]:
+    return {
+        "id": account.account.id,
+        "kind": account.account.kind,
+        "email": account.account.email,
+        "display_name": account.display_name,
+        "created_at": account.created_at,
+        "last_seen_at": account.last_seen_at,
+        "match_count": account.match_count,
+    }
+
+
 def account_model(account: roles.AdminAccount) -> AdminAccount:
-    return AdminAccount(
-        id=account.id,
-        email=account.email,
-        display_name=account.display_name,
-        role_ids=list(account.role_ids),
-    )
+    return AdminAccount(**account_fields(account), role_ids=list(account.role_ids))
 
 
 def signing_key_model(key: signing_keys.AdminSigningKey) -> AdminSigningKey:
@@ -395,15 +406,20 @@ def delete_role(session: DatabaseSession, account: RoleManager, role_id: UUID) -
 
 @router.get("/accounts", responses=READ_ERRORS)
 def admin_accounts(
-    session: DatabaseSession, account: AdminViewer, email: str | None = None
+    session: DatabaseSession,
+    account: AdminViewer,
+    view: roles.AccountView = roles.AccountView.VERIFIED,
+    search: str = "",
 ) -> AdminAccountsResponse:
-    """List the verified accounts by email, with the roles each holds. Needs
-    `admin.view`.
+    """List the accounts, with the roles each holds. Needs `admin.view`. An
+    adopted account isn't listed.
 
-    `email` keeps the accounts whose email contains it, whatever its case.
-    The list holds at most 50. `meta.has_more` says that more match.
+    `view` picks the verified accounts, by email, the guests, or both, the
+    longest unseen first. `search` keeps the accounts whose email or player
+    name contains it, whatever its case. The list holds at most 50.
+    `meta.has_more` says that more match.
     """
-    page = roles.list_accounts(session, email)
+    page = roles.list_accounts(session, view, search)
     return AdminAccountsResponse(
         data=[account_model(found) for found in page.accounts],
         meta=AdminAccountsMeta(has_more=page.has_more),
@@ -414,16 +430,12 @@ def admin_accounts(
 def admin_account(
     session: DatabaseSession, account: AdminViewer, account_id: UUID
 ) -> AdminAccountDetailResponse:
-    """The verified account, with every role and whether it holds each, for
-    its admin page. Needs `admin.view`."""
+    """The account, a guest's too, with every role and whether it holds
+    each, for its admin page. Needs `admin.view`."""
     found = roles.get_account(session, AccountId(account_id))
     return AdminAccountDetailResponse(
         data=AdminAccountDetail(
-            id=found.id,
-            email=found.email,
-            display_name=found.display_name,
-            created_at=found.created_at,
-            last_seen_at=found.last_seen_at,
+            **account_fields(found.account),
             roles=[
                 AdminAccountRole(
                     id=role.id,
@@ -441,7 +453,10 @@ def admin_account(
     "/accounts/{account_id}/roles",
     responses={
         **WRITE_ERRORS,
-        **errors(404, "No verified account has this id, or a role doesn't exist"),
+        **errors(
+            404,
+            "No account has this id, it's a guest's, or a role doesn't exist",
+        ),
         **LAST_ADMINISTRATOR,
     },
 )

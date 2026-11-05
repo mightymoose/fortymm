@@ -8,6 +8,9 @@ An account holds the roles its account_roles rows name. A new account
 starts with the default roles (`grant_default_roles()`), and after that
 they are roles like any other.
 
+An adopted account is never listed and holds nothing that counts: its
+sessions are invalid, so it can never act.
+
 Every write takes RBAC_LOCK, so two writes take turns. Under the lock, a
 write checks that the acting account still holds the permission it needs,
 and after it, that some account still holds `account_roles.manage`.
@@ -16,12 +19,29 @@ Otherwise nobody could grant a role again.
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
+from typing import Any, assert_never
 
-from sqlalchemy import ColumnElement, and_, delete, func, insert, select, update
+from sqlalchemy import (
+    ColumnElement,
+    and_,
+    delete,
+    func,
+    insert,
+    or_,
+    select,
+    true,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as upsert
 from sqlalchemy.orm import Session
 
-from fortymm_api.accounts import AccountId, Email
+from fortymm_api.accounts import (
+    AccountId,
+    CurrentAccount,
+    GuestAccount,
+    VerifiedAccount,
+)
 from fortymm_api.models import (
     Account,
     AccountRole,
@@ -34,12 +54,22 @@ from fortymm_api.models import (
 )
 from fortymm_api.permissions import Permission, RoleId
 from fortymm_api.services.authorization import MissingPermission, permissions_of
+from fortymm_api.services.player_matches import played_matches
 from fortymm_api.services.sessions import lock_account_for_write
 
 # An advisory lock key outside int4, so it can't meet sign-in's
 # hashtext(email) keys.
 RBAC_LOCK = int.from_bytes(b"FMM RBAC")
 ACCOUNT_PAGE_SIZE = 50
+_NOT_ADOPTED = Account.adopted_into.is_(None)
+
+
+class AccountView(StrEnum):
+    """Which accounts the admin's list shows, and in what order."""
+
+    VERIFIED = "verified"
+    GUESTS = "guests"
+    ALL = "all"
 
 
 @dataclass(frozen=True)
@@ -77,13 +107,17 @@ class PermissionSummary:
 
 @dataclass(frozen=True)
 class AdminAccount:
-    id: AccountId
-    email: Email
+    account: CurrentAccount
     # The self player's name. None in the moment between a sign-in that
     # makes the account and its first POST /v1/session.
     display_name: str | None
     # Sorted.
     role_ids: tuple[RoleId, ...]
+    created_at: datetime
+    last_seen_at: datetime
+    # The self player's matches, as `played_matches()` counts them. 0 with no
+    # self player.
+    match_count: int
 
 
 @dataclass(frozen=True)
@@ -105,13 +139,9 @@ class RoleChoice:
 
 @dataclass(frozen=True)
 class AccountDetail:
-    """What the admin page shows about one verified account."""
+    """What the admin page shows about one account."""
 
-    id: AccountId
-    email: Email
-    display_name: str | None
-    created_at: datetime
-    last_seen_at: datetime
+    account: AdminAccount
     # Every role, by name.
     roles: tuple[RoleChoice, ...]
 
@@ -121,7 +151,13 @@ class RoleNotFound(Exception):
 
 
 class AccountNotFound(Exception):
-    """No verified account has the id. `create_app()` answers 404."""
+    """No account has the id, or it was adopted. `create_app()` answers
+    404."""
+
+
+class NotVerified(Exception):
+    """The account is a guest's, whose roles an admin can't set.
+    `create_app()` answers 404."""
 
 
 class RoleNameTaken(Exception):
@@ -249,36 +285,36 @@ def delete_role(session: Session, actor: AccountId, role: RoleId) -> None:
     _require_an_administrator(session)
 
 
-def list_accounts(session: Session, email: str | None) -> AccountPage:
-    """The verified accounts whose email contains `email`, whatever its case,
-    by email. At most ACCOUNT_PAGE_SIZE."""
-    query = email.strip().lower() if email else ""
-    found = _accounts(
-        session,
-        func.strpos(Account.email, query) > 0,
-        limit=ACCOUNT_PAGE_SIZE + 1,
-    )
+def list_accounts(session: Session, view: AccountView, search: str) -> AccountPage:
+    """The view's accounts whose email or self player's name contains
+    `search`, whatever its case. At most ACCOUNT_PAGE_SIZE."""
+    kind, order = _view(view)
+    where = [kind]
+    # A blank search adds nothing: strpos(NULL, '') is NULL, which would
+    # leave out a guest with no player.
+    if text := search.strip().lower():
+        where.append(
+            or_(
+                func.strpos(Account.email, text) > 0,
+                func.strpos(func.lower(Player.display_name), text) > 0,
+            )
+        )
+    found = _accounts(session, *where, order=order, limit=ACCOUNT_PAGE_SIZE + 1)
     return AccountPage(
         found[:ACCOUNT_PAGE_SIZE], has_more=len(found) > ACCOUNT_PAGE_SIZE
     )
 
 
 def get_account(session: Session, account: AccountId) -> AccountDetail:
-    """The verified account, with every role and whether it holds each."""
+    """The account, a guest's too, with every role and whether it holds
+    each."""
     found = _accounts(session, Account.id == account)
     if not found:
         raise AccountNotFound
     summary = found[0]
-    created_at, last_seen_at = session.execute(
-        select(Account.created_at, Account.last_seen_at).where(Account.id == account)
-    ).one()
     held = set(summary.role_ids)
     return AccountDetail(
-        summary.id,
-        summary.email,
-        summary.display_name,
-        created_at,
-        last_seen_at,
+        summary,
         tuple(
             RoleChoice(role.id, role.name, role.description, role.id in held)
             for role in _roles(session)
@@ -295,6 +331,8 @@ def set_account_roles(
     found = _accounts(session, Account.id == account)
     if not found:
         raise AccountNotFound
+    if isinstance(found[0].account, GuestAccount):
+        raise NotVerified
     known = session.scalar(
         select(func.count()).select_from(Role).where(Role.id.in_(roles))
     )
@@ -392,7 +430,9 @@ def _require_an_administrator(session: Session) -> None:
     held = (
         select(AccountRole.account_id)
         .join(RolePermission, RolePermission.role_id == AccountRole.role_id)
+        .join(Account, Account.id == AccountRole.account_id)
         .where(RolePermission.permission_key == Permission.ACCOUNT_ROLES_MANAGE)
+        .where(_NOT_ADOPTED)
         .exists()
     )
     if not session.scalar(held.select()):
@@ -408,7 +448,11 @@ def _roles(
         .scalar_subquery()
     )
     account_count = (
-        select(func.count()).where(AccountRole.role_id == Role.id).scalar_subquery()
+        select(func.count())
+        .select_from(AccountRole)
+        .join(Account, Account.id == AccountRole.account_id)
+        .where(AccountRole.role_id == Role.id, _NOT_ADOPTED)
+        .scalar_subquery()
     )
     query = select(
         Role.id,
@@ -455,8 +499,26 @@ def _permissions(
     ]
 
 
+def _view(
+    view: AccountView,
+) -> tuple[ColumnElement[bool], tuple[ColumnElement[Any], ...]]:
+    stalest_first = (Account.last_seen_at.asc(), Account.id.asc())
+    match view:
+        case AccountView.VERIFIED:
+            return Account.email.is_not(None), (Account.email.asc(),)
+        case AccountView.GUESTS:
+            return Account.email.is_(None), stalest_first
+        case AccountView.ALL:
+            return true(), stalest_first
+        case _:
+            assert_never(view)
+
+
 def _accounts(
-    session: Session, where: ColumnElement[bool], *, limit: int | None = None
+    session: Session,
+    *where: ColumnElement[bool],
+    order: tuple[ColumnElement[Any], ...] = (),
+    limit: int | None = None,
 ) -> list[AdminAccount]:
     role_ids = (
         select(func.array_agg(AccountRole.role_id))
@@ -464,7 +526,15 @@ def _accounts(
         .scalar_subquery()
     )
     query = (
-        select(Account.id, Account.email, Player.display_name, role_ids)
+        select(
+            Account.id,
+            Account.email,
+            Account.created_at,
+            Account.last_seen_at,
+            Player.id.label("player"),
+            Player.display_name,
+            role_ids,
+        )
         .outerjoin(
             PlayerManager,
             and_(
@@ -473,11 +543,22 @@ def _accounts(
             ),
         )
         .outerjoin(Player, Player.id == PlayerManager.player_id)
-        .where(Account.email.is_not(None), Account.adopted_into.is_(None), where)
-        .order_by(Account.email)
+        .where(_NOT_ADOPTED, *where)
+        .order_by(*order)
         .limit(limit)
     )
+    rows = session.execute(query).all()
+    matches = played_matches(
+        session, [row.player for row in rows if row.player is not None]
+    )
     return [
-        AdminAccount(id, email, display_name, tuple(sorted(roles or ())))
-        for id, email, display_name, roles in session.execute(query)
+        AdminAccount(
+            GuestAccount(id) if email is None else VerifiedAccount(id, email),
+            display_name,
+            tuple(sorted(roles or ())),
+            created_at,
+            last_seen_at,
+            matches[player].count if player is not None else 0,
+        )
+        for id, email, created_at, last_seen_at, player, display_name, roles in rows
     ]

@@ -4,22 +4,28 @@ from ipaddress import ip_address
 
 import pytest
 from locks import wait_behind
-from sqlalchemy import Engine, text, update
+from match_setup import add_account, add_match, add_player
+from sqlalchemy import Engine, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from fortymm_api.accounts import AccountId, Email, GuestAccount, VerifiedAccount
-from fortymm_api.models import Account
+from fortymm_api.matches import MatchId
+from fortymm_api.models import Account, Player, PlayerManager
 from fortymm_api.permissions import Permission, RoleId
 from fortymm_api.services.authorization import (
     MissingPermission,
     authorize,
     permissions_of,
 )
+from fortymm_api.services.matches import MatchDetails
 from fortymm_api.services.roles import (
     ACCOUNT_PAGE_SIZE,
     AccountNotFound,
+    AccountPage,
+    AccountView,
     BuiltInPermission,
     LastAdministrator,
+    NotVerified,
     PermissionKeyTaken,
     PermissionNotFound,
     PermissionSummary,
@@ -132,6 +138,43 @@ def role_ids(database: Engine, account: AccountId) -> list[RoleId]:
                 {"account": account},
             )
         )
+
+
+def mark_adopted(database: Engine, account: AccountId, into: AccountId) -> None:
+    with database.begin() as connection:
+        connection.execute(
+            text("UPDATE accounts SET adopted_into = :into WHERE id = :account"),
+            {"into": into, "account": account},
+        )
+
+
+def seen(database: Engine, account: AccountId, day: str) -> None:
+    with database.begin() as connection:
+        connection.execute(
+            text("UPDATE accounts SET last_seen_at = :day WHERE id = :account"),
+            {"day": day, "account": account},
+        )
+
+
+def rename_self_player(session: Session, account: AccountId, display_name: str) -> None:
+    session.execute(
+        update(Player)
+        .where(
+            Player.id.in_(
+                select(PlayerManager.player_id).where(
+                    PlayerManager.account_id == account,
+                    PlayerManager.relationship == "self",
+                )
+            )
+        )
+        .values(display_name=display_name)
+    )
+
+
+def listed(database: Engine, view: AccountView, search: str = "") -> AccountPage:
+    return in_transaction(
+        database, lambda session: list_accounts(session, view, search)
+    )
 
 
 def test_the_built_in_permissions_are_the_ones_the_code_checks(
@@ -355,6 +398,32 @@ def test_lists_roles_by_name_whatever_its_case_with_their_holders(
     ]
 
 
+def test_counts_a_guests_roles_but_not_an_adopted_accounts(
+    migrated_database: Engine,
+) -> None:
+    kept = guest(migrated_database)
+    mark_adopted(migrated_database, guest(migrated_database), into=kept)
+
+    counts = {role.name: role.account_count for role in roles(migrated_database)}
+
+    assert counts["User"] == 1
+
+
+def test_an_adopted_account_is_not_the_last_administrator(
+    migrated_database: Engine,
+) -> None:
+    ann = admin(migrated_database)
+    mark_adopted(
+        migrated_database, admin(migrated_database, "bob@example.com"), into=ann
+    )
+
+    with pytest.raises(LastAdministrator):
+        in_transaction(
+            migrated_database,
+            lambda session: set_account_roles(session, ann, ann, frozenset()),
+        )
+
+
 def test_two_roles_cannot_share_a_name_whatever_its_case(
     migrated_database: Engine,
 ) -> None:
@@ -535,16 +604,17 @@ def test_sets_an_accounts_exact_roles(migrated_database: Engine) -> None:
 
 def test_only_a_verified_account_holds_a_role(migrated_database: Engine) -> None:
     ann = admin(migrated_database)
-    guest = in_transaction(
-        migrated_database, lambda session: start_session(session, None, ANN)
-    ).account.id
+    guest_account = guest(migrated_database)
+    before = role_ids(migrated_database, guest_account)
     role = frozenset({administrator(migrated_database)})
 
-    with pytest.raises(AccountNotFound):
+    with pytest.raises(NotVerified):
         in_transaction(
             migrated_database,
-            lambda session: set_account_roles(session, ann, guest, role),
+            lambda session: set_account_roles(session, ann, guest_account, role),
         )
+
+    assert role_ids(migrated_database, guest_account) == before
 
 
 def test_gets_an_account_with_every_role_and_which_it_holds(
@@ -556,8 +626,8 @@ def test_gets_an_account_with_every_role_and_which_it_holds(
 
     found = in_transaction(migrated_database, lambda session: get_account(session, bob))
 
-    assert (found.id, found.email) == (bob, "bob@example.com")
-    assert found.display_name is not None
+    assert found.account.account == VerifiedAccount(bob, Email("bob@example.com"))
+    assert found.account.display_name is not None
     assert [(role.name, role.held) for role in found.roles] == [
         ("Administrator", False),
         ("User", False),
@@ -565,31 +635,137 @@ def test_gets_an_account_with_every_role_and_which_it_holds(
     ]
 
 
-def test_getting_a_guest_account_is_not_found(migrated_database: Engine) -> None:
-    guest = in_transaction(
-        migrated_database, lambda session: start_session(session, None, ANN)
-    ).account.id
+def test_gets_a_guest_account(migrated_database: Engine) -> None:
+    guest_account = guest(migrated_database)
+
+    found = in_transaction(
+        migrated_database, lambda session: get_account(session, guest_account)
+    )
+
+    assert found.account.account == GuestAccount(guest_account)
+    assert [(role.name, role.held) for role in found.roles] == [
+        ("Administrator", False),
+        ("User", True),
+    ]
+
+
+def test_getting_an_adopted_account_is_not_found(migrated_database: Engine) -> None:
+    adopted = guest(migrated_database)
+    mark_adopted(migrated_database, adopted, into=admin(migrated_database))
 
     with pytest.raises(AccountNotFound):
-        in_transaction(migrated_database, lambda session: get_account(session, guest))
+        in_transaction(migrated_database, lambda session: get_account(session, adopted))
 
 
 def test_lists_verified_accounts_by_email(migrated_database: Engine) -> None:
     ann = admin(migrated_database)
     bob = verified(migrated_database, "bob@example.com")
-    in_transaction(migrated_database, lambda session: start_session(session, None, ANN))
+    guest(migrated_database)
 
-    page = in_transaction(
-        migrated_database, lambda session: list_accounts(session, None)
-    )
+    page = listed(migrated_database, AccountView.VERIFIED)
 
-    assert [(account.id, account.email) for account in page.accounts] == [
-        (ann, "ann@example.com"),
-        (bob, "bob@example.com"),
+    assert [account.account for account in page.accounts] == [
+        VerifiedAccount(ann, Email("ann@example.com")),
+        VerifiedAccount(bob, Email("bob@example.com")),
     ]
     assert page.accounts[0].role_ids == (administrator(migrated_database),)
     assert page.accounts[1].display_name is not None
     assert not page.has_more
+
+
+def test_lists_guests_the_longest_unseen_first(migrated_database: Engine) -> None:
+    admin(migrated_database)
+    newest, oldest, tied_a, tied_b = (guest(migrated_database) for _ in range(4))
+    seen(migrated_database, newest, "2026-11-04")
+    seen(migrated_database, oldest, "2026-11-01")
+    for tied in (tied_a, tied_b):
+        seen(migrated_database, tied, "2026-11-02")
+
+    page = listed(migrated_database, AccountView.GUESTS)
+
+    assert [account.account for account in page.accounts] == [
+        GuestAccount(oldest),
+        *(GuestAccount(tied) for tied in sorted((tied_a, tied_b))),
+        GuestAccount(newest),
+    ]
+
+
+def test_lists_both_kinds_the_longest_unseen_first(migrated_database: Engine) -> None:
+    ann = admin(migrated_database)
+    guest_account = guest(migrated_database)
+    seen(migrated_database, ann, "2026-11-04")
+    seen(migrated_database, guest_account, "2026-11-01")
+
+    page = listed(migrated_database, AccountView.ALL)
+
+    assert [account.account for account in page.accounts] == [
+        GuestAccount(guest_account),
+        VerifiedAccount(ann, Email("ann@example.com")),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("view", "kept"),
+    [
+        (AccountView.VERIFIED, True),
+        (AccountView.GUESTS, False),
+        (AccountView.ALL, True),
+    ],
+)
+def test_lists_no_adopted_account(
+    migrated_database: Engine, view: AccountView, kept: bool
+) -> None:
+    ann = admin(migrated_database)
+    for adopted in (
+        guest(migrated_database),
+        verified(migrated_database, "bob@example.com"),
+    ):
+        mark_adopted(migrated_database, adopted, into=ann)
+
+    page = listed(migrated_database, view)
+
+    assert [account.account.id for account in page.accounts] == ([ann] if kept else [])
+
+
+def test_finds_accounts_by_email_or_player_name_whatever_its_case(
+    migrated_database: Engine,
+) -> None:
+    ann = admin(migrated_database)
+    crane = guest(migrated_database)
+    bob = verified(migrated_database, "bob@example.com")
+
+    def setup(session: Session) -> None:
+        rename_self_player(session, ann, "Excited Egret")
+        rename_self_player(session, bob, "Brave Badger")
+        rename_self_player(session, crane, "Curious Crane")
+        managed = add_player(session)
+        session.execute(
+            update(Player)
+            .where(Player.id == managed)
+            .values(display_name="crane the managed")
+        )
+        session.add(
+            PlayerManager(player_id=managed, account_id=bob, relationship="managed")
+        )
+
+    in_transaction(migrated_database, setup)
+
+    def found(search: str) -> list[AccountId]:
+        page = listed(migrated_database, AccountView.ALL, search)
+        return [account.account.id for account in page.accounts]
+
+    assert found(" CRANE ") == [crane]
+    assert found("ANN@") == [ann]
+
+
+def test_a_blank_search_finds_a_guest_with_no_player(
+    migrated_database: Engine,
+) -> None:
+    no_player = in_transaction(migrated_database, add_account)
+
+    page = listed(migrated_database, AccountView.GUESTS, "  ")
+
+    assert [account.account for account in page.accounts] == [GuestAccount(no_player)]
 
 
 def test_filters_accounts_by_email_whatever_its_case(
@@ -598,11 +774,37 @@ def test_filters_accounts_by_email_whatever_its_case(
     verified(migrated_database, "ann@example.com")
     bob = verified(migrated_database, "bob_100%@example.com")
 
-    page = in_transaction(
-        migrated_database, lambda session: list_accounts(session, " B_100% ")
-    )
+    page = listed(migrated_database, AccountView.VERIFIED, " B_100% ")
 
-    assert [account.id for account in page.accounts] == [bob]
+    assert [account.account.id for account in page.accounts] == [bob]
+
+
+def test_counts_the_matches_of_an_accounts_own_player(
+    migrated_database: Engine,
+) -> None:
+    def setup(session: Session) -> tuple[AccountId, AccountId]:
+        own, managed, other = (add_player(session) for _ in range(3))
+        player_account = add_account(session, plays_as=own)
+        session.add(
+            PlayerManager(
+                player_id=managed, account_id=player_account, relationship="managed"
+            )
+        )
+        add_match(session, MatchId(uuid.uuid4()), MatchDetails(3, False, (own, other)))
+        add_match(session, MatchId(uuid.uuid4()), MatchDetails(3, False, (own, other)))
+        add_match(
+            session, MatchId(uuid.uuid4()), MatchDetails(3, False, (managed, other))
+        )
+        return player_account, add_account(session)
+
+    player_account, no_player = in_transaction(migrated_database, setup)
+
+    page = listed(migrated_database, AccountView.GUESTS)
+
+    assert {account.account.id: account.match_count for account in page.accounts} == {
+        player_account: 2,
+        no_player: 0,
+    }
 
 
 def test_says_when_more_accounts_match_than_a_page_holds(
@@ -618,7 +820,7 @@ def test_says_when_more_accounts_match_than_a_page_holds(
             {"count": ACCOUNT_PAGE_SIZE},
         )
 
-    page = in_transaction(migrated_database, lambda session: list_accounts(session, ""))
+    page = listed(migrated_database, AccountView.VERIFIED)
 
     assert len(page.accounts) == ACCOUNT_PAGE_SIZE
     assert page.has_more

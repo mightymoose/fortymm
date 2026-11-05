@@ -13,6 +13,7 @@ Email = NewType("Email", str)  # lowercase
 class GuestAccount:
     kind: ClassVar[Literal["guest"]] = "guest"
     id: AccountId
+    email: ClassVar[None] = None
 
 
 @dataclass(frozen=True)

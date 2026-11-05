@@ -26,6 +26,7 @@ from fortymm_api.services.roles import (
     AccountNotFound,
     BuiltInPermission,
     LastAdministrator,
+    NotVerified,
     PermissionKeyTaken,
     PermissionNotFound,
     RoleNameTaken,
@@ -59,7 +60,8 @@ PLAYER_ERRORS: dict[type[Exception], tuple[int, str]] = {
 ROLE_ERRORS: dict[type[Exception], tuple[int, str]] = {
     MissingPermission: (403, "You don't have permission to do this"),
     RoleNotFound: (404, "The role doesn't exist"),
-    AccountNotFound: (404, "No verified account has this id"),
+    AccountNotFound: (404, "No account has this id"),
+    NotVerified: (404, "No verified account has this id"),
     PlayerNotFound: (404, "No player has this id"),
     PermissionNotFound: (404, "The permission doesn't exist"),
     RoleNameTaken: (409, "Another role has this name"),

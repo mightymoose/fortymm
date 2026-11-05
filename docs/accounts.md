@@ -359,12 +359,20 @@ routes, under `/v1/admin`.
   `players.view` granted each to every role
   that granted `account_roles.manage`, which could already grant itself
   anything.
-- `GET /v1/admin/accounts` lists verified accounts by email, at most 50,
-  with `meta.has_more`. `email` filters by a case-insensitive substring.
-  `GET /v1/admin/accounts/{account_id}` is the account's page in one
-  request: its email, player, `created_at`, `last_seen_at`, and every role
-  by name with `held`. It answers 404 for a guest. `PUT
-  /v1/admin/accounts/{account_id}/roles` sets the exact set of roles.
+- `GET /v1/admin/accounts` lists accounts, at most 50, with
+  `meta.has_more`. `view` picks `verified` (the default, by email),
+  `guests` or `all`. The last two put the account seen longest ago first,
+  for the cleanup of old guests to start from. `search` filters by a
+  case-insensitive substring of the email or the self player's name. Each
+  account has its `kind`, its email (null for a guest), player,
+  `created_at`, `last_seen_at`, the self player's `match_count` and its
+  roles. `GET /v1/admin/accounts/{account_id}` is the account's page in
+  one request, a guest's too: the same fields, and every role by name with
+  `held`. `PUT /v1/admin/accounts/{account_id}/roles` sets the exact set
+  of roles of a verified account, and answers 404 for a guest. An adopted
+  account isn't listed and answers 404. It doesn't count in a role's
+  `account_count`, nor as the account that keeps `account_roles.manage`,
+  because it can never act. `services/roles.py` holds the three.
 - `GET /v1/admin/players` lists the players no merge replaced by display
   name, at most 50, with `meta.has_more`, each with the account that plays
   as it and how many accounts manage it. `name` filters by a
