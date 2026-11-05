@@ -1,6 +1,7 @@
-import { fireEvent, within } from '@testing-library/react'
+import { act, fireEvent, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { sessionQuery } from '../../api/queries'
 import type { components } from '../../api/schema'
 import { HomePage } from '../../test/pages/HomePage'
 import { PlayerReviewPage, type ReviewAction } from '../../test/pages/PlayerReviewPage'
@@ -114,12 +115,18 @@ describe('Is this you?', () => {
     expect(new HomePage(page.router).title).toHaveTextContent('What’s coming, and when.')
   })
 
-  it('takes signed_in out of the URL for a guest, and asks for no players', async () => {
+  it('opens the review once a slow sign-in replaces the saved guest with the verified account', async () => {
     const requests = recordPlayersRequests()
     const page = await PlayerReviewPage.render('/?signed_in=1')
-
     expect(requests).toEqual([])
-    expect(page.href).toBe('/')
+
+    mockVerifiedAccount([egret, dove])
+    const { api, queryClient } = page.router.options.context
+    await act(() => queryClient.refetchQueries({ queryKey: sessionQuery(api).queryKey }))
+    await page.findQuestion()
+
+    expect(page.href).toBe('/review-players')
+    expect(page.heading).toHaveTextContent('Is this you?')
   })
 
   it('asks for no players on a visit to Home that doesn’t follow a sign-in', async () => {

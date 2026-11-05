@@ -98,8 +98,9 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   `GET /v1/account/players` in its own `QueryBoundary`, with no skeleton
   and the inline error (see API client). It replaces the URL with
   `/review-players` when a question is open, or with `/` without the param
-  when none is. A guest asks for no players, and the URL loses the param.
-  So a reload doesn't open the review again.
+  when none is. So a reload doesn't open the review again. A guest asks
+  for no players and keeps the param, because after a slow sign-in the
+  session shows the saved guest account until the verified one comes.
 - `review-players.tsx`: the page `PlayerReview`
   (`src/pages/adoption/PlayerReview.tsx`), with the wordmark and no
   `AppShell`. The wordmark always shows. The question and its answers read

@@ -10,14 +10,9 @@ import { QueryBoundary } from '../../components/QueryBoundary'
 export function AfterSignIn() {
   const { api } = useRouteContext({ from: '__root__' })
   const { data: account } = useSuspenseQuery(sessionQuery(api))
-  const navigate = useNavigate()
-  const isGuest = account.kind !== 'verified'
-
-  useEffect(() => {
-    if (isGuest) void navigate({ to: '/', search: {}, replace: true })
-  }, [isGuest, navigate])
-
-  if (isGuest) return null
+  // A guest keeps the param. After a slow sign-in the session can show the
+  // saved guest account first, and the verified one replaces it later.
+  if (account.kind !== 'verified') return null
   return (
     // It renders nothing, so a skeleton would push the roadmap down while
     // the players load, then pull it back up.
