@@ -205,7 +205,8 @@ export function answerQuestionMutation(api: ApiClient, queryClient: QueryClient)
 }
 
 // The statuses whose title is FortyMM's reason for refusing a result.
-const REFUSAL_STATUSES = new Set([404, 409, 422])
+// A 403 is an account without `matches.score`, which more tries won't fix.
+const REFUSAL_STATUSES = new Set([403, 404, 409, 422])
 
 // What FortyMM said of an approved result: it checked out, or it refused
 // the result, with the API's reason.
@@ -214,8 +215,8 @@ export type ApprovalVerdict = { kind: 'accepted' } | { kind: 'refused'; title: s
 // Sends an approved result to FortyMM, which checks it and records it. The
 // same envelope again is a retry that FortyMM answers the same, so it is a
 // query keyed by the envelope, and a reload of an approved link sends it
-// again. `matchId` is the payload's match. A 404, 409 or 422 with a title
-// is a verdict, the 404 for a match FortyMM doesn't know. Anything else,
+// again. `matchId` is the payload's match. A 403, 404, 409 or 422 with a
+// title is a verdict, the 404 for a match FortyMM doesn't know. Anything else,
 // such as no network, throws to the boundary.
 export function approvalCheckQuery(api: ApiClient, matchId: string, envelope: Uint8Array<ArrayBuffer>) {
   const envelopeHex = hex(envelope)

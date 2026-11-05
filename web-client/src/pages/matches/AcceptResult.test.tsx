@@ -232,6 +232,15 @@ describe('AcceptResult’s check with FortyMM', () => {
     expect(page.status).toHaveTextContent('Approved on this device')
   })
 
+  it('shows FortyMM’s reason when the account may not score matches', async () => {
+    mockApprovals({ refused: 'You don’t have permission to do this', status: 403 })
+    const page = await approved()
+
+    const refusal = await page.findRefusal()
+    expect(refusal).toHaveTextContent('You don’t have permission to do this')
+    expect(page.status).toHaveTextContent('Approved on this device')
+  })
+
   it('shows FortyMM’s reason when it doesn’t know the match', async () => {
     mockApprovals({ refused: 'No match has this id', status: 404 })
     const page = await approved()

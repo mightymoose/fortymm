@@ -70,11 +70,6 @@ account has no `email`. A verified account has one, always lowercase.
   dependency. A route that needs the account takes a `RequestAccount`
   parameter. Without a valid session, that dependency answers 401 in the
   `errors` shape. Only `POST /v1/session` makes a guest account.
-  `OptionalAccount` gives the account or None, for a route that anyone may
-  call and that logs who did, such as a match's boards and approvals. Such
-  a route sets `openapi_extra=SESSION_OPTIONAL`, because OpenAPI reads the
-  session scheme as required, and oasdiff would report a route that used
-  to need no session as broken.
 - A service that writes as an account first calls
   `lock_account_for_write()` in `services/sessions.py`. It holds the account
   row `FOR SHARE` until the transaction ends. After the lock, it checks
@@ -317,9 +312,9 @@ routes, under `/v1/admin`.
   64 characters. The key never changes, because code checks it by key.
 - The built-in permissions are the ones the code checks: `admin.view`,
   `roles.manage`, `account_roles.manage`, `signing_keys.revoke`,
-  `matches.create`, `matches.override`, `matches.view` and `players.view`.
-  They are the members of `Permission` in `permissions.py`, and their rows
-  have `built_in` set. A
+  `matches.create`, `matches.override`, `matches.score`, `matches.view` and
+  `players.view`. They are the members of `Permission` in `permissions.py`,
+  and their rows have `built_in` set. A
   test fails if the two differ, so a new check in code needs a migration
   that adds its row. Nobody can delete a built-in permission (409).
 - Admins add other permissions, for code that checks their keys later.
@@ -362,9 +357,10 @@ routes, under `/v1/admin`.
   if one exists, or else as an email grant. In dev, signing in through the
   mock as that email makes an administrator. The migrations that added
   `signing_keys.revoke`, `matches.create`, `matches.override`,
-  `matches.view` and `players.view` granted each to every role
-  that granted `account_roles.manage`, which could already grant itself
-  anything.
+  `matches.score`, `matches.view` and `players.view` granted each to every
+  role that granted `account_roles.manage`, which could already grant
+  itself anything. So `matches.score` is off for everyone else until an
+  admin grants it, such as to the default role.
 - `GET /v1/admin/accounts` lists accounts, at most 50, with
   `meta.has_more`. `view` picks `verified` (the default, by email),
   `guests` or `all`. The last two put the account seen longest ago first,

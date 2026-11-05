@@ -973,13 +973,12 @@
           "matches"
         ],
         "summary": "Push Match Board",
-        "description": "Keep the scorer's board, so spectators can follow the match.\n\nAnyone may push one, with or without a session. The newest board wins,\nand nothing about it is checked but its format: its signatures, if any,\nand its scores settle nothing. A board for a match that doesn't exist\nanswers 404 and writes nothing. Every other push is logged, refused or\nnot.",
+        "description": "Keep the scorer's board, so spectators can follow the match.\n\nNeeds `matches.score`. The newest board wins, and nothing about it is\nchecked but its format: its signatures, if any, and its scores settle\nnothing. A board for a match that doesn't exist answers 404 and writes\nnothing. Every other push is logged, refused or not.",
         "operationId": "push_match_board",
         "security": [
           {
             "session": []
-          },
-          {}
+          }
         ],
         "parameters": [
           {
@@ -1010,6 +1009,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BoardResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
                 }
               }
             }
@@ -1063,13 +1082,12 @@
           "matches"
         ],
         "summary": "Create Match Approval",
-        "description": "Record a result that the match's players signed, with its approvals.\n\nIt needs no session: the signatures are the authority, and each one's\naccount must play as or manage the player it signs for. A rated result\ncounts once both sides approve it, and an unrated one once either side\ndoes. A correction of a final match needs both sides. A result for a\nmatch that doesn't exist answers 404 and writes nothing. An exact retry\nanswers the result again, whatever its keys' state. Every other upload\nis logged, refused or not.",
+        "description": "Record a result that the match's players signed, with its approvals.\n\nNeeds `matches.score`, which turns the feature on. The signatures, not\nthe session, are the authority: each one's account must play as or\nmanage the player it signs for, whoever uploads it. A rated result\ncounts once both sides approve it, and an unrated one once either side\ndoes. A correction of a final match needs both sides. A result for a\nmatch that doesn't exist answers 404 and writes nothing. An exact retry\nanswers the result again, whatever its keys' state. Every other upload\nis logged, refused or not.",
         "operationId": "create_match_approval",
         "security": [
           {
             "session": []
-          },
-          {}
+          }
         ],
         "parameters": [
           {
@@ -1100,6 +1118,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApprovalResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
                 }
               }
             }

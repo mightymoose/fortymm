@@ -398,11 +398,10 @@ export interface paths {
          * Push Match Board
          * @description Keep the scorer's board, so spectators can follow the match.
          *
-         *     Anyone may push one, with or without a session. The newest board wins,
-         *     and nothing about it is checked but its format: its signatures, if any,
-         *     and its scores settle nothing. A board for a match that doesn't exist
-         *     answers 404 and writes nothing. Every other push is logged, refused or
-         *     not.
+         *     Needs `matches.score`. The newest board wins, and nothing about it is
+         *     checked but its format: its signatures, if any, and its scores settle
+         *     nothing. A board for a match that doesn't exist answers 404 and writes
+         *     nothing. Every other push is logged, refused or not.
          */
         post: operations["push_match_board"];
         delete?: never;
@@ -424,8 +423,9 @@ export interface paths {
          * Create Match Approval
          * @description Record a result that the match's players signed, with its approvals.
          *
-         *     It needs no session: the signatures are the authority, and each one's
-         *     account must play as or manage the player it signs for. A rated result
+         *     Needs `matches.score`, which turns the feature on. The signatures, not
+         *     the session, are the authority: each one's account must play as or
+         *     manage the player it signs for, whoever uploads it. A rated result
          *     counts once both sides approve it, and an unrated one once either side
          *     does. A correction of a final match needs both sides. A result for a
          *     match that doesn't exist answers 404 and writes nothing. An exact retry
@@ -2177,6 +2177,24 @@ export interface operations {
                     "application/json": components["schemas"]["BoardResponse"];
                 };
             };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
             /** @description No match has this id */
             404: {
                 headers: {
@@ -2237,6 +2255,24 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApprovalResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
                 };
             };
             /** @description No match has this id */

@@ -880,6 +880,7 @@ def test_lists_permissions_by_key_with_the_roles_that_grant_them(
         ("admin.view", True, 2),
         ("matches.create", True, 1),
         ("matches.override", True, 1),
+        ("matches.score", True, 1),
         ("matches.view", True, 1),
         ("players.view", True, 1),
         ("roles.manage", True, 1),

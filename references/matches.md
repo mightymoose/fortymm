@@ -20,7 +20,9 @@ The signed scores are a result. A result counts once the right players
 have approved it with their signatures. A player who disagrees signs
 different scores that replace the result, and the back and forth goes on
 until one result has every approval it needs. Every request that sends a
-match something is logged, so the history shows who sent what.
+match something is logged, so the history shows who sent what. Sending
+boards and results needs the `matches.score` permission, so an admin turns
+scoring on for whom they choose.
 
 ## The pieces
 
@@ -109,7 +111,7 @@ A submission is one request: a board push, a result upload or an
 administrator's override. It records:
 
 - the bytes sent
-- the account of the session, if there was one
+- the account of the session
 - the network the request came from
 - the outcome: `accepted`, or the reason it was refused
 - the result it was about, if it got that far

@@ -286,3 +286,34 @@ def test_the_upgrade_lets_each_role_that_grants_roles_override_results(
         ).all()
 
     assert granted == ["Owners"]
+
+
+def test_the_upgrade_lets_each_role_that_grants_roles_score_matches(
+    throwaway_database_url: str,
+) -> None:
+    with connected(throwaway_database_url) as config:
+        command.upgrade(config, "ecc7bbfa7c64")
+        connection = config.attributes["connection"]
+        connection.execute(
+            text("UPDATE roles SET name = 'Owners' WHERE name = 'Administrator'")
+        )
+        connection.execute(text("INSERT INTO roles (name) VALUES ('Viewer')"))
+        connection.execute(
+            text(
+                "INSERT INTO role_permissions (role_id, permission_key)"
+                " SELECT id, 'admin.view' FROM roles WHERE name = 'Viewer'"
+            )
+        )
+        connection.commit()
+        command.upgrade(config, "head")
+        connection.commit()
+
+        granted = connection.scalars(
+            text(
+                "SELECT roles.name FROM role_permissions"
+                " JOIN roles ON roles.id = role_id"
+                " WHERE permission_key = 'matches.score'"
+            )
+        ).all()
+
+    assert granted == ["Owners"]

@@ -10,7 +10,7 @@ from uuid import UUID
 import pytest
 from fastapi.testclient import TestClient
 from match_setup import add_match
-from sqlalchemy import Engine, insert
+from sqlalchemy import Engine, insert, text
 from sqlalchemy.orm import sessionmaker
 
 from fortymm_api.accounts import PlayerId
@@ -75,19 +75,35 @@ def client(
             accounts.append(account)
         add_match(session, MATCH, MatchDetails.of(RESULT), accounts[0])
     monkeypatch.setenv("DATABASE_URL", throwaway_database_url)
-    with TestClient(create_app(), client=("203.0.113.7", 50000)) as client:
+    # The session cookie is Secure, so the client sends it only over https.
+    with TestClient(
+        create_app(), base_url="https://testserver", client=("203.0.113.7", 50000)
+    ) as client:
         yield client
+
+
+@pytest.fixture
+def scorer(client: TestClient, migrated_database: Engine) -> None:
+    """A guest session that holds `matches.score`, through the default role."""
+    with migrated_database.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO role_permissions (role_id, permission_key)"
+                " SELECT id, 'matches.score' FROM roles WHERE is_default"
+            )
+        )
+    client.post("/v1/session", headers=JSON)
 
 
 def envelope(result: MatchResult = RESULT) -> str:
     return append_signature(sign(result, ISSUED_AT, ANN_KEY, ANN), BOB_KEY, BOB).hex()
 
 
-def test_a_recorded_result_answers_201_without_a_session(client: TestClient) -> None:
+@pytest.mark.usefixtures("scorer")
+def test_a_recorded_result_answers_201(client: TestClient) -> None:
     response = client.post(PATH, headers=JSON, json={"envelope": envelope()})
 
     assert response.status_code == 201
-    assert "set-cookie" not in response.headers
     kids = sorted([ANN_KEY.public_key.kid, BOB_KEY.public_key.kid])
     sides = {ANN_KEY.public_key.kid: (ANN, 0), BOB_KEY.public_key.kid: (BOB, 1)}
     data = response.json()["data"]
@@ -108,6 +124,7 @@ def test_a_recorded_result_answers_201_without_a_session(client: TestClient) -> 
     assert data["accepted_at"] is not None
 
 
+@pytest.mark.usefixtures("scorer")
 def test_a_refused_result_answers_409_in_the_errors_shape(
     client: TestClient,
 ) -> None:
@@ -121,6 +138,7 @@ def test_a_refused_result_answers_409_in_the_errors_shape(
     assert response.json() == {"errors": [{"status": "409", "title": title}]}
 
 
+@pytest.mark.usefixtures("scorer")
 def test_a_refused_result_answers_422_in_the_errors_shape(
     client: TestClient,
 ) -> None:
@@ -134,12 +152,14 @@ def test_a_refused_result_answers_422_in_the_errors_shape(
     }
 
 
+@pytest.mark.usefixtures("scorer")
 def test_a_body_without_json_answers_415(client: TestClient) -> None:
     response = client.post(PATH, content=f'{{"envelope": "{envelope()}"}}')
 
     assert response.status_code == 415
 
 
+@pytest.mark.usefixtures("scorer")
 def test_a_result_for_an_unknown_match_answers_404(client: TestClient) -> None:
     other = MatchId(UUID("6f1c2a52-3c1e-4d51-9b0c-0d6f9f0a1b02"))
     data = envelope(replace(RESULT, match=other))
@@ -152,3 +172,14 @@ def test_a_result_for_an_unknown_match_answers_404(client: TestClient) -> None:
     assert response.json() == {
         "errors": [{"status": "404", "title": "No match has this id"}]
     }
+
+
+def test_a_result_needs_a_session_holding_matches_score(client: TestClient) -> None:
+    body = {"envelope": envelope()}
+
+    signed_out = client.post(PATH, headers=JSON, json=body)
+    client.post("/v1/session", headers=JSON)
+    without = client.post(PATH, headers=JSON, json=body)
+
+    assert signed_out.status_code == 401
+    assert without.status_code == 403

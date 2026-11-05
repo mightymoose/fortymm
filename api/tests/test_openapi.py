@@ -37,15 +37,3 @@ def test_the_logout_body_is_optional_with_no_null_branch() -> None:
     assert body["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/LogoutRequest"
     }
-
-
-def test_a_route_with_an_optional_session_allows_anonymous_access() -> None:
-    """Without the empty requirement, OpenAPI reads the session as required,
-    and oasdiff reports a break for a route that never needed one."""
-    paths: dict[str, Any] = create_app().openapi()["paths"]
-
-    for path in (
-        "/v1/matches/{match_id}/boards",
-        "/v1/matches/{match_id}/approvals",
-    ):
-        assert paths[path]["post"]["security"] == [{"session": []}, {}]

@@ -65,6 +65,19 @@ def creator(client: TestClient, migrated_database: Engine) -> None:
         )
 
 
+@pytest.fixture
+def scorer(client: TestClient, migrated_database: Engine) -> None:
+    """A guest session that holds `matches.score`, through the default role."""
+    with migrated_database.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO role_permissions (role_id, permission_key)"
+                " SELECT id, 'matches.score' FROM roles WHERE is_default"
+            )
+        )
+    client.post("/v1/session", headers=JSON)
+
+
 def create_body(players: list[dict[str, str]], best_of: int = 5) -> dict[str, object]:
     return {
         "id": str(MATCH),
@@ -194,7 +207,8 @@ def board(players: list[dict[str, str]]) -> str:
     return encode_payload(result, datetime(2026, 11, 4, 12, tzinfo=UTC)).hex()
 
 
-def test_a_board_answers_201_without_a_session(
+@pytest.mark.usefixtures("scorer")
+def test_a_board_answers_201_with_matches_score(
     client: TestClient, players: list[dict[str, str]], migrated_database: Engine
 ) -> None:
     make(migrated_database, players)
@@ -208,6 +222,7 @@ def test_a_board_answers_201_without_a_session(
     assert pushed == {"match_id": str(MATCH), "received_at": pushed["received_at"]}
 
 
+@pytest.mark.usefixtures("scorer")
 def test_a_refused_board_answers_in_the_errors_shape(
     client: TestClient, players: list[dict[str, str]], migrated_database: Engine
 ) -> None:
@@ -220,6 +235,7 @@ def test_a_refused_board_answers_in_the_errors_shape(
     assert response.json() == {"errors": [{"status": "422", "title": title}]}
 
 
+@pytest.mark.usefixtures("scorer")
 def test_a_board_with_other_details_answers_409(
     client: TestClient, players: list[dict[str, str]], migrated_database: Engine
 ) -> None:
@@ -234,6 +250,7 @@ def test_a_board_with_other_details_answers_409(
     assert response.json() == {"errors": [{"status": "409", "title": title}]}
 
 
+@pytest.mark.usefixtures("scorer")
 def test_a_board_for_an_unknown_match_answers_404(
     client: TestClient, players: list[dict[str, str]]
 ) -> None:
@@ -245,3 +262,19 @@ def test_a_board_for_an_unknown_match_answers_404(
     assert response.json() == {
         "errors": [{"status": "404", "title": "No match has this id"}]
     }
+
+
+def test_a_board_needs_a_session_holding_matches_score(
+    client: TestClient, players: list[dict[str, str]], migrated_database: Engine
+) -> None:
+    make(migrated_database, players)
+    body = {"board": board(players)}
+
+    signed_out = client.post(f"{PATH}/boards", headers=JSON, json=body)
+    client.post("/v1/session", headers=JSON)
+    without = client.post(f"{PATH}/boards", headers=JSON, json=body)
+
+    assert signed_out.status_code == 401
+    assert without.status_code == 403
+    title = "You don't have permission to do this"
+    assert without.json() == {"errors": [{"status": "403", "title": title}]}

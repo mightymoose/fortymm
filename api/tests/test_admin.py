@@ -192,6 +192,7 @@ def test_lists_the_roles(
                     "admin.view",
                     "matches.create",
                     "matches.override",
+                    "matches.score",
                     "matches.view",
                     "players.view",
                     "roles.manage",

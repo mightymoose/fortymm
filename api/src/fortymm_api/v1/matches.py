@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from fortymm_api.accounts import CurrentAccount, PlayerId
-from fortymm_api.auth import OptionalAccount, RequestAccount, require_permission
+from fortymm_api.auth import RequestAccount, require_permission
 from fortymm_api.database import DatabaseSession
 from fortymm_api.matches import MatchId
 from fortymm_api.permissions import Permission
@@ -40,10 +40,7 @@ from fortymm_api.v1.types import HexBytes
 router = APIRouter(prefix="/matches", tags=["matches"])
 
 MatchCreator = Annotated[CurrentAccount, require_permission(Permission.MATCHES_CREATE)]
-
-# A route that takes OptionalAccount declares the session scheme, which
-# OpenAPI reads as required. The empty requirement adds "or none".
-SESSION_OPTIONAL: dict[str, Any] = {"security": [{}]}
+MatchScorer = Annotated[CurrentAccount, require_permission(Permission.MATCHES_SCORE)]
 
 type RefusalAnswers = dict[Refusal, tuple[int, str]]
 
@@ -105,6 +102,8 @@ DIFFERS = (
 )
 NO_MATCH = errors(404, "No match has this id")
 BOARD_ERRORS: Responses = {
+    **NO_SESSION,
+    **FORBIDDEN,
     **NO_MATCH,
     **errors(409, f"{DIFFERS}. Or the match is final"),
     **UNSUPPORTED_MEDIA_TYPE,
@@ -114,6 +113,8 @@ BOARD_ERRORS: Responses = {
     ),
 }
 APPROVAL_ERRORS: Responses = {
+    **NO_SESSION,
+    **FORBIDDEN,
     **NO_MATCH,
     **errors(
         409,
@@ -178,11 +179,8 @@ class ApprovalResponse(BaseModel):
     data: CheckedResult
 
 
-def sender(request: Request, account: OptionalAccount) -> Sender:
-    return Sender(
-        None if account is None else account.id,
-        client_network(client_address(request)),
-    )
+def sender(request: Request, account: CurrentAccount) -> Sender:
+    return Sender(account.id, client_network(client_address(request)))
 
 
 def approval_models(approvals: tuple[RecordedApproval, ...]) -> list[MatchApproval]:
@@ -323,22 +321,20 @@ def create_match(
     status_code=201,
     response_model=BoardResponse,
     responses=BOARD_ERRORS,
-    openapi_extra=SESSION_OPTIONAL,
 )
 def push_match_board(
     session: DatabaseSession,
     request: Request,
-    account: OptionalAccount,
+    account: MatchScorer,
     match_id: UUID,
     body: BoardRequest,
 ) -> BoardResponse | JSONResponse:
     """Keep the scorer's board, so spectators can follow the match.
 
-    Anyone may push one, with or without a session. The newest board wins,
-    and nothing about it is checked but its format: its signatures, if any,
-    and its scores settle nothing. A board for a match that doesn't exist
-    answers 404 and writes nothing. Every other push is logged, refused or
-    not.
+    Needs `matches.score`. The newest board wins, and nothing about it is
+    checked but its format: its signatures, if any, and its scores settle
+    nothing. A board for a match that doesn't exist answers 404 and writes
+    nothing. Every other push is logged, refused or not.
     """
     pushed = matches.push_board(
         session, MatchId(match_id), body.board, sender(request, account)
@@ -355,19 +351,19 @@ def push_match_board(
     status_code=201,
     response_model=ApprovalResponse,
     responses=APPROVAL_ERRORS,
-    openapi_extra=SESSION_OPTIONAL,
 )
 def create_match_approval(
     session: DatabaseSession,
     request: Request,
-    account: OptionalAccount,
+    account: MatchScorer,
     match_id: UUID,
     body: ApprovalRequest,
 ) -> ApprovalResponse | JSONResponse:
     """Record a result that the match's players signed, with its approvals.
 
-    It needs no session: the signatures are the authority, and each one's
-    account must play as or manage the player it signs for. A rated result
+    Needs `matches.score`, which turns the feature on. The signatures, not
+    the session, are the authority: each one's account must play as or
+    manage the player it signs for, whoever uploads it. A rated result
     counts once both sides approve it, and an unrated one once either side
     does. A correction of a final match needs both sides. A result for a
     match that doesn't exist answers 404 and writes nothing. An exact retry

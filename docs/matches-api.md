@@ -101,8 +101,8 @@ boards, `services/opponents.py` those of picking an opponent,
   route turns a `Refused` into an `errors` response through its own
   table, such as `RESULT_REFUSALS`, and returns it rather than raising.
 - `POST /v1/matches/{match_id}/boards` takes `{"board": "<hex>"}`, the
-  URL fragment's bytes: a draft payload or an envelope. Anyone may push
-  one, with or without a session. Only its format is checked, never its
+  URL fragment's bytes: a draft payload or an envelope. It needs a
+  session holding `matches.score`. Only its format is checked, never its
   signatures, because a board settles nothing. It answers 201 with
   `match_id` and `received_at`. The newest accepted board wins, with no
   version (#227 moved the scores to the fragment). It refuses
@@ -189,8 +189,11 @@ records it (see Approving a result).
 `services/match_results.py`. It kept the URL and the shapes from when it
 only checked, and added fields.
 
-- It needs no session. Anyone who holds the link may send it, so the
-  signatures are the authority. A session's account is only logged.
+- It needs a session holding `matches.score`, which turns scoring on for
+  an account. The signatures, not the session, are the authority: anyone
+  with the permission who holds the link may send it, and the session's
+  account is only logged. The web client shows a 403's title as the
+  refusal, like a 409's.
 - A result is one payload, stored once in `match_results` and found by
   `sha256(payload) = :hash`. Each signature counts once per (result, key,
   side), as a `match_approvals` row.
