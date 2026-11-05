@@ -92,12 +92,17 @@ services:
 
   # A mock OpenID Connect provider that stands in for Auth0 in dev and the
   # tests, because Auth0 doesn't accept a random dev port in a callback URL.
-  # Its sign-in page signs in any `sub` with the claims typed into it, such as
+  # Its sign-in page, oidc/sign-in.html, has a button for each of a few
+  # people, and signs in any `sub` with the claims typed into it, such as
   # {"email": "a@example.com", "email_verified": true}. The issuer is
   # http://oidc:8080/default. It needs 6.1.0 or later, which puts auth_time in
   # the ID token when the request has max_age, as sign-in checks.
   oidc:
     image: ghcr.io/navikt/mock-oauth2-server:6.1.0
+    environment:
+      JSON_CONFIG: '{"interactiveLogin": true, "loginPagePath": "/oidc/sign-in.html"}'
+    volumes:
+      - ./oidc:/oidc:ro
     healthcheck:
       test:
         - CMD

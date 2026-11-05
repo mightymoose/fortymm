@@ -155,9 +155,13 @@ provider, because Auth0 doesn't accept a random dev port in a callback URL.
 Production and the Previews use the real tenant (see Auth0 under Deploy).
 
 - The `oidc` Compose service runs navikt's mock-oauth2-server. Its issuer is
-  `http://oidc:8080/default`. Its sign-in page signs in any `sub` with the
-  claims typed into it, such as `{"email": "ann@example.com",
-  "email_verified": true}`. It has no published port. From 6.1.0, it puts
+  `http://oidc:8080/default`. Its sign-in page is `oidc/sign-in.html`,
+  set by `loginPagePath` in the service's `JSON_CONFIG`. The page has a
+  button for each of a few people, such as the administrator
+  `mightymoose@fortymm.com`. Its form signs in any `sub` with the claims
+  typed into it, such as `{"email": "ann@example.com", "email_verified":
+  true}`. The Playwright suite fills that form by its placeholders, so
+  they stay as the mock's built-in page has them. It has no published port. From 6.1.0, it puts
   `auth_time` in the ID token when the request has `max_age`, as Auth0
   does, so the callback's check works against it.
 - The API reads `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` and `AUTH0_CLIENT_SECRET`.
