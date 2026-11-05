@@ -314,30 +314,22 @@ routes, under `/v1/admin`.
   characters, and unique whatever its case (`unique_role_name`). A role
   that names an unknown permission gets a 422 in the `errors` shape. The
   admin's list of roles gives each its `default` and its
-  `account_count`, the accounts `account_roles` grants it to. The default
-  role's count is 0.
-- Only a verified account holds a role in `account_roles`. A guest's rows
-  there grant nothing.
-- Every account holds the default role, guests too, with no
-  `account_roles` row. The migration makes it as `User`, with no
-  permissions. `roles.is_default` marks it, and the partial unique index
-  `one_default_role` allows at most one. A permission added to it reaches
-  every account at once, so an admin turns a feature on or off for
-  everyone there.
-- The default role grants no permission that administers FortyMM.
-  `REACH` in `permissions.py` says whether each built-in permission is
-  administration or a feature, and a test fails if one has no entry.
-  `matches.create`, `matches.view` and `players.view` are features, and so
-  is every custom permission. An
-  update that gives the default role an administrative permission answers
-  422. Its delete answers 409. Granting it to an account answers 422, and
-  a sign-in skips an email grant of it. It can be renamed.
-- `permissions_of()` in `services/authorization.py` is the one place that
-  says what an account holds: the default role's permissions, and a
-  verified account's roles' permissions.
+  `account_count`, the accounts that hold it.
+- An account holds the roles its `account_roles` rows name, a guest too.
+  `permissions_of()` in `services/authorization.py` gives the permissions
+  those roles grant.
+- A new account gets every default role (`roles.is_default`) as
+  `account_roles` rows, through `grant_default_roles()`. Starting a guest
+  session and a sign-in that creates an account both call it. After that
+  a default role is a role like any other: it can grant any permission,
+  be revoked from an account, granted again or deleted. Taking it off an
+  account or deleting it changes no other account. The migration makes
+  the default role as `User`, with no permissions, and gave it to every
+  account that already existed. The partial unique index
+  `one_default_role` allows at most one. A guest that adoption merges
+  into an account keeps its own rows, and the account keeps its own.
 - `POST /v1/session` returns the account's `permissions`: the sorted keys
-  that `permissions_of()` gives, custom ones included. A guest's are the
-  default role's.
+  that `permissions_of()` gives, custom ones included.
 - A route that needs a permission takes `require_permission()` from
   `auth.py`, such as `Annotated[CurrentAccount,
   require_permission(Permission.ADMIN_VIEW)]`. Without the permission, the
@@ -363,8 +355,16 @@ routes, under `/v1/admin`.
   with `meta.has_more`. `email` filters by a case-insensitive substring.
   `GET /v1/admin/accounts/{account_id}` is the account's page in one
   request: its email, player, `created_at`, `last_seen_at`, and every role
-  but the default by name with `held`. It answers 404 for a guest. `PUT
+  by name with `held`. It answers 404 for a guest. `PUT
   /v1/admin/accounts/{account_id}/roles` sets the exact set of roles.
+- `GET /v1/admin/players` lists the players no merge replaced by display
+  name, at most 50, with `meta.has_more`, each with the account that plays
+  as it and how many accounts manage it. `name` filters by a
+  case-insensitive substring. `GET /v1/admin/players/{player_id}` is a
+  player's page in one request, merged or not: its `created_at`, the player
+  it merged into, how many matches it was named in (a player merged into
+  it's too), the accounts that manage it with `relationship` and
+  `open_question`, and its leagues. `services/player_admin.py` holds both.
 - `GET /v1/admin/signing-keys` and `POST
   /v1/admin/signing-keys/{key_id}/revoke` are the admin's view of the
   signing keys (see Signing keys).

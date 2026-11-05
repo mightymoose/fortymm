@@ -67,22 +67,22 @@ renders again, as a quick double click can.
 
 `mockAdmin()` signs the mock API in as the verified account first in its
 `accounts`, and answers the admin routes from the state it gets, as the
-API does. The session's `permissions` come from that account's roles and
-the default role, so a write can change them. It counts each permission's roles and each
+API does. The session's `permissions` come from that account's roles, so a
+write can change them. It counts each permission's roles and each
 role's accounts. It refuses a taken role name or permission key, a
 built-in permission's delete, any write that leaves no account with
-`account_roles.manage`, a revoke without `signing_keys.revoke` or of an
-unknown key, and a delete, a grant or an administrative permission of the
-default role, with the API's titles. Its `signingKeys` are every account's
+`account_roles.manage`, and a revoke without `signing_keys.revoke` or of an
+unknown key, with the API's titles. Its `signingKeys` are every account's
 keys, guests' too. It answers 415 to a write without a JSON
 `Content-Type`, a bodyless `POST` too. It returns the `state`, which a test changes
 as another tab would, and the `writes` it got. `builtInPermissions`,
 `administrator` and `userRole` are the rows the migrations make. It also answers an
-account's page. `holdAdmin(list)` holds a list's responses, and
+account's page, and from its optional `players`, every player's page and the
+players list, which leaves out merged ones. `holdAdmin(list)` holds a list's responses, and
 `failAdminOnce(list, status)` fails the next one. A `list` of
-`accounts/<id>` names an account's page. The default handlers answer the
+`accounts/<id>` or `players/<id>` names an account's or a player's page. The default handlers answer the
 admin lists with nothing. `AdminPage` renders `/admin`, and
-`AdminPage.renderAccount(id)` an account's page. Only the open tab's panel
+`AdminPage.renderAccount(id)` an account's page, `renderPlayer(id)` a player's. Only the open tab's panel
 shows, so a test opens a tab first.
 
 `ScoreGamePage` renders the scoring page, at `/matches/demo/scores/game/1/edit`

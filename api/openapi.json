@@ -1488,7 +1488,7 @@
           "admin"
         ],
         "summary": "Update Role",
-        "description": "Set the role's name, description and exact set of permissions. Needs\n`roles.manage`.\n\nThe API answers 409 if another role has the name, or if the change\nwould leave no account with `account_roles.manage`. It answers 422 if\nthe default role, which every account holds, would grant a permission\nthat administers FortyMM.",
+        "description": "Set the role's name, description and exact set of permissions. Needs\n`roles.manage`.\n\nThe API answers 409 if another role has the name, or if the change\nwould leave no account with `account_roles.manage`.",
         "operationId": "update_role",
         "security": [
           {
@@ -1569,7 +1569,7 @@
             }
           },
           "422": {
-            "description": "The body is invalid. If a permission key names no permission, or the default role would grant a permission that administers FortyMM, the body is in the `errors` shape instead",
+            "description": "The body is invalid. If a permission key names no permission, the body is in the `errors` shape instead",
             "content": {
               "application/json": {
                 "schema": {
@@ -1595,7 +1595,7 @@
           "admin"
         ],
         "summary": "Delete Role",
-        "description": "Delete the role. Every account that held it loses it. Needs\n`roles.manage`.\n\nThe API answers 409 for the default role, which every account holds, or\nif no account would keep `account_roles.manage`.",
+        "description": "Delete the role. Every account that held it loses it. Needs\n`roles.manage`.\n\nThe API answers 409 if no account would keep `account_roles.manage`.",
         "operationId": "delete_role",
         "security": [
           {
@@ -1659,7 +1659,7 @@
             }
           },
           "409": {
-            "description": "The role is the default role, or the change would leave no account with `account_roles.manage`",
+            "description": "The change would leave no account with `account_roles.manage`, so nobody could grant a role again",
             "content": {
               "application/json": {
                 "schema": {
@@ -1762,7 +1762,7 @@
           "admin"
         ],
         "summary": "Admin Account",
-        "description": "The verified account, with every role but the default and whether it\nholds each, for its admin page. Needs `admin.view`.",
+        "description": "The verified account, with every role and whether it holds each, for\nits admin page. Needs `admin.view`.",
         "operationId": "admin_account",
         "security": [
           {
@@ -1841,7 +1841,7 @@
           "admin"
         ],
         "summary": "Set Account Roles",
-        "description": "Give the account exactly these roles. Needs `account_roles.manage`.\n\nOnly a verified account holds roles, and none is granted the default\nrole, which every account holds. The API answers 409 if no account\nwould keep `account_roles.manage`, such as when the last administrator\nrevokes their own role.",
+        "description": "Give the account exactly these roles. Needs `account_roles.manage`.\n\nThe account must be verified. The API answers 409 if no account would\nkeep `account_roles.manage`, such as when the last administrator revokes\ntheir own role.",
         "operationId": "set_account_roles",
         "security": [
           {
@@ -1932,7 +1932,7 @@
             }
           },
           "422": {
-            "description": "The body is invalid. If it names the default role, which every account holds, the body is in the `errors` shape instead",
+            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
@@ -2081,6 +2081,160 @@
           },
           "404": {
             "description": "No key has this id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/players": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin Players",
+        "description": "List the players by display name, with the account that plays as\neach and how many accounts manage it. Needs `admin.view`. A merged\nplayer isn't listed.\n\n`name` keeps the players whose display name contains it, whatever its\ncase. The list holds at most 50. `meta.has_more` says that more match.",
+        "operationId": "admin_players",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminPlayersResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/players/{player_id}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin Player",
+        "description": "The player, merged or not, for its admin page: the accounts that\nmanage it, its leagues and how many matches it was in. Needs\n`admin.view`.",
+        "operationId": "admin_player",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "player_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Player Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminPlayerDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No player has this id",
             "content": {
               "application/json": {
                 "schema": {
@@ -2490,6 +2644,191 @@
           "data"
         ],
         "title": "AdminPermissionsResponse"
+      },
+      "AdminPlayer": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "account_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Account Id"
+          },
+          "account_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Account Email"
+          },
+          "manager_count": {
+            "type": "integer",
+            "title": "Manager Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "display_name",
+          "account_id",
+          "account_email",
+          "manager_count"
+        ],
+        "title": "AdminPlayer"
+      },
+      "AdminPlayerDetail": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "merged_into": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Merged Into"
+          },
+          "merged_into_display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Merged Into Display Name"
+          },
+          "match_count": {
+            "type": "integer",
+            "title": "Match Count"
+          },
+          "managers": {
+            "items": {
+              "$ref": "#/components/schemas/AdminPlayerManager"
+            },
+            "type": "array",
+            "title": "Managers"
+          },
+          "leagues": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Leagues"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "display_name",
+          "created_at",
+          "merged_into",
+          "merged_into_display_name",
+          "match_count",
+          "managers",
+          "leagues"
+        ],
+        "title": "AdminPlayerDetail"
+      },
+      "AdminPlayerDetailResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AdminPlayerDetail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "AdminPlayerDetailResponse"
+      },
+      "AdminPlayerManager": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Email"
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "self",
+              "managed"
+            ],
+            "title": "Relationship"
+          },
+          "open_question": {
+            "type": "boolean",
+            "title": "Open Question"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "relationship",
+          "open_question"
+        ],
+        "title": "AdminPlayerManager"
+      },
+      "AdminPlayersMeta": {
+        "properties": {
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "type": "object",
+        "required": [
+          "has_more"
+        ],
+        "title": "AdminPlayersMeta"
+      },
+      "AdminPlayersResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/AdminPlayer"
+            },
+            "type": "array",
+            "title": "Data"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/AdminPlayersMeta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "title": "AdminPlayersResponse"
       },
       "AdminRole": {
         "properties": {

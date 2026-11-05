@@ -1,7 +1,7 @@
 """Let administrators view matches and players
 
 Revision ID: 7b3d9e1f2a64
-Revises: c1a5ce3c897f
+Revises: 60404d5df278
 Create Date: 2026-11-05 12:00:00.000000
 
 """
@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "7b3d9e1f2a64"
-down_revision: str | Sequence[str] | None = "c1a5ce3c897f"
+down_revision: str | Sequence[str] | None = "60404d5df278"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

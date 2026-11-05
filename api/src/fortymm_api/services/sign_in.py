@@ -25,6 +25,7 @@ from fortymm_api.models import (
     LoginAttempt,
 )
 from fortymm_api.services.adoption import adopt_guest, hand_over_players
+from fortymm_api.services.authorization import grant_default_roles
 from fortymm_api.services.roles import claim_email_role_grants
 from fortymm_api.services.sessions import (
     ClientAddress,
@@ -337,6 +338,7 @@ def _sign_in(
             created = Account(email=email)
             session.add(created)
             session.flush()
+            grant_default_roles(session, created.id)
             destination = created.id
             new_token = _replace_session(session, current, created.id)
         case AdoptGuest(guest, into):

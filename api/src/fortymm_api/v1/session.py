@@ -25,8 +25,7 @@ class SessionAccount(BaseModel):
     # Null for a guest account.
     email: str | None
     player: SessionPlayer
-    # The keys of the permissions the account's roles grant, sorted. Every
-    # account, a guest too, holds the default role's.
+    # The keys of the permissions the account's roles grant, sorted.
     permissions: list[str]
 
 

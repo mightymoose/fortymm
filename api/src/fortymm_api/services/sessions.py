@@ -26,7 +26,7 @@ from fortymm_api.models import (
     Player,
     PlayerManager,
 )
-from fortymm_api.services.authorization import permissions_of
+from fortymm_api.services.authorization import grant_default_roles, permissions_of
 from fortymm_api.services.display_names import random_display_name
 
 # 400 days, the longest Max-Age browsers keep, so a session expires with its
@@ -194,8 +194,8 @@ def start_session(
     deleted. Its account stays. Raises GuestAccountLimitReached before any
     write when the address's network is at the limit.
 
-    It returns the permissions the account holds, through `permissions_of`.
-    A guest holds only the default role's.
+    A new guest account gets the default roles. It returns the permissions
+    the account holds, through `permissions_of`.
 
     Every account it returns has a self player. A new guest account gets
     one with a name from `new_display_name`. So does a resumed account that
@@ -228,6 +228,7 @@ def start_session(
     guest = Account()
     session.add(guest)
     session.flush()
+    grant_default_roles(session, guest.id)
     row, token = new_session(session, guest.id)
     player = _create_self_player(session, guest.id, new_display_name)
     return StartedSession(

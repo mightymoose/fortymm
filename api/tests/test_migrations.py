@@ -148,7 +148,10 @@ def test_an_account_with_the_first_administrators_email_gets_the_role(
         ).all()
         grants = connection.scalar(text("SELECT count(*) FROM email_role_grants"))
 
-    assert held == [("mightymoose@fortymm.com", "Administrator")]
+    assert sorted(held) == [
+        ("mightymoose@fortymm.com", "Administrator"),
+        ("mightymoose@fortymm.com", "User"),
+    ]
     assert grants == 0
 
 

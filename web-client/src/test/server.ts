@@ -96,6 +96,12 @@ export const server = setupServer(
       meta: { has_more: false },
     }),
   ),
+  http.get(`${API_BASE_URL}/v1/admin/players`, () =>
+    HttpResponse.json<components['schemas']['AdminPlayersResponse']>({
+      data: [],
+      meta: { has_more: false },
+    }),
+  ),
 )
 
 // Records each signing key registration, and answers them with `answers` in
@@ -381,6 +387,7 @@ type AdminPermission = components['schemas']['AdminPermission']
 type AdminRole = components['schemas']['AdminRole']
 type AdminAccount = components['schemas']['AdminAccount']
 type AdminSigningKey = components['schemas']['AdminSigningKey']
+type AdminPlayerDetail = components['schemas']['AdminPlayerDetail']
 // The admin lists the mock API holds. It counts each permission's roles and
 // each role's accounts itself.
 export type AdminState = {
@@ -388,14 +395,19 @@ export type AdminState = {
   roles: Omit<AdminRole, 'account_count'>[]
   accounts: AdminAccount[]
   signingKeys: AdminSigningKey[]
+  // Every player, merged ones too, as its page shows it. The list leaves
+  // out the merged ones, and counts each player's managers itself.
+  players?: AdminPlayerDetail[]
 }
-// A list, or one account's page, such as `accounts/<id>`.
+// A list, or one account's or player's page, such as `accounts/<id>`.
 export type AdminList =
   | 'permissions'
   | 'roles'
   | 'accounts'
   | 'signing-keys'
+  | 'players'
   | `accounts/${string}`
+  | `players/${string}`
 
 // The built-in permissions, the Administrator role and the default role, as
 // the migrations make them.
@@ -426,21 +438,18 @@ export const administrator: AdminState['roles'][number] = {
 export const userRole: AdminState['roles'][number] = {
   id: 'd4e5f6a7-b8c9-4d0e-9f1a-2b3c4d5e6f70',
   name: 'User',
-  description: 'Every account holds this role, guests too.',
+  description: 'Every new account gets this role, guests too.',
   permissions: [],
   default: true,
 }
-// The permissions the API refuses the default role.
-const ADMINISTRATIVE = ['account_roles.manage', 'admin.view', 'roles.manage', 'signing_keys.revoke']
 
 // Signs the mock API in as the verified account `accounts[0]`, and answers
 // the admin routes as the API does, from `state`, an account's page and the
-// signing keys too. The session's permissions come from the account's roles
-// and the default role, so a write can change them. Writes refuse as the API
+// signing keys too. The session's permissions come from the account's roles,
+// so a write can change them. Writes refuse as the API
 // does: a taken name or key, a built-in permission, any change that leaves no
 // account with `account_roles.manage`, a revoke without `signing_keys.revoke`
-// or of an unknown key, and a delete, a grant or an administrative permission
-// of the default role. Returns the state, which a test can change as another tab
+// or of an unknown key. Returns the state, which a test can change as another tab
 // would, and the writes it received.
 export function mockAdmin(initial: AdminState) {
   const state: AdminState = structuredClone(initial)
@@ -449,7 +458,7 @@ export function mockAdmin(initial: AdminState) {
   const grants = (roleIds: readonly string[]) =>
     new Set(
       state.roles
-        .filter((role) => role.default || roleIds.includes(role.id))
+        .filter((role) => roleIds.includes(role.id))
         .flatMap((role) => role.permissions),
     )
   const canGrantRoles = () =>
@@ -519,7 +528,6 @@ export function mockAdmin(initial: AdminState) {
           created_at: '2026-03-14T09:30:00Z',
           last_seen_at: '2026-10-31T18:05:00Z',
           roles: state.roles
-            .filter((role) => !role.default)
             .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
             .map(({ id, name, description }) => ({
               id,
@@ -529,6 +537,31 @@ export function mockAdmin(initial: AdminState) {
             })),
         },
       })
+    }),
+    http.get(`${API_BASE_URL}/v1/admin/players`, ({ request }) => {
+      const name = new URL(request.url).searchParams.get('name')?.trim().toLowerCase() ?? ''
+      const found = (state.players ?? [])
+        .filter((player) => player.merged_into === null)
+        .filter((player) => player.display_name.toLowerCase().includes(name))
+        .sort((a, b) => a.display_name.toLowerCase().localeCompare(b.display_name.toLowerCase()))
+      return HttpResponse.json<components['schemas']['AdminPlayersResponse']>({
+        data: found.slice(0, 50).map((player) => {
+          const self = player.managers.find((manager) => manager.relationship === 'self')
+          return {
+            id: player.id,
+            display_name: player.display_name,
+            account_id: self?.id ?? null,
+            account_email: self?.email ?? null,
+            manager_count: player.managers.length,
+          }
+        }),
+        meta: { has_more: found.length > 50 },
+      })
+    }),
+    http.get<{ id: string }>(`${API_BASE_URL}/v1/admin/players/:id`, ({ params }) => {
+      const player = state.players?.find((found) => found.id === params.id)
+      if (!player) return refuse(404, 'No player has this id')
+      return HttpResponse.json<components['schemas']['AdminPlayerDetailResponse']>({ data: player })
     }),
     // The API answers 415 to a write that isn't JSON, a bodyless DELETE too.
     http.all(`${API_BASE_URL}/v1/admin/*`, async ({ request }) => {
@@ -619,12 +652,6 @@ export function mockAdmin(initial: AdminState) {
         if (index === -1) return refuse(404, 'No role has this id')
         if (nameTaken(draft.name, params.id)) return refuse(409, 'Another role has this name')
         const { default: isDefault } = state.roles[index]
-        if (isDefault && draft.permissions.some((key) => ADMINISTRATIVE.includes(key))) {
-          return refuse(
-            422,
-            'Every account holds the default role, guests too, so it can’t grant a permission that administers FortyMM',
-          )
-        }
         return guarded(
           () => {
             state.roles[index] = {
@@ -641,7 +668,6 @@ export function mockAdmin(initial: AdminState) {
     http.delete<{ id: string }>(`${API_BASE_URL}/v1/admin/roles/:id`, ({ params }) => {
       const target = state.roles.find((role) => role.id === params.id)
       if (!target) return refuse(404, 'No role has this id')
-      if (target.default) return refuse(409, 'Every account holds the default role, so it stays')
       return guarded(
         () => {
           state.roles = state.roles.filter((found) => found.id !== params.id)
@@ -658,9 +684,6 @@ export function mockAdmin(initial: AdminState) {
         const { role_ids } = await request.json()
         const account = state.accounts.find((found) => found.id === params.id)
         if (!account) return refuse(404, 'No verified account has this id')
-        if (state.roles.some((role) => role.default && role_ids.includes(role.id))) {
-          return refuse(422, 'Every account holds the default role, so nobody grants it')
-        }
         return guarded(
           () => {
             account.role_ids = [...role_ids].sort()
