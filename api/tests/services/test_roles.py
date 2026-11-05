@@ -309,6 +309,20 @@ def test_deleting_the_default_role_takes_it_from_every_account(
     assert role_ids(migrated_database, guest(migrated_database)) == []
 
 
+def test_two_new_accounts_get_the_default_roles_at_once(
+    migrated_database: Engine,
+) -> None:
+    def new_guest_without_waiting(session: Session) -> AccountId:
+        session.execute(text("SET LOCAL lock_timeout = '2s'"))
+        return start_session(session, None, ANN).account.id
+
+    with sessionmaker(migrated_database).begin() as holder:
+        start_session(holder, None, ip_address("198.51.100.4"))
+        carl = in_transaction(migrated_database, new_guest_without_waiting)
+
+    assert role_ids(migrated_database, carl) == [user_role(migrated_database)]
+
+
 def test_creates_a_role(migrated_database: Engine) -> None:
     ann = admin(migrated_database)
 

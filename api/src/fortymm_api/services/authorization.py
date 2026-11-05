@@ -41,7 +41,9 @@ def grant_default_roles(session: Session, account: AccountId) -> None:
     and the insert.
     """
     roles = session.scalars(
-        select(Role.id).where(Role.is_default).with_for_update(key_share=True)
+        select(Role.id)
+        .where(Role.is_default)
+        .with_for_update(read=True, key_share=True)
     ).all()
     if roles:
         session.execute(

@@ -334,7 +334,7 @@ def claim_email_role_grants(session: Session, account: AccountId) -> None:
         select(Role.id)
         .join(EmailRoleGrant, EmailRoleGrant.role_id == Role.id)
         .where(EmailRoleGrant.email == email)
-        .with_for_update(of=Role, key_share=True)
+        .with_for_update(of=Role, read=True, key_share=True)
     ).all()
     if roles:
         session.execute(
