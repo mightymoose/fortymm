@@ -362,6 +362,14 @@ routes, under `/v1/admin`.
   request: its email, player, `created_at`, `last_seen_at`, and every role
   by name with `held`. It answers 404 for a guest. `PUT
   /v1/admin/accounts/{account_id}/roles` sets the exact set of roles.
+- `GET /v1/admin/players` lists the players no merge replaced by display
+  name, at most 50, with `meta.has_more`, each with the account that plays
+  as it and how many accounts manage it. `name` filters by a
+  case-insensitive substring. `GET /v1/admin/players/{player_id}` is a
+  player's page in one request, merged or not: its `created_at`, the player
+  it merged into, how many matches it was named in (a player merged into
+  it's too), the accounts that manage it with `relationship` and
+  `open_question`, and its leagues. `services/player_admin.py` holds both.
 - `GET /v1/admin/signing-keys` and `POST
   /v1/admin/signing-keys/{key_id}/revoke` are the admin's view of the
   signing keys (see Signing keys).

@@ -15,6 +15,7 @@ from fortymm_api.identity_provider import IdentityProvider
 from fortymm_api.services.authorization import MissingPermission
 from fortymm_api.services.match_results import IllegalEnding, WrongMatch
 from fortymm_api.services.matches import MergedPlayer, SamePlayer, UnknownPlayer
+from fortymm_api.services.player_admin import PlayerNotFound
 from fortymm_api.services.player_merge import PlayedEachOther
 from fortymm_api.services.players import (
     PlayerNotManaged,
@@ -59,6 +60,7 @@ ROLE_ERRORS: dict[type[Exception], tuple[int, str]] = {
     MissingPermission: (403, "You don't have permission to do this"),
     RoleNotFound: (404, "The role doesn't exist"),
     AccountNotFound: (404, "No verified account has this id"),
+    PlayerNotFound: (404, "No player has this id"),
     PermissionNotFound: (404, "The permission doesn't exist"),
     RoleNameTaken: (409, "Another role has this name"),
     PermissionKeyTaken: (409, "Another permission has this key"),
