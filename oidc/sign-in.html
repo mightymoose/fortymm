@@ -8,6 +8,8 @@
 
   The tests fill the form at the bottom by its placeholders and press
   "Sign-in" (web-client/e2e/pages/SignInPage.ts), so keep those as they are.
+  No other button's text may contain "sign-in", which their locator matches
+  too.
 -->
 <html lang="en">
   <head>
@@ -177,7 +179,7 @@
           />
           <button class="person" type="submit">
             <strong>Sign in with an unverified email</strong>
-            <span>unverified@example.com, which sign-in refuses</span>
+            <span>unverified@example.com, which FortyMM refuses</span>
           </button>
         </form>
       </div>
