@@ -5,7 +5,13 @@ import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { Permission } from '../../api/permissions'
-import { adminAccountQuery, setAccountRoles, type AdminAccountDetail } from '../../api/queries'
+import {
+  adminAccountQuery,
+  isVerified,
+  setAccountRoles,
+  type AdminAccountDetail,
+  type Verified,
+} from '../../api/queries'
 import { Button } from '../../components/Button'
 import { EmptyState } from '../../components/EmptyState'
 import { Icon } from '../../components/Icon'
@@ -19,9 +25,9 @@ const accountRolesSchema = z.object({ roleIds: z.array(z.string()) })
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' })
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 
-// One verified account's admin page, for accounts with `admin.view`: who it
-// is, and which roles it holds. With `account_roles.manage`, the visitor
-// sets its roles here.
+// One account's admin page, for accounts with `admin.view`: who it is, and
+// which roles it holds. With `account_roles.manage`, the visitor sets a
+// verified account's roles here.
 export function AccountAdmin() {
   const { accountId } = useParams({ from: '/_authenticated/_shell/admin/accounts/$accountId' })
   return (
@@ -62,19 +68,30 @@ function Account({ id }: { id: string }) {
       <>
         <h1>No such account</h1>
         <EmptyState title="This account isn’t here">
-          No verified account has this address. It may have been a guest, or the link may be
-          wrong. Find the account on the Accounts tab.
+          No account has this address. A guest that signed in to another account joined that
+          one, or the link may be wrong. Find the account on the Accounts tab.
         </EmptyState>
       </>
     )
   }
   return (
     <>
-      <h1 className="admin-title">{account.email}</h1>
+      {isVerified(account) ? (
+        <h1 className="admin-title">{account.email}</h1>
+      ) : (
+        <h1 className="admin-title admin-check__key">
+          {account.display_name ?? 'No player yet'}
+          <span className="fm-tag">Guest</span>
+        </h1>
+      )}
       <dl className="fm-dl admin-facts">
         <div>
           <dt>Player</dt>
           <dd>{account.display_name ?? 'None yet'}</dd>
+        </div>
+        <div>
+          <dt>Matches</dt>
+          <dd>{account.match_count}</dd>
         </div>
         <div>
           <dt>Joined</dt>
@@ -116,12 +133,18 @@ function AccountRoles({ account }: { account: AdminAccountDetail }) {
             <span>There are no roles yet. Add one on the Roles tab.</span>
           </p>
         </div>
-      ) : manage ? (
+      ) : manage && isVerified(account) ? (
         // Keyed by what it holds, so the form starts again from the saved
         // roles when another tab changes them.
         <RolesForm key={held.map((role) => role.id).join()} account={account} />
       ) : (
         <div className="fm-card__body">
+          {manage && (
+            <p className="fm-notice">
+              <Icon name="info" />
+              <span>A guest’s roles change once it signs in.</span>
+            </p>
+          )}
           {held.length === 0 ? (
             <p className="meta">Holds no role.</p>
           ) : (
@@ -141,7 +164,7 @@ function AccountRoles({ account }: { account: AdminAccountDetail }) {
 }
 
 // Sets which roles the account holds.
-function RolesForm({ account }: { account: AdminAccountDetail }) {
+function RolesForm({ account }: { account: Verified<AdminAccountDetail> }) {
   const showToast = useToast()
   const [failure, setFailure] = useState<unknown>(null)
   const save = useAdminWrite(setAccountRoles)

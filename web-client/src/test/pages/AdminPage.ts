@@ -122,7 +122,7 @@ export class AdminPage {
   // The text field in `container` whose label starts with `label`, such as
   // "Description" for "Description (optional)".
   field(container: HTMLElement, label: string): HTMLElement {
-    const search = label === 'Email' || label === 'Account'
+    const search = label === 'Account'
     return within(container).getByRole(search ? 'searchbox' : 'textbox', {
       name: new RegExp(`^${escape(label)}`),
     })
@@ -145,10 +145,22 @@ export class AdminPage {
     await this.user.click(within(dialog).getByRole('button', { name }))
   }
 
-  // Searches the accounts by email.
-  async search(email: string): Promise<void> {
-    await this.type(this.panel, 'Email', email)
+  // Searches the accounts by email or player name.
+  async search(text: string): Promise<void> {
+    const field = within(this.panel).getByRole('searchbox')
+    await this.user.clear(field)
+    if (text) await this.user.type(field, text)
     await this.click('Search')
+  }
+
+  // The Accounts tab: shows the accounts of a view, such as "Guests".
+  async show(view: string): Promise<void> {
+    await this.user.click(within(this.panel).getByRole('radio', { name: view }))
+  }
+
+  // The Accounts tab's view that is on.
+  get shownView(): string | null {
+    return within(this.panel).queryByRole('radio', { checked: true })?.textContent ?? null
   }
 
   // Searches the players by name.
