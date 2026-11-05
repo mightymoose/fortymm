@@ -1,0 +1,211 @@
+<!doctype html>
+<!--
+  The mock provider's sign-in page in dev and the tests, in place of its
+  built-in one (see the `oidc` service in compose.yaml). Each form posts
+  `username` (the `sub`) and `claims` (JSON) back to the URL it came from,
+  as the built-in page does. The mock reads this file as it is, with no
+  templating.
+
+  The tests fill the form at the bottom by its placeholders and press
+  "Sign-in" (web-client/e2e/pages/SignInPage.ts), so keep those as they are.
+  No other button's text may contain "sign-in", which their locator matches
+  too.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mock sign-in</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f7f7f5;
+        --card: #ffffff;
+        --text: #1c1c1a;
+        --muted: #63635e;
+        --line: #d9d9d4;
+        --accent: #1f6f5c;
+        --accent-text: #ffffff;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #161615;
+          --card: #20201e;
+          --text: #ececea;
+          --muted: #a3a39d;
+          --line: #3a3a37;
+          --accent: #4fb89c;
+          --accent-text: #0d1f1a;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 32px 16px;
+        background: var(--bg);
+        color: var(--text);
+        font: 16px/1.5 system-ui, sans-serif;
+      }
+      main {
+        max-width: 480px;
+        margin: 0 auto;
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 24px;
+      }
+      h2 {
+        margin: 32px 0 8px;
+        font-size: 16px;
+      }
+      p {
+        margin: 0 0 16px;
+        color: var(--muted);
+      }
+      .people {
+        display: grid;
+        gap: 8px;
+      }
+      .people form {
+        margin: 0;
+      }
+      .person {
+        display: block;
+        width: 100%;
+        padding: 12px 16px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--card);
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+      .person:hover,
+      .person:focus-visible {
+        border-color: var(--accent);
+        outline: none;
+      }
+      .person strong {
+        display: block;
+      }
+      .person span {
+        color: var(--muted);
+        font-size: 14px;
+      }
+      label {
+        display: block;
+        margin-bottom: 12px;
+        font-weight: 600;
+        font-size: 14px;
+      }
+      input[type='text'],
+      textarea {
+        display: block;
+        width: 100%;
+        margin-top: 4px;
+        padding: 8px 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--card);
+        color: inherit;
+        font: 14px/1.5 ui-monospace, monospace;
+      }
+      textarea {
+        resize: vertical;
+      }
+      input[type='submit'] {
+        padding: 8px 20px;
+        border: 0;
+        border-radius: 8px;
+        background: var(--accent);
+        color: var(--accent-text);
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Mock sign-in</h1>
+      <p>Dev only. Pick someone to sign in as, or type your own below.</p>
+
+      <div class="people">
+        <form method="post">
+          <input type="hidden" name="username" value="dev|mightymoose" />
+          <input
+            type="hidden"
+            name="claims"
+            value='{"email": "mightymoose@fortymm.com", "email_verified": true}'
+          />
+          <button class="person" type="submit">
+            <strong>Sign in as the administrator</strong>
+            <span>mightymoose@fortymm.com</span>
+          </button>
+        </form>
+        <form method="post">
+          <input type="hidden" name="username" value="dev|ann" />
+          <input
+            type="hidden"
+            name="claims"
+            value='{"email": "ann@example.com", "email_verified": true}'
+          />
+          <button class="person" type="submit">
+            <strong>Sign in as Ann</strong>
+            <span>ann@example.com, a player</span>
+          </button>
+        </form>
+        <form method="post">
+          <input type="hidden" name="username" value="dev|ben" />
+          <input
+            type="hidden"
+            name="claims"
+            value='{"email": "ben@example.com", "email_verified": true}'
+          />
+          <button class="person" type="submit">
+            <strong>Sign in as Ben</strong>
+            <span>ben@example.com, a player</span>
+          </button>
+        </form>
+        <form method="post">
+          <input type="hidden" name="username" value="dev|unverified" />
+          <input
+            type="hidden"
+            name="claims"
+            value='{"email": "unverified@example.com", "email_verified": false}'
+          />
+          <button class="person" type="submit">
+            <strong>Sign in with an unverified email</strong>
+            <span>unverified@example.com, which FortyMM refuses</span>
+          </button>
+        </form>
+      </div>
+
+      <h2>Someone else</h2>
+      <form method="post">
+        <label>
+          Subject
+          <input
+            type="text"
+            name="username"
+            required
+            autocomplete="off"
+            placeholder="Enter any user/subject"
+          />
+        </label>
+        <label>
+          Claims
+          <textarea
+            name="claims"
+            rows="4"
+            placeholder='Optional claims JSON value, example: {"email": "a@example.com", "email_verified": true}'
+          ></textarea>
+        </label>
+        <input type="submit" value="Sign-in" />
+      </form>
+    </main>
+  </body>
+</html>

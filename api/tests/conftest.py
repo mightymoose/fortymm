@@ -56,7 +56,8 @@ def migrated_database(throwaway_database_url: str) -> Iterator[Engine]:
 @pytest.fixture
 def players_have_activity(monkeypatch: pytest.MonkeyPatch) -> None:
     """Treat every player as one that has played, so a sign-in asks "Is this
-    you?" about it. No table records play yet."""
+    you?" about it, without a match for each player. A test of what counts
+    as having played makes the matches (`services/test_player_matches.py`)."""
     monkeypatch.setattr(
         "fortymm_api.services.adoption.has_activity", lambda session, player: True
     )

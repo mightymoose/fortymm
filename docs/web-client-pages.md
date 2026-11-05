@@ -109,7 +109,8 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   question and the action bar, and an error that also links to Home. A
   guest goes to `/` before it asks for players. It asks "Is this you?"
   about one open question at a time. Under the question, a match preview
-  shows "No matches yet". The games work adds the player's matches there.
+  shows how many matches the player is in, or "No matches yet". The games
+  work adds the player's matches there.
   "Yes, this is me" answers `yes`. A player whose `played_against` names
   the account's `self` player gets no "Yes, this is me", and the page says
   that it played that player. "Someone else played" asks "Do you

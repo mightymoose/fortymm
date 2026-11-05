@@ -5,6 +5,7 @@ from ipaddress import ip_address
 
 import pytest
 from locks import wait_behind
+from match_setup import add_match, add_player
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -17,8 +18,10 @@ from fortymm_api.accounts import (
     VerifiedAccount,
 )
 from fortymm_api.identity_provider import LEEWAY_SECONDS, ExchangeFailed, IdToken
+from fortymm_api.matches import MatchId
 from fortymm_api.ownership import OWNERSHIP_RULES, OwnershipRule
 from fortymm_api.permissions import Permission
+from fortymm_api.services.matches import MatchDetails
 from fortymm_api.services.players import account_players
 from fortymm_api.services.sessions import (
     GUEST_ACCOUNT_LIMIT,
@@ -124,6 +127,18 @@ def identity(
 
 def new_guest(database: Engine) -> StartedSession:
     return in_transaction(database, lambda session: start_session(session, None, ANN))
+
+
+def played_a_match(database: Engine, player: PlayerId) -> None:
+    """A match between `player` and a new opponent, with no result. A match
+    is what makes a player one that has played."""
+
+    def setup(session: Session) -> None:
+        opponent = add_player(session)
+        details = MatchDetails(3, False, (player, opponent))
+        add_match(session, MatchId(uuid.uuid4()), details)
+
+    in_transaction(database, setup)
 
 
 def guest_token(database: Engine) -> str:
@@ -255,11 +270,11 @@ def test_verify_in_place_keeps_the_guests_player(
     assert count(migrated_database, "SELECT count(*) FROM players") == 1
 
 
-@pytest.mark.usefixtures("players_have_activity")
 def test_verify_in_place_asks_is_this_you_about_a_player_that_has_played(
     migrated_database: Engine,
 ) -> None:
     guest = new_guest(migrated_database)
+    played_a_match(migrated_database, guest.player.id)
 
     sign_in(migrated_database, guest.token, identity("a|1", "ann@example.com"))
 
@@ -467,12 +482,12 @@ def test_adoption_into_an_account_with_no_player_makes_the_guests_player_its_own
     assert resume(migrated_database, new_token).player == guest.player
 
 
-@pytest.mark.usefixtures("players_have_activity")
 def test_adoption_asks_is_this_you_about_a_player_that_has_played(
     migrated_database: Engine,
 ) -> None:
     _, bob = bob_signed_in(migrated_database)
     guest = new_guest(migrated_database)
+    played_a_match(migrated_database, guest.player.id)
 
     sign_in(migrated_database, guest.token, BOB)
 

@@ -47,17 +47,22 @@ class IdentityProvider:
         client_id: str,
         client_secret: str,
         authorize_url: str | None = None,
+        end_session_url: str | None = None,
     ) -> None:
         """`domain` is Auth0's, such as `fortymm.us.auth0.com`, or a base URL
         with a scheme, such as the mock's `http://oidc:8080/default`.
 
         `authorize_url` replaces the discovered authorization endpoint, for a
         browser that can't reach the provider at the API's address.
+
+        `end_session_url` replaces Auth0's `/v2/logout` with an OpenID Connect
+        end-session endpoint, such as the mock's, which has no `/v2/logout`.
         """
         self.base_url = (domain if "://" in domain else f"https://{domain}").rstrip("/")
         self.client_id = client_id
         self.client_secret = client_secret
         self.authorize_url_override = authorize_url
+        self.end_session_url = end_session_url
 
     @cached_property
     def _discovery(self) -> dict[str, Any]:
@@ -165,6 +170,11 @@ class IdentityProvider:
 
     def logout_url(self, return_to: str) -> str:
         """Auth0's logout page, which ends Auth0's own session too."""
+        if self.end_session_url:
+            params = urlencode(
+                {"client_id": self.client_id, "post_logout_redirect_uri": return_to}
+            )
+            return f"{self.end_session_url}?{params}"
         params = urlencode({"client_id": self.client_id, "returnTo": return_to})
         return f"{self.base_url}/v2/logout?{params}"
 

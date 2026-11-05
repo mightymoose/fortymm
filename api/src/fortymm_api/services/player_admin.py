@@ -17,10 +17,10 @@ from fortymm_api.models import (
     Account,
     League,
     LeagueMember,
-    MatchSidePlayer,
     Player,
     PlayerManager,
 )
+from fortymm_api.services.player_matches import played_matches
 
 PLAYER_PAGE_SIZE = 50
 
@@ -138,11 +138,7 @@ def get_player(session: Session, player: PlayerId) -> PlayerDetail:
         raise PlayerNotFound
     display_name, created_at, survivor_id, survivor_name = row
 
-    match_count = session.scalar(
-        select(func.count(func.distinct(MatchSidePlayer.match_id)))
-        .join(Player, Player.id == MatchSidePlayer.player_id)
-        .where((Player.id == player) | (Player.merged_into == player))
-    )
+    match_count = played_matches(session, [player])[player].count
     managers = session.execute(
         select(
             PlayerManager.account_id,
@@ -170,7 +166,7 @@ def get_player(session: Session, player: PlayerId) -> PlayerDetail:
         display_name,
         created_at,
         Survivor(survivor_id, survivor_name) if survivor_id else None,
-        match_count or 0,
+        match_count,
         tuple(
             Manager(account, email, _relationship(relationship), open_question)
             for account, email, relationship, open_question in managers
