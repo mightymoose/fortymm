@@ -245,6 +245,8 @@ export type AdminRole = components['schemas']['AdminRole']
 export type AdminAccount = components['schemas']['AdminAccount']
 export type AdminAccountDetail = components['schemas']['AdminAccountDetail']
 export type AdminSigningKey = components['schemas']['AdminSigningKey']
+export type AdminPlayer = components['schemas']['AdminPlayer']
+export type AdminPlayerDetail = components['schemas']['AdminPlayerDetail']
 export type RoleDraft = components['schemas']['RoleRequest']
 export type PermissionDraft = components['schemas']['NewPermissionRequest']
 
@@ -305,6 +307,47 @@ export function adminAccountQuery(api: ApiClient, id: string) {
           'GET /v1/admin/accounts/{account_id}',
           api.GET('/v1/admin/accounts/{account_id}', {
             params: { path: { account_id: id } },
+            signal,
+          }),
+        )
+        return data.data
+      } catch (error) {
+        if (error instanceof ApiError && (error.status === 404 || error.status === 422)) return null
+        throw error
+      }
+    },
+  })
+}
+
+// The first 50 players whose display name contains `name`, and whether more
+// match. A merged player isn't listed.
+export function adminPlayersQuery(api: ApiClient, name: string) {
+  return queryOptions({
+    queryKey: [...ADMIN_KEY, 'players', name],
+    queryFn: async ({ signal }) => {
+      const data = await send(
+        'GET /v1/admin/players',
+        api.GET('/v1/admin/players', {
+          params: { query: name ? { name } : {} },
+          signal,
+        }),
+      )
+      return { players: data.data, hasMore: data.meta.has_more }
+    },
+  })
+}
+
+// One player for its admin page, merged or not, with its managers and
+// leagues. Null if no player has the id.
+export function adminPlayerQuery(api: ApiClient, id: string) {
+  return queryOptions({
+    queryKey: [...ADMIN_KEY, 'players', 'detail', id],
+    queryFn: async ({ signal }): Promise<AdminPlayerDetail | null> => {
+      try {
+        const data = await send(
+          'GET /v1/admin/players/{player_id}',
+          api.GET('/v1/admin/players/{player_id}', {
+            params: { path: { player_id: id } },
             signal,
           }),
         )

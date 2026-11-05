@@ -2101,6 +2101,160 @@
           }
         }
       }
+    },
+    "/v1/admin/players": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin Players",
+        "description": "List the players by display name, with the account that plays as\neach and how many accounts manage it. Needs `admin.view`. A merged\nplayer isn't listed.\n\n`name` keeps the players whose display name contains it, whatever its\ncase. The list holds at most 50. `meta.has_more` says that more match.",
+        "operationId": "admin_players",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminPlayersResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/players/{player_id}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin Player",
+        "description": "The player, merged or not, for its admin page: the accounts that\nmanage it, its leagues and how many matches it was in. Needs\n`admin.view`.",
+        "operationId": "admin_player",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "player_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Player Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminPlayerDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No player has this id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2490,6 +2644,191 @@
           "data"
         ],
         "title": "AdminPermissionsResponse"
+      },
+      "AdminPlayer": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "account_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Account Id"
+          },
+          "account_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Account Email"
+          },
+          "manager_count": {
+            "type": "integer",
+            "title": "Manager Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "display_name",
+          "account_id",
+          "account_email",
+          "manager_count"
+        ],
+        "title": "AdminPlayer"
+      },
+      "AdminPlayerDetail": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "merged_into": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Merged Into"
+          },
+          "merged_into_display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Merged Into Display Name"
+          },
+          "match_count": {
+            "type": "integer",
+            "title": "Match Count"
+          },
+          "managers": {
+            "items": {
+              "$ref": "#/components/schemas/AdminPlayerManager"
+            },
+            "type": "array",
+            "title": "Managers"
+          },
+          "leagues": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Leagues"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "display_name",
+          "created_at",
+          "merged_into",
+          "merged_into_display_name",
+          "match_count",
+          "managers",
+          "leagues"
+        ],
+        "title": "AdminPlayerDetail"
+      },
+      "AdminPlayerDetailResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AdminPlayerDetail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "AdminPlayerDetailResponse"
+      },
+      "AdminPlayerManager": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Email"
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "self",
+              "managed"
+            ],
+            "title": "Relationship"
+          },
+          "open_question": {
+            "type": "boolean",
+            "title": "Open Question"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "relationship",
+          "open_question"
+        ],
+        "title": "AdminPlayerManager"
+      },
+      "AdminPlayersMeta": {
+        "properties": {
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "type": "object",
+        "required": [
+          "has_more"
+        ],
+        "title": "AdminPlayersMeta"
+      },
+      "AdminPlayersResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/AdminPlayer"
+            },
+            "type": "array",
+            "title": "Data"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/AdminPlayersMeta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "title": "AdminPlayersResponse"
       },
       "AdminRole": {
         "properties": {
