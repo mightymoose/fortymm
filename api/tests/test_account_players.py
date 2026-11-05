@@ -7,9 +7,8 @@ from collections.abc import Iterator
 import httpx2 as httpx
 import pytest
 from fastapi.testclient import TestClient
-from played_matches import played
+from match_setup import in_transaction, played
 from sqlalchemy import Engine, text
-from sqlalchemy.orm import sessionmaker
 
 from fortymm_api.accounts import PlayerId
 from fortymm_api.main import create_app
@@ -202,8 +201,12 @@ def test_answers_409_for_a_merge_of_two_players_who_played_each_other(
                 ),
                 {"ant": ant},
             )
-    with sessionmaker(migrated_database).begin() as session:
-        played(session, (PlayerId(uuid.UUID(ant)), PlayerId(uuid.UUID(player["id"]))))
+    in_transaction(
+        migrated_database,
+        lambda session: played(
+            session, (PlayerId(uuid.UUID(ant)), PlayerId(uuid.UUID(player["id"])))
+        ),
+    )
 
     listed = client.get("/v1/account/players").json()["data"]
     response = answer(
