@@ -3,7 +3,7 @@ database, so a test names exactly who plays as whom."""
 
 import uuid
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import Engine, insert, select, update
 from sqlalchemy.orm import Session, sessionmaker
@@ -19,8 +19,12 @@ from fortymm_api.models import (
     MatchSidePlayer,
     Player,
     PlayerManager,
+    StoredMatchResult,
 )
 from fortymm_api.services.matches import MatchDetails
+from fortymm_api.signed_results import MatchResult, encode_payload
+
+ISSUED_AT = datetime(2026, 11, 1, 18, tzinfo=UTC)
 
 
 def in_transaction[T](database: Engine, work: Callable[[Session], T]) -> T:
@@ -28,12 +32,12 @@ def in_transaction[T](database: Engine, work: Callable[[Session], T]) -> T:
         return work(session)
 
 
-def add_player(session: Session) -> PlayerId:
+def add_player(session: Session, name: str = "player") -> PlayerId:
     """A player that no account manages, as a record made for an opponent
-    is."""
+    is. Its display name starts with `name`."""
     return session.scalars(
         insert(Player)
-        .values(display_name=f"player {uuid.uuid4().hex[:12]}")
+        .values(display_name=f"{name} {uuid.uuid4().hex[:12]}")
         .returning(Player.id)
     ).one()
 
@@ -87,3 +91,20 @@ def add_match(
 def merge(session: Session, player: PlayerId, into: PlayerId) -> None:
     """Point `player` at `into`, as a merge does, without the merge's rules."""
     session.execute(update(Player).where(Player.id == player).values(merged_into=into))
+
+
+def add_result(session: Session, result: MatchResult) -> None:
+    """The result, accepted as its match's current result. Unsigned, because
+    only the payload is stored."""
+    stored = session.scalars(
+        insert(StoredMatchResult)
+        .values(
+            match_id=result.match,
+            payload=encode_payload(result, ISSUED_AT),
+            accepted_at=ISSUED_AT,
+        )
+        .returning(StoredMatchResult.id)
+    ).one()
+    session.execute(
+        update(Match).where(Match.id == result.match).values(current_result_id=stored)
+    )

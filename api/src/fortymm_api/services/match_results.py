@@ -90,6 +90,22 @@ def check_ending(result: MatchResult) -> None:
                 raise IllegalEnding
 
 
+def games_won(result: MatchResult) -> tuple[int, int]:
+    """The games each side won, players[0]'s first, in a result that
+    check_ending() accepted. A retired match's unfinished last game counts
+    for nobody."""
+    wins = [0, 0]
+    for number, points in enumerate(result.games, 1):
+        if (
+            isinstance(result.ending, Retired)
+            and number == len(result.games)
+            and _unfinished(points)
+        ):
+            continue
+        wins[_final_winner(points)] += 1
+    return wins[0], wins[1]
+
+
 def _final_winner(points: GamePoints) -> Side:
     """The side that won a game with this final score: at least 11 points,
     with at most 9 for the loser at 11, or else exactly 2 ahead after

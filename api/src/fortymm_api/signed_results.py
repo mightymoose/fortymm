@@ -326,7 +326,7 @@ def decode_envelope(envelope: bytes) -> UnverifiedEnvelope:
         raise Malformed("the body unprotected header isn't an empty map")
     if not isinstance(payload, bytes):
         raise Malformed("the payload isn't a byte string")
-    result, issued_at = _decode_payload(payload)
+    result, issued_at = decode_payload(payload)
     cose_signatures = _array(signatures)
     if not cose_signatures:
         raise Malformed("no signatures")
@@ -392,7 +392,9 @@ def _loads_deterministic(data: bytes) -> object:
     return value
 
 
-def _decode_payload(payload: bytes) -> tuple[MatchResult, datetime]:
+def decode_payload(payload: bytes) -> tuple[MatchResult, datetime]:
+    """The result and issue time in a payload that encode_payload() made,
+    such as a stored result's. Raises Malformed as decode_envelope() does."""
     claims = _exact_keys(_loads_deterministic(payload), required={_IAT, DOMAIN_TAG})
     iat = _uint(claims[_IAT])
     if iat > _MAX_IAT:
