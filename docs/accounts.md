@@ -155,9 +155,13 @@ provider, because Auth0 doesn't accept a random dev port in a callback URL.
 Production and the Previews use the real tenant (see Auth0 under Deploy).
 
 - The `oidc` Compose service runs navikt's mock-oauth2-server. Its issuer is
-  `http://oidc:8080/default`. Its sign-in page signs in any `sub` with the
-  claims typed into it, such as `{"email": "ann@example.com",
-  "email_verified": true}`. It has no published port. From 6.1.0, it puts
+  `http://oidc:8080/default`. Its sign-in page is `oidc/sign-in.html`,
+  set by `loginPagePath` in the service's `JSON_CONFIG`. The page has a
+  button for each of a few people, such as the administrator
+  `mightymoose@fortymm.com`. Its form signs in any `sub` with the claims
+  typed into it, such as `{"email": "ann@example.com", "email_verified":
+  true}`. The Playwright suite fills that form by its placeholders, so
+  they stay as the mock's built-in page has them. It has no published port. From 6.1.0, it puts
   `auth_time` in the ID token when the request has `max_age`, as Auth0
   does, so the callback's check works against it.
 - The API reads `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` and `AUTH0_CLIENT_SECRET`.
@@ -173,7 +177,8 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
 - The browser can't resolve `oidc`. So in Compose, `AUTH0_AUTHORIZE_URL` is
   `/oidc/default/authorize`, and the web-client dev server proxies `/oidc/*`
   to the mock. The API still reaches the mock at `http://oidc:8080`. The
-  tests unset `AUTH0_AUTHORIZE_URL` and post the mock's form directly.
+  tests unset `AUTH0_AUTHORIZE_URL` and `AUTH0_LOGOUT_URL`, and post the
+  mock's form directly.
 - `GET /v1/auth/login?return_to=...` (`v1/auth.py`) stores a
   `login_attempts` row for 10 minutes and answers 302 to the provider.
   Every sign-in, with no session, a guest or a verified account, and from
@@ -275,10 +280,11 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   returns Auth0's `/v2/logout` URL as `data.logout_url`. Its `returnTo` is
   the origin's `/signed-out`, a public page that starts no session. `/`
   would start a new guest account at once, so the sign-out wouldn't show.
-  In dev, that URL
-  is the mock's `http://oidc:8080/default/v2/logout`. The browser can't
-  reach it, and the mock answers 405 there. So a dev sign-out ends on an
-  error page. Open `/signed-out` to see the page.
+  The mock has no `/v2/logout`. So in Compose, `AUTH0_LOGOUT_URL` is the
+  mock's OpenID Connect end-session endpoint, `/oidc/default/endsession`,
+  through the dev server's proxy. With it set, the URL passes
+  `post_logout_redirect_uri` in place of `returnTo`, and the mock sends the
+  browser on to `/signed-out`.
 - The iOS app signs in through three routes of its own, because its sign-in
   sheet (`ASWebAuthenticationSession`) is a browser with none of the app's
   cookies. `POST /v1/auth/app-login` runs `begin_sign_in()` and returns the

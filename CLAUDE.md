@@ -79,6 +79,8 @@ suite against the deployment. `docs/ci.md` describes each step, and
   `e2e/`. `worker/` is the Cloudflare Worker that serves it.
 - `ios-client/`: the SwiftUI app. It builds on the macOS host with Xcode,
   not in the dev container.
+- `oidc/`: the dev and test sign-in page of the mock OpenID Connect
+  provider.
 - `references/`: material the app is built against, not built or deployed.
   `references/design-system/` is the design system (v2.1), and the app
   matches it. `references/matches.md` explains how a match is recorded.
