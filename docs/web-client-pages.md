@@ -155,10 +155,8 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   `lazy` there, so a tab loads its lists when it opens. Each tab's list has
   its own `QueryBoundary` with a table skeleton. `roles.manage` shows the
   controls that add, edit and delete roles and permissions. A built-in
-  permission has no Delete. The default role shows a Default tag,
-  Everyone for its accounts and no Delete, and its form offers only the
-  permissions that don't administer FortyMM (`administrative` in
-  `src/api/permissions.ts`). An account's page doesn't list it. The
+  permission has no Delete. The default role shows a Default tag, and
+  otherwise works like any other role. The
   accounts tab searches by email, says when
   it shows only the first 50, and links each email to the account's page.
   The players tab (`PlayersSection`) does the same for players by name,

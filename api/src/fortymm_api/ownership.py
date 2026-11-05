@@ -18,6 +18,7 @@ class OwnershipRule(StrEnum):
     STAYS_ON_PLAYER_MERGE = "stays_on_player_merge"
     SET_BY_PLAYER_MERGE = "set_by_player_merge"
     GUEST_HAS_NONE = "guest_has_none"
+    STAYS_ON_ADOPTED_GUEST = "stays_on_adopted_guest"
     # Who did something to a match. Adoption leaves it naming the guest,
     # whose row stays with adopted_into set.
     KEPT_AS_RECORD = "kept_as_record"
@@ -31,8 +32,10 @@ OWNERSHIP_RULES: dict[tuple[str, str], OwnershipRule] = {
     ("signing_keys", "account_id"): OwnershipRule.MOVES_ON_ADOPT,
     ("signing_keys", "revoked_by"): OwnershipRule.MOVES_ON_ADOPT,
     ("identities", "account_id"): OwnershipRule.GUEST_HAS_NONE,
-    # Only a verified account holds a role, so only one grants a role.
-    ("account_roles", "account_id"): OwnershipRule.GUEST_HAS_NONE,
+    # A guest holds the roles it got as a new account. They stay on it when
+    # it's adopted, and `into` keeps its own.
+    ("account_roles", "account_id"): OwnershipRule.STAYS_ON_ADOPTED_GUEST,
+    # Only a verified account grants a role.
     ("account_roles", "granted_by"): OwnershipRule.GUEST_HAS_NONE,
     ("league_members", "player_id"): OwnershipRule.STAYS_ON_PLAYER_MERGE,
     ("players", "merged_into"): OwnershipRule.SET_BY_PLAYER_MERGE,

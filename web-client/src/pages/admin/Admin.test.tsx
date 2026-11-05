@@ -140,10 +140,10 @@ describe('the admin page', () => {
     expect(page.title).toBeNull()
   })
 
-  it('gives every account the default role’s permissions', async () => {
+  it('gives an account the permissions of the default role it holds', async () => {
     admin({
       roles: [administrator, { ...userRole, permissions: ['matches.create'] }],
-      accounts: [{ ...ann, role_ids: [] }, { ...ben, role_ids: [administrator.id] }],
+      accounts: [{ ...ann, role_ids: [userRole.id] }, { ...ben, role_ids: [administrator.id] }],
     })
     const home = await HomePage.render()
     expect(home.newMatchLink).toBeInTheDocument()
@@ -196,13 +196,12 @@ describe('roles', () => {
         '1',
         'EditDelete…',
       ],
-      ['UserDefaultEvery account holds this role, guests too.', 'None', 'Everyone', 'Edit'],
+      ['UserDefaultEvery new account gets this role, guests too.', 'None', '0', 'EditDelete…'],
       ['ViewerSees the admin page.', 'admin.view', '0', 'EditDelete…'],
     ])
-    expect(page.button('Delete User')).toBeNull()
   })
 
-  it('offers the default role only the permissions that don’t administer FortyMM', async () => {
+  it('offers the default role every permission', async () => {
     const api = admin()
     const page = await AdminPage.render()
     await page.click('Edit User')
@@ -211,7 +210,7 @@ describe('roles', () => {
       within(sheet)
         .getAllByRole('checkbox')
         .map((box) => box.getAttribute('value')),
-    ).toEqual(['matches.create', 'games.record'])
+    ).toEqual([...builtInPermissions.map((permission) => permission.key), 'games.record'])
 
     await page.toggle(sheet, 'games.record')
     await page.press(sheet, 'Save role')
@@ -223,43 +222,12 @@ describe('roles', () => {
         path: `/v1/admin/roles/${userRole.id}`,
         body: {
           name: 'User',
-          description: 'Every account holds this role, guests too.',
+          description: 'Every new account gets this role, guests too.',
           permissions: ['games.record'],
         },
       },
     ])
     expect(await page.findRow('User')).toHaveTextContent('games.record')
-  })
-
-  it('shows the API’s refusal of an administrative permission on the default role', async () => {
-    admin()
-    const page = await AdminPage.render()
-    await page.click('Edit User')
-    const sheet = page.dialog('Edit User')!
-    await page.toggle(sheet, 'games.record')
-    server.use(
-      http.put(`${API_BASE_URL}/v1/admin/roles/:id`, () =>
-        HttpResponse.json(
-          {
-            errors: [
-              {
-                status: '422',
-                title:
-                  'Every account holds the default role, guests too, so it can’t grant a permission that administers FortyMM',
-              },
-            ],
-          },
-          { status: 422 },
-        ),
-      ),
-    )
-    await page.press(sheet, 'Save role')
-
-    await waitFor(() =>
-      expect(sheet).toHaveTextContent(
-        'Every account holds the default role, guests too, so it can’t grant a permission that administers FortyMM',
-      ),
-    )
   })
 
   it('checks a new role before it sends it, then creates it', async () => {
@@ -340,7 +308,7 @@ describe('roles', () => {
     expect(api.writes).toEqual([{ method: 'DELETE', path: `/v1/admin/roles/${viewer.id}`, body: null }])
     expect(page.rows.map(([name]) => name)).toEqual([
       'AdministratorEverything on the admin page.',
-      'UserDefaultEvery account holds this role, guests too.',
+      'UserDefaultEvery new account gets this role, guests too.',
     ])
   })
 
@@ -739,16 +707,23 @@ describe('an account’s page', () => {
     expect(document.body).toHaveTextContent('Last seen')
   })
 
-  it('doesn’t offer the default role, which every account holds', async () => {
-    admin()
+  it('offers the default role like any other', async () => {
+    const api = admin()
     const page = await AdminPage.renderAccount(ben.id)
     await page.findHeading('ben@example.com')
     expect(
       within(page.rolesCard)
         .getAllByRole('checkbox')
         .map((box) => box.getAttribute('value')),
-    ).toEqual([administrator.id, viewer.id])
-    expect(page.rolesCard).not.toHaveTextContent('User')
+    ).toEqual([administrator.id, userRole.id, viewer.id])
+
+    await page.toggle(page.rolesCard, 'User')
+    await page.press(page.rolesCard, 'Save roles')
+
+    expect(await page.findToast('Roles saved for ben@example.com')).toBeInTheDocument()
+    expect(api.writes).toEqual([
+      { method: 'PUT', path: `/v1/admin/accounts/${ben.id}/roles`, body: { role_ids: [userRole.id] } },
+    ])
   })
 
   it('sets the roles the account holds', async () => {

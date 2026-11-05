@@ -63,11 +63,6 @@ INVALID_ROLE = invalid(
     "The body is invalid. If a permission key names no permission, the body is"
     " in the `errors` shape instead"
 )
-INVALID_ROLE_UPDATE = invalid(
-    "The body is invalid. If a permission key names no permission, or the"
-    " default role would grant a permission that administers FortyMM, the body"
-    " is in the `errors` shape instead"
-)
 NO_ACCOUNT = errors(404, "No verified account has this id")
 NO_KEY = errors(404, "No key has this id")
 LAST_ADMINISTRATOR = errors(
@@ -119,10 +114,9 @@ class AdminRole(BaseModel):
     description: str
     # The keys of the permissions it grants, sorted.
     permissions: list[str]
-    # How many accounts were granted it. The default role's is 0, because
-    # every account holds it with no grant.
+    # How many accounts hold it.
     account_count: int
-    # Every account holds it, guests too.
+    # A new account gets it, a guest too.
     default: bool
 
 
@@ -364,7 +358,7 @@ def create_role(
     responses={
         **WRITE_ERRORS,
         **NO_ROLE,
-        **INVALID_ROLE_UPDATE,
+        **INVALID_ROLE,
         **errors(
             409,
             "Another role has this name, or the change would leave no account"
@@ -379,9 +373,7 @@ def update_role(
     `roles.manage`.
 
     The API answers 409 if another role has the name, or if the change
-    would leave no account with `account_roles.manage`. It answers 422 if
-    the default role, which every account holds, would grant a permission
-    that administers FortyMM.
+    would leave no account with `account_roles.manage`.
     """
     role = roles.update_role(session, account.id, RoleId(role_id), body.draft())
     return AdminRoleResponse(data=role_model(role))
@@ -390,22 +382,13 @@ def update_role(
 @router.delete(
     "/roles/{role_id}",
     status_code=204,
-    responses={
-        **WRITE_ERRORS,
-        **NO_ROLE,
-        **errors(
-            409,
-            "The role is the default role, or the change would leave no account"
-            " with `account_roles.manage`",
-        ),
-    },
+    responses={**WRITE_ERRORS, **NO_ROLE, **LAST_ADMINISTRATOR},
 )
 def delete_role(session: DatabaseSession, account: RoleManager, role_id: UUID) -> None:
     """Delete the role. Every account that held it loses it. Needs
     `roles.manage`.
 
-    The API answers 409 for the default role, which every account holds, or
-    if no account would keep `account_roles.manage`.
+    The API answers 409 if no account would keep `account_roles.manage`.
     """
     roles.delete_role(session, account.id, RoleId(role_id))
 
@@ -431,8 +414,8 @@ def admin_accounts(
 def admin_account(
     session: DatabaseSession, account: AdminViewer, account_id: UUID
 ) -> AdminAccountDetailResponse:
-    """The verified account, with every role but the default and whether it
-    holds each, for its admin page. Needs `admin.view`."""
+    """The verified account, with every role and whether it holds each, for
+    its admin page. Needs `admin.view`."""
     found = roles.get_account(session, AccountId(account_id))
     return AdminAccountDetailResponse(
         data=AdminAccountDetail(
@@ -460,10 +443,6 @@ def admin_account(
         **WRITE_ERRORS,
         **errors(404, "No verified account has this id, or a role doesn't exist"),
         **LAST_ADMINISTRATOR,
-        **invalid(
-            "The body is invalid. If it names the default role, which every"
-            " account holds, the body is in the `errors` shape instead"
-        ),
     },
 )
 def set_account_roles(
@@ -474,10 +453,9 @@ def set_account_roles(
 ) -> AdminAccountResponse:
     """Give the account exactly these roles. Needs `account_roles.manage`.
 
-    Only a verified account holds roles, and none is granted the default
-    role, which every account holds. The API answers 409 if no account
-    would keep `account_roles.manage`, such as when the last administrator
-    revokes their own role.
+    The account must be verified. The API answers 409 if no account would
+    keep `account_roles.manage`, such as when the last administrator revokes
+    their own role.
     """
     updated = roles.set_account_roles(
         session,
