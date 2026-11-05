@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
-import type { AdminPlayerDetail, AdminSigningKey } from '../../api/queries'
+import type { AdminAccount, AdminPlayerDetail, AdminSigningKey } from '../../api/queries'
 import { AdminPage, type AdminTab } from '../../test/pages/AdminPage'
 import { HomePage } from '../../test/pages/HomePage'
 import {
@@ -26,18 +26,34 @@ const viewer = {
 }
 const ann = {
   id: '0b9e3c1e-58f4-4c84-9a59-2d0b6f3f6a10',
+  kind: 'verified',
   email: 'ann@example.com',
   display_name: 'excited egret 387',
+  created_at: '2026-03-14T09:30:00Z',
+  last_seen_at: '2026-10-31T18:05:00Z',
+  match_count: 4,
   role_ids: [administrator.id],
-}
+} satisfies AdminAccount
 const ben = {
   id: '6f5e4d3c-2b1a-4098-8f7e-6d5c4b3a2918',
+  kind: 'verified',
   email: 'ben@example.com',
   display_name: 'brave badger 214',
+  created_at: '2026-04-01T10:00:00Z',
+  last_seen_at: '2026-09-12T08:00:00Z',
+  match_count: 0,
   role_ids: [],
-}
+} satisfies AdminAccount
 const gamesRecord = { key: 'games.record', description: 'Record a match.', built_in: false }
 const guest = { id: '9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a', email: null, display_name: 'curious crane 512' }
+const guestAccount = {
+  ...guest,
+  kind: 'guest',
+  created_at: '2026-05-20T15:00:00Z',
+  last_seen_at: '2026-05-20T15:30:00Z',
+  match_count: 2,
+  role_ids: [userRole.id],
+} satisfies AdminAccount
 
 function signingKey(
   digit: string,
@@ -396,6 +412,25 @@ describe('permissions', () => {
 })
 
 describe('accounts', () => {
+  it('shows the verified accounts first, each with its player, roles, matches and dates', async () => {
+    admin({ accounts: [ann, ben, guestAccount] })
+    const page = await AdminPage.render()
+    await page.openTab('Accounts')
+    await page.findRow('ann@example.com')
+    expect(page.shownView).toBe('Verified')
+    expect(within(page.panel).getAllByRole('columnheader').map((cell) => cell.textContent)).toEqual([
+      'Account',
+      'Roles',
+      'Matches',
+      'Last seen',
+      'Joined',
+    ])
+    expect(page.rows.map(([account, roles, matches]) => [account, roles, matches])).toEqual([
+      ['ann@example.comexcited egret 387', 'Administrator', '4'],
+      ['ben@example.combrave badger 214', 'None', '0'],
+    ])
+  })
+
   it('links each account to its own page', async () => {
     admin()
     const page = await AdminPage.render()
@@ -406,27 +441,100 @@ describe('accounts', () => {
     expect(await page.findHeading('ben@example.com')).toBeInTheDocument()
   })
 
+  it('shows the guests, each tagged and linked by its player’s name', async () => {
+    admin({ accounts: [ann, ben, guestAccount] })
+    const page = await AdminPage.render()
+    await page.openTab('Accounts')
+    await page.findRow('ann@example.com')
+    await page.show('Guests')
+    await page.findRow('curious crane 512')
+    expect(page.rows.map(([account]) => account)).toEqual(['curious crane 512Guest'])
+    await page.follow('curious crane 512')
+    expect(page.href).toBe(`/admin/accounts/${guest.id}`)
+  })
+
+  it('shows both kinds under All', async () => {
+    admin({ accounts: [ann, guestAccount] })
+    const page = await AdminPage.render()
+    await page.openTab('Accounts')
+    await page.findRow('ann@example.com')
+    await page.show('All')
+    await page.findRow('curious crane 512')
+    expect(page.rows.map(([account]) => account)).toEqual([
+      'ann@example.comexcited egret 387',
+      'curious crane 512Guest',
+    ])
+  })
+
   it('finds accounts by email', async () => {
     admin()
     const page = await AdminPage.render()
     await page.openTab('Accounts')
     await page.findRow('ann@example.com')
     await page.search('BEN')
-    await waitFor(() => expect(page.rows.map(([email]) => email)).toEqual(['ben@example.com']))
+    await waitFor(() =>
+      expect(page.rows.map(([account]) => account)).toEqual(['ben@example.combrave badger 214']),
+    )
   })
 
-  it('says when it shows only the first 50', async () => {
-    const many = Array.from({ length: 51 }, (_, index) => ({
-      id: crypto.randomUUID(),
-      email: `player${index}@example.com`,
-      display_name: `player ${index}`,
-      role_ids: [],
-    }))
-    admin({ accounts: [ann, ...many] })
+  it('finds accounts by player name, and keeps the search when the view changes', async () => {
+    admin({ accounts: [ann, ben, guestAccount] })
     const page = await AdminPage.render()
     await page.openTab('Accounts')
     await page.findRow('ann@example.com')
-    expect(page.panel).toHaveTextContent('Showing the first 50.')
+    await page.search('CRANE')
+    await waitFor(() => expect(page.panel).toHaveTextContent('No accounts match'))
+    await page.show('Guests')
+    expect(await page.findRow('curious crane 512')).toBeInTheDocument()
+    expect(page.rows).toHaveLength(1)
+  })
+
+  it.each([
+    { view: 'Verified', text: 'No verified account’s email or player name contains “zebra”.' },
+    { view: 'Guests', text: 'No guest’s player name contains “zebra”.' },
+    { view: 'All', text: 'No account’s email or player name contains “zebra”.' },
+  ])('says when no account matches under $view', async ({ view, text }) => {
+    admin({ accounts: [ann, guestAccount] })
+    const page = await AdminPage.render()
+    await page.openTab('Accounts')
+    await page.findRow('ann@example.com')
+    await page.show(view)
+    await page.search('zebra')
+    await waitFor(() => expect(page.panel).toHaveTextContent(text))
+  })
+
+  it('says when there are no guests yet', async () => {
+    admin()
+    const page = await AdminPage.render()
+    await page.openTab('Accounts')
+    await page.findRow('ann@example.com')
+    await page.show('Guests')
+    await waitFor(() => expect(page.panel).toHaveTextContent('No guests'))
+  })
+
+  it.each([
+    { view: 'Verified', text: 'Showing the first 50.' },
+    { view: 'Guests', text: 'Showing the 50 seen longest ago.' },
+    { view: 'All', text: 'Showing the 50 seen longest ago.' },
+  ])('says when it shows only 50 under $view', async ({ view, text }) => {
+    const many = Array.from({ length: 51 }, (_, index) => ({
+      ...ben,
+      id: crypto.randomUUID(),
+      email: `player${index}@example.com`,
+      display_name: `player ${index}`,
+    }))
+    const guests = many.map((account) => ({
+      ...account,
+      id: crypto.randomUUID(),
+      kind: 'guest' as const,
+      email: null,
+    }))
+    admin({ accounts: [ann, ...many, ...guests] })
+    const page = await AdminPage.render()
+    await page.openTab('Accounts')
+    await page.findRow('ann@example.com')
+    await page.show(view)
+    await waitFor(() => expect(page.panel).toHaveTextContent(text))
   })
 })
 
@@ -703,8 +811,20 @@ describe('an account’s page', () => {
     const page = await AdminPage.renderAccount(ben.id)
     await page.findHeading('ben@example.com')
     expect(document.body).toHaveTextContent('Playerbrave badger 214')
+    expect(document.body).toHaveTextContent('Matches0')
     expect(document.body).toHaveTextContent('Joined')
     expect(document.body).toHaveTextContent('Last seen')
+  })
+
+  it('shows a guest’s roles, with no way to change them', async () => {
+    const api = admin({ accounts: [ann, ben, guestAccount] })
+    const page = await AdminPage.renderAccount(guest.id)
+    await page.findHeading('curious crane 512Guest')
+    expect(document.body).toHaveTextContent('Matches2')
+    expect(page.rolesCard).toHaveTextContent('A guest’s roles change once it signs in.')
+    expect(page.rolesCard).toHaveTextContent('User')
+    expect(within(page.rolesCard).queryByRole('checkbox')).toBeNull()
+    expect(api.writes).toEqual([])
   })
 
   it('offers the default role like any other', async () => {
@@ -799,10 +919,11 @@ describe('an account’s page', () => {
     expect(await page.findRow('Administrator')).toBeInTheDocument()
   })
 
-  it('says when no verified account has the id', async () => {
+  it('says when no account has the id', async () => {
     admin()
     const page = await AdminPage.renderAccount(crypto.randomUUID())
     expect(await page.findHeading('No such account')).toBeInTheDocument()
+    expect(document.body).toHaveTextContent('No account has this address.')
   })
 
   it('shows a skeleton while the account loads', async () => {

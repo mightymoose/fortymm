@@ -15,3 +15,7 @@ POST /v1/account/players/{player_id}/answer request property `player_id` list-of
 # sends one, and the web client sends no body.
 POST /v1/auth/logout the request's body `type` changed from `any` to `object`
 POST /v1/auth/logout removed `#/components/schemas/LogoutRequest, subschema #2` from the request body `anyOf` list
+# guests on the admin Accounts page
+GET /v1/admin/accounts the response property `data/items/email` became nullable for the status `200`
+GET /v1/admin/accounts/{account_id} the response property `data/email` became nullable for the status `200`
+PUT /v1/admin/accounts/{account_id}/roles the response property `data/email` became nullable for the status `200`

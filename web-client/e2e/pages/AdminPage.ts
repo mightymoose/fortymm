@@ -31,7 +31,7 @@ export class AdminPage {
   // database keeps every account that earlier runs signed in.
   async openAccount(email: string): Promise<void> {
     await this.page.getByRole('tab', { name: 'Accounts' }).click()
-    await this.panel.getByRole('searchbox', { name: 'Email' }).fill(email)
+    await this.panel.getByRole('searchbox', { name: 'Email or player name' }).fill(email)
     await this.panel.getByRole('button', { name: 'Search' }).click()
     await this.panel.getByRole('link', { name: email }).click()
   }

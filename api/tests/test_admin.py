@@ -322,24 +322,72 @@ def test_an_unknown_role_is_not_found(
     }
 
 
+def guest_with_player(database: Engine, display_name: str) -> str:
+    with database.begin() as connection:
+        account = connection.scalar(
+            text("INSERT INTO accounts DEFAULT VALUES RETURNING id")
+        )
+        connection.execute(
+            text(
+                "WITH player AS ("
+                " INSERT INTO players (display_name) VALUES (:name) RETURNING id)"
+                " INSERT INTO player_managers (player_id, account_id, relationship)"
+                " SELECT id, :account, 'self' FROM player"
+            ),
+            {"name": display_name, "account": account},
+        )
+    return str(account)
+
+
+def without_dates(account: dict[str, Any]) -> dict[str, Any]:
+    assert {"created_at", "last_seen_at"} <= account.keys()
+    return {
+        key: value
+        for key, value in account.items()
+        if key not in {"created_at", "last_seen_at"}
+    }
+
+
 def test_lists_the_accounts(
     client: TestClient, admin: dict[str, Any], migrated_database: Engine
 ) -> None:
-    response = client.get("/v1/admin/accounts", params={"email": "ANN"})
+    response = client.get("/v1/admin/accounts", params={"search": "ANN"})
 
-    assert response.json() == {
-        "data": [
-            {
-                "id": admin["id"],
-                "email": "ann@example.com",
-                "display_name": admin["player"]["display_name"],
-                "role_ids": sorted(
-                    [administrator(migrated_database), user_role(migrated_database)]
-                ),
-            }
-        ],
-        "meta": {"has_more": False},
-    }
+    body = response.json()
+    assert [without_dates(account) for account in body["data"]] == [
+        {
+            "id": admin["id"],
+            "kind": "verified",
+            "email": "ann@example.com",
+            "display_name": admin["player"]["display_name"],
+            "match_count": 0,
+            "role_ids": sorted(
+                [administrator(migrated_database), user_role(migrated_database)]
+            ),
+        }
+    ]
+    assert body["meta"] == {"has_more": False}
+
+
+def test_lists_the_guests(
+    client: TestClient, admin: dict[str, Any], migrated_database: Engine
+) -> None:
+    guest = guest_with_player(migrated_database, "curious crane 512")
+
+    response = client.get(
+        "/v1/admin/accounts", params={"view": "guests", "search": "CRANE"}
+    )
+
+    assert [without_dates(account) for account in response.json()["data"]] == [
+        {
+            "id": guest,
+            "kind": "guest",
+            "email": None,
+            "display_name": "curious crane 512",
+            "match_count": 0,
+            "role_ids": [],
+        }
+    ]
 
 
 def test_gets_an_account(
@@ -349,13 +397,45 @@ def test_gets_an_account(
 
     assert response.status_code == 200
     data = response.json()["data"]
+    assert data["kind"] == "verified"
     assert data["email"] == "ann@example.com"
     assert data["display_name"] == admin["player"]["display_name"]
+    assert data["match_count"] == 0
     assert {"created_at", "last_seen_at"} <= data.keys()
     assert [(role["id"], role["name"], role["held"]) for role in data["roles"]] == [
         (administrator(migrated_database), "Administrator", True),
         (user_role(migrated_database), "User", True),
     ]
+
+
+def test_gets_a_guest_account(
+    client: TestClient, admin: dict[str, Any], migrated_database: Engine
+) -> None:
+    guest = guest_with_player(migrated_database, "curious crane 512")
+
+    response = client.get(f"/v1/admin/accounts/{guest}")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert (data["kind"], data["email"]) == ("guest", None)
+
+
+def test_an_adopted_account_is_not_found(
+    client: TestClient, admin: dict[str, Any], migrated_database: Engine
+) -> None:
+    guest = guest_with_player(migrated_database, "curious crane 512")
+    with migrated_database.begin() as connection:
+        connection.execute(
+            text("UPDATE accounts SET adopted_into = :admin WHERE id = :guest"),
+            {"admin": admin["id"], "guest": guest},
+        )
+
+    response = client.get(f"/v1/admin/accounts/{guest}")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "errors": [{"status": "404", "title": "No account has this id"}]
+    }
 
 
 def test_lists_the_players(client: TestClient, admin: dict[str, Any]) -> None:

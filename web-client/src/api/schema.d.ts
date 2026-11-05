@@ -531,11 +531,13 @@ export interface paths {
         };
         /**
          * Admin Accounts
-         * @description List the verified accounts by email, with the roles each holds. Needs
-         *     `admin.view`.
+         * @description List the accounts, with the roles each holds. Needs `admin.view`. An
+         *     adopted account isn't listed.
          *
-         *     `email` keeps the accounts whose email contains it, whatever its case.
-         *     The list holds at most 50. `meta.has_more` says that more match.
+         *     `view` picks the verified accounts, by email, the guests, or both, the
+         *     longest unseen first. `search` keeps the accounts whose email or player
+         *     name contains it, whatever its case. The list holds at most 50.
+         *     `meta.has_more` says that more match.
          */
         get: operations["admin_accounts"];
         put?: never;
@@ -555,8 +557,8 @@ export interface paths {
         };
         /**
          * Admin Account
-         * @description The verified account, with every role and whether it holds each, for
-         *     its admin page. Needs `admin.view`.
+         * @description The account, a guest's too, with every role and whether it holds
+         *     each, for its admin page. Needs `admin.view`.
          */
         get: operations["admin_account"];
         put?: never;
@@ -747,6 +749,12 @@ export interface components {
              */
             revoked_at: string | null;
         };
+        /**
+         * AccountView
+         * @description Which accounts the admin's list shows, and in what order.
+         * @enum {string}
+         */
+        AccountView: "verified" | "guests" | "all";
         /** AdminAccount */
         AdminAccount: {
             /**
@@ -754,22 +762,13 @@ export interface components {
              * Format: uuid
              */
             id: string;
-            /** Email */
-            email: string;
-            /** Display Name */
-            display_name: string | null;
-            /** Role Ids */
-            role_ids: string[];
-        };
-        /** AdminAccountDetail */
-        AdminAccountDetail: {
             /**
-             * Id
-             * Format: uuid
+             * Kind
+             * @enum {string}
              */
-            id: string;
+            kind: "guest" | "verified";
             /** Email */
-            email: string;
+            email: string | null;
             /** Display Name */
             display_name: string | null;
             /**
@@ -782,6 +781,39 @@ export interface components {
              * Format: date-time
              */
             last_seen_at: string;
+            /** Match Count */
+            match_count: number;
+            /** Role Ids */
+            role_ids: string[];
+        };
+        /** AdminAccountDetail */
+        AdminAccountDetail: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "guest" | "verified";
+            /** Email */
+            email: string | null;
+            /** Display Name */
+            display_name: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Last Seen At
+             * Format: date-time
+             */
+            last_seen_at: string;
+            /** Match Count */
+            match_count: number;
             /** Roles */
             roles: components["schemas"]["AdminAccountRole"][];
         };
@@ -2558,7 +2590,8 @@ export interface operations {
     admin_accounts: {
         parameters: {
             query?: {
-                email?: string | null;
+                view?: components["schemas"]["AccountView"];
+                search?: string;
             };
             header?: never;
             path?: never;
@@ -2642,7 +2675,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorsResponse"];
                 };
             };
-            /** @description No verified account has this id */
+            /** @description No account has this id */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -2704,7 +2737,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorsResponse"];
                 };
             };
-            /** @description No verified account has this id, or a role doesn't exist */
+            /** @description No account has this id, it's a guest's, or a role doesn't exist */
             404: {
                 headers: {
                     [name: string]: unknown;

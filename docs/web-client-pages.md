@@ -168,8 +168,14 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   controls that add, edit and delete roles and permissions. A built-in
   permission has no Delete. The default role shows a Default tag, and
   otherwise works like any other role. The
-  accounts tab searches by email, says when
-  it shows only the first 50, and links each email to the account's page.
+  accounts tab (`AccountsSection`) has a `SegmentedControl` of Verified,
+  Guests and All, from its `VIEWS` record, which also holds each view's
+  copy. Verified, the default, is by email. Guests and All put the account
+  seen longest ago first. Its search finds an email or a player name, and
+  stays when the view changes. Each row has the account (a verified one's
+  email over its player, or a guest's player with a Guest tag, either
+  linked to the account's page), its roles, matches, last visit and join
+  date. It says when it shows only 50.
   The players tab (`PlayersSection`) does the same for players by name,
   each with the account that plays as it (linked, "Guest" or None) and how
   many accounts manage it.
@@ -183,10 +189,12 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   account's admin page. A breadcrumb links back to Administration and to
   `/admin?tab=accounts`. The account loads in its own `QueryBoundary`,
   from `GET /v1/admin/accounts/{account_id}`. A 404, or a 422 for an id
-  that isn't a UUID, shows "No such account". It shows the account's
-  email, player, join date and last visit, then a Roles card.
-  `account_roles.manage` makes the card a form of every role's checkbox
-  with Save roles. Without it, the card lists the roles the account holds.
+  that isn't a UUID, shows "No such account", as an adopted account does.
+  It shows the account's email, or a guest's player with a Guest tag, its
+  player, matches, join date and last visit, then a Roles card.
+  `account_roles.manage` makes a verified account's card a form of every
+  role's checkbox with Save roles. Otherwise the card lists the roles the
+  account holds, and for a guest says they change once it signs in.
   Add the account's other admin tools to this page.
 - `_shell/admin/players/$playerId.tsx`: the page `PlayerAdmin`, one
   player's admin page, built like an account's. Its breadcrumb goes to

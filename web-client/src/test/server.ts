@@ -443,14 +443,14 @@ export const userRole: AdminState['roles'][number] = {
   default: true,
 }
 
-// Signs the mock API in as the verified account `accounts[0]`, and answers
-// the admin routes as the API does, from `state`, an account's page and the
-// signing keys too. The session's permissions come from the account's roles,
-// so a write can change them. Writes refuse as the API
-// does: a taken name or key, a built-in permission, any change that leaves no
-// account with `account_roles.manage`, a revoke without `signing_keys.revoke`
-// or of an unknown key. Returns the state, which a test can change as another tab
-// would, and the writes it received.
+// Signs the mock API in as the verified account `accounts[0]`, and answers the
+// admin routes as the API does, from `state`, an account's page and the signing
+// keys too. The accounts list keeps the state's order in every view. The
+// session's permissions come from the account's roles, so a write can change
+// them. Writes refuse as the API does: a taken name or key, a built-in
+// permission, any change that leaves no account with `account_roles.manage`, a
+// revoke without `signing_keys.revoke` or of an unknown key. Returns the state,
+// which a test can change as another tab would, and the writes it received.
 export function mockAdmin(initial: AdminState) {
   const state: AdminState = structuredClone(initial)
   const writes: { method: string; path: string; body: unknown }[] = []
@@ -510,8 +510,14 @@ export function mockAdmin(initial: AdminState) {
       }),
     ),
     http.get(`${API_BASE_URL}/v1/admin/accounts`, ({ request }) => {
-      const email = new URL(request.url).searchParams.get('email')?.toLowerCase() ?? ''
-      const found = state.accounts.filter((account) => account.email.includes(email))
+      const params = new URL(request.url).searchParams
+      const view = params.get('view') ?? 'verified'
+      const search = params.get('search')?.trim().toLowerCase() ?? ''
+      const found = state.accounts
+        .filter((account) => view === 'all' || (view === 'guests') === (account.kind === 'guest'))
+        .filter(({ email, display_name }) =>
+          [email, display_name].some((text) => text?.toLowerCase().includes(search)),
+        )
       return HttpResponse.json<components['schemas']['AdminAccountsResponse']>({
         data: found.slice(0, 50),
         meta: { has_more: found.length > 50 },
@@ -519,21 +525,18 @@ export function mockAdmin(initial: AdminState) {
     }),
     http.get<{ id: string }>(`${API_BASE_URL}/v1/admin/accounts/:id`, ({ params }) => {
       const account = state.accounts.find((found) => found.id === params.id)
-      if (!account) return refuse(404, 'No verified account has this id')
+      if (!account) return refuse(404, 'No account has this id')
+      const { role_ids, ...fields } = account
       return HttpResponse.json<components['schemas']['AdminAccountDetailResponse']>({
         data: {
-          id: account.id,
-          email: account.email,
-          display_name: account.display_name,
-          created_at: '2026-03-14T09:30:00Z',
-          last_seen_at: '2026-10-31T18:05:00Z',
+          ...fields,
           roles: state.roles
             .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
             .map(({ id, name, description }) => ({
               id,
               name,
               description,
-              held: account.role_ids.includes(id),
+              held: role_ids.includes(id),
             })),
         },
       })
@@ -683,7 +686,8 @@ export function mockAdmin(initial: AdminState) {
       async ({ params, request }) => {
         const { role_ids } = await request.json()
         const account = state.accounts.find((found) => found.id === params.id)
-        if (!account) return refuse(404, 'No verified account has this id')
+        if (!account) return refuse(404, 'No account has this id')
+        if (account.kind === 'guest') return refuse(404, 'No verified account has this id')
         return guarded(
           () => {
             account.role_ids = [...role_ids].sort()

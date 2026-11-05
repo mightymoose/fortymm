@@ -1687,7 +1687,7 @@
           "admin"
         ],
         "summary": "Admin Accounts",
-        "description": "List the verified accounts by email, with the roles each holds. Needs\n`admin.view`.\n\n`email` keeps the accounts whose email contains it, whatever its case.\nThe list holds at most 50. `meta.has_more` says that more match.",
+        "description": "List the accounts, with the roles each holds. Needs `admin.view`. An\nadopted account isn't listed.\n\n`view` picks the verified accounts, by email, the guests, or both, the\nlongest unseen first. `search` keeps the accounts whose email or player\nname contains it, whatever its case. The list holds at most 50.\n`meta.has_more` says that more match.",
         "operationId": "admin_accounts",
         "security": [
           {
@@ -1696,19 +1696,22 @@
         ],
         "parameters": [
           {
-            "name": "email",
+            "name": "view",
             "in": "query",
             "required": false,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Email"
+              "$ref": "#/components/schemas/AccountView",
+              "default": "verified"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Search"
             }
           }
         ],
@@ -1762,7 +1765,7 @@
           "admin"
         ],
         "summary": "Admin Account",
-        "description": "The verified account, with every role and whether it holds each, for\nits admin page. Needs `admin.view`.",
+        "description": "The account, a guest's too, with every role and whether it holds\neach, for its admin page. Needs `admin.view`.",
         "operationId": "admin_account",
         "security": [
           {
@@ -1813,7 +1816,7 @@
             }
           },
           "404": {
-            "description": "No verified account has this id",
+            "description": "No account has this id",
             "content": {
               "application/json": {
                 "schema": {
@@ -1912,7 +1915,7 @@
             }
           },
           "404": {
-            "description": "No verified account has this id, or a role doesn't exist",
+            "description": "No account has this id, it's a guest's, or a role doesn't exist",
             "content": {
               "application/json": {
                 "schema": {
@@ -2390,6 +2393,16 @@
         ],
         "title": "AccountSigningKey"
       },
+      "AccountView": {
+        "type": "string",
+        "enum": [
+          "verified",
+          "guests",
+          "all"
+        ],
+        "title": "AccountView",
+        "description": "Which accounts the admin's list shows, and in what order."
+      },
       "AdminAccount": {
         "properties": {
           "id": {
@@ -2397,44 +2410,19 @@
             "format": "uuid",
             "title": "Id"
           },
-          "email": {
+          "kind": {
             "type": "string",
-            "title": "Email"
+            "enum": [
+              "guest",
+              "verified"
+            ],
+            "title": "Kind"
           },
-          "display_name": {
+          "email": {
             "type": [
               "string",
               "null"
             ],
-            "title": "Display Name"
-          },
-          "role_ids": {
-            "items": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "type": "array",
-            "title": "Role Ids"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "email",
-          "display_name",
-          "role_ids"
-        ],
-        "title": "AdminAccount"
-      },
-      "AdminAccountDetail": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Id"
-          },
-          "email": {
-            "type": "string",
             "title": "Email"
           },
           "display_name": {
@@ -2454,6 +2442,75 @@
             "format": "date-time",
             "title": "Last Seen At"
           },
+          "match_count": {
+            "type": "integer",
+            "title": "Match Count"
+          },
+          "role_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Role Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "email",
+          "display_name",
+          "created_at",
+          "last_seen_at",
+          "match_count",
+          "role_ids"
+        ],
+        "title": "AdminAccount"
+      },
+      "AdminAccountDetail": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "guest",
+              "verified"
+            ],
+            "title": "Kind"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Email"
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Display Name"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Seen At"
+          },
+          "match_count": {
+            "type": "integer",
+            "title": "Match Count"
+          },
           "roles": {
             "items": {
               "$ref": "#/components/schemas/AdminAccountRole"
@@ -2465,10 +2522,12 @@
         "type": "object",
         "required": [
           "id",
+          "kind",
           "email",
           "display_name",
           "created_at",
           "last_seen_at",
+          "match_count",
           "roles"
         ],
         "title": "AdminAccountDetail"

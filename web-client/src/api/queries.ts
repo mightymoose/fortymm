@@ -244,11 +244,24 @@ export type AdminPermission = components['schemas']['AdminPermission']
 export type AdminRole = components['schemas']['AdminRole']
 export type AdminAccount = components['schemas']['AdminAccount']
 export type AdminAccountDetail = components['schemas']['AdminAccountDetail']
+export type AccountView = components['schemas']['AccountView']
 export type AdminSigningKey = components['schemas']['AdminSigningKey']
 export type AdminPlayer = components['schemas']['AdminPlayer']
 export type AdminPlayerDetail = components['schemas']['AdminPlayerDetail']
 export type RoleDraft = components['schemas']['RoleRequest']
 export type PermissionDraft = components['schemas']['NewPermissionRequest']
+
+export type Verified<T extends { kind: string; email: string | null }> = T & {
+  kind: 'verified'
+  email: string
+}
+
+// A verified account always has an email, which the schema can't say.
+export function isVerified<T extends { kind: string; email: string | null }>(
+  account: T,
+): account is Verified<T> {
+  return account.kind === 'verified'
+}
 
 // Every admin list starts with this key, so one write can refresh them all.
 const ADMIN_KEY = ['v1', 'admin'] as const
@@ -278,16 +291,16 @@ export function adminRolesQuery(api: ApiClient) {
   })
 }
 
-// The first 50 verified accounts whose email contains `email`, and whether
-// more match.
-export function adminAccountsQuery(api: ApiClient, email: string) {
+// The first 50 of the view's accounts whose email or player name contains
+// `search`, and whether more match.
+export function adminAccountsQuery(api: ApiClient, view: AccountView, search: string) {
   return queryOptions({
-    queryKey: [...ADMIN_KEY, 'accounts', email],
+    queryKey: [...ADMIN_KEY, 'accounts', { view, search }],
     queryFn: async ({ signal }) => {
       const data = await send(
         'GET /v1/admin/accounts',
         api.GET('/v1/admin/accounts', {
-          params: { query: email ? { email } : {} },
+          params: { query: search ? { view, search } : { view } },
           signal,
         }),
       )
@@ -296,8 +309,8 @@ export function adminAccountsQuery(api: ApiClient, email: string) {
   })
 }
 
-// One verified account for its admin page, with every role and whether it
-// holds each. Null if no verified account has the id, such as a guest's.
+// One account for its admin page, a guest's too, with every role and whether
+// it holds each. Null if no account has the id, such as an adopted one's.
 export function adminAccountQuery(api: ApiClient, id: string) {
   return queryOptions({
     queryKey: [...ADMIN_KEY, 'accounts', 'detail', id],
