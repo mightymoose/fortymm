@@ -73,6 +73,11 @@ class IllegalEnding(Exception):
     retirement comes after the match was decided."""
 
 
+class SidesAreOnePlayer(Exception):
+    """A merge made both sides of the match one player, so no override
+    may settle it. `create_app()` answers 409."""
+
+
 class InvalidOverrideReason(Exception):
     """An override's reason is empty after trimming. `create_app()` answers
     422."""
@@ -231,14 +236,18 @@ def override_result(
     normal way. The reason is trimmed.
 
     Raises, before it writes anything: InvalidOverrideReason for a blank
-    reason, MatchNotFound, and IllegalEnding for scores that aren't a legal
-    ending.
+    reason, MatchNotFound, SidesAreOnePlayer for a match whose sides a merge
+    made one player, and IllegalEnding for scores that aren't a legal
+    ending. The check holds the side players, as `record_result()` does, so
+    a merge of them waits for the override, then sees its result.
     """
     reason = reason.strip()
     if not reason:
         raise InvalidOverrideReason
     lock_account_for_write(session, admin)
     match = lock_match(session, match_id)
+    if sides_are_one_player(session, match_id):
+        raise SidesAreOnePlayer
     details = stored_details(session, match)
     head = _head(session, match_id)
     try:

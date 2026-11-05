@@ -3288,6 +3288,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorsResponse"];
                 };
             };
+            /** @description A merge made both sides of the match one player */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
             /** @description The request's Content-Type isn't application/json */
             415: {
                 headers: {

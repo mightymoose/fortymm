@@ -8,7 +8,7 @@ from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
-from match_setup import add_match, add_player
+from match_setup import add_match, add_player, merge
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import sessionmaker
 
@@ -734,6 +734,23 @@ def test_overriding_an_unknown_match_is_not_found(
     assert response.json() == {
         "errors": [{"status": "404", "title": "No match has this id"}]
     }
+
+
+def test_an_override_of_a_one_player_match_answers_409(
+    client: TestClient, admin: dict[str, Any], migrated_database: Engine
+) -> None:
+    with sessionmaker(migrated_database).begin() as session:
+        ann = PlayerId(UUID(admin["player"]["id"]))
+        bea = add_player(session)
+        add_match(session, MatchId(UUID(MATCH)), MatchDetails(3, True, (ann, bea)))
+        merge(session, bea, ann)
+    body = {"games": [[11, 3], [11, 4]], "ending": "completed", "reason": "Sheet"}
+
+    response = client.post(OVERRIDE, headers=JSON, json=body)
+
+    assert response.status_code == 409
+    title = "Both sides of the match are now the same player"
+    assert response.json() == {"errors": [{"status": "409", "title": title}]}
 
 
 def test_an_illegal_override_answers_422_in_the_errors_shape(

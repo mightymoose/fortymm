@@ -24,7 +24,12 @@ from fortymm_api.accounts import AccountId, PlayerId
 from fortymm_api.matches import MatchId
 from fortymm_api.models import Player, PlayerManager
 from fortymm_api.services.adoption import adopt_guest
-from fortymm_api.services.match_results import Recorded, record_result
+from fortymm_api.services.match_results import (
+    Recorded,
+    SidesAreOnePlayer,
+    override_result,
+    record_result,
+)
 from fortymm_api.services.matches import Refusal, Refused
 from fortymm_api.services.player_merge import Merged, PlayedEachOther
 from fortymm_api.services.players import (
@@ -35,6 +40,7 @@ from fortymm_api.services.players import (
     account_players,
     answer_question,
 )
+from fortymm_api.signed_results import Completed
 
 VECTORS: VectorsJson = json.loads(VECTORS_PATH.read_text())
 COMPLETED = next(v for v in VECTORS["valid"] if v["name"] == "completed-best-of-3")
@@ -250,6 +256,57 @@ def test_a_merge_during_a_result_refuses_the_result(
     )
 
     assert waiting.result() == Refused(Refusal.SAME_PLAYER)
+
+
+def override(session: Session) -> Recorded:
+    return override_result(
+        session,
+        VECTOR_MATCH,
+        add_account(session),
+        None,
+        ((11, 1), (11, 2)),
+        Completed(),
+        "The umpire's sheet",
+    )
+
+
+def test_an_override_during_the_merge_blocks_it(migrated_database: Engine) -> None:
+    def setup(session: Session) -> AccountId:
+        ann = ann_asked_about_bo(session)
+        played(session, (ANN, BO), with_result=False, match=VECTOR_MATCH)
+        return ann
+
+    ann = in_transaction(migrated_database, setup)
+
+    imposed, waiting = wait_behind(
+        migrated_database,
+        override,
+        lambda session: answer_question(session, ann, BO, Answer.YES),
+    )
+
+    assert isinstance(imposed, Recorded)
+    with pytest.raises(PlayedEachOther):
+        waiting.result()
+
+
+def test_a_merge_during_an_override_refuses_the_override(
+    migrated_database: Engine,
+) -> None:
+    def setup(session: Session) -> AccountId:
+        ann = ann_asked_about_bo(session)
+        played(session, (ANN, BO), with_result=False, match=VECTOR_MATCH)
+        return ann
+
+    ann = in_transaction(migrated_database, setup)
+
+    _, waiting = wait_behind(
+        migrated_database,
+        lambda session: answer_question(session, ann, BO, Answer.YES),
+        override,
+    )
+
+    with pytest.raises(SidesAreOnePlayer):
+        waiting.result()
 
 
 def test_adoption_asks_instead_of_merging_two_players_who_played_each_other(

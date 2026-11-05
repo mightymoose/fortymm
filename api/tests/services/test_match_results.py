@@ -46,6 +46,7 @@ from fortymm_api.services.match_results import (
     IllegalEnding,
     InvalidOverrideReason,
     Recorded,
+    SidesAreOnePlayer,
     check_ending,
     override_result,
     record_result,
@@ -718,6 +719,18 @@ def test_players_correct_an_override_the_normal_way(
 
     assert answer.accepted_at is not None
     assert current(migrated_database) == answer.hash
+
+
+def test_an_override_of_a_match_whose_sides_a_merge_made_one_player_raises(
+    migrated_database: Engine,
+) -> None:
+    players(migrated_database, COMPLETED)
+    in_transaction(migrated_database, lambda session: merge(session, BO, ANN))
+
+    with pytest.raises(SidesAreOnePlayer):
+        override(migrated_database)
+
+    assert result_count(migrated_database) == 0
 
 
 def test_an_override_settles_a_match_with_no_result(

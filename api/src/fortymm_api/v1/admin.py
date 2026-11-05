@@ -696,6 +696,7 @@ class OverrideResponse(BaseModel):
     responses={
         **WRITE_ERRORS,
         **errors(404, "No match has this id"),
+        **errors(409, "A merge made both sides of the match one player"),
         **INVALID_OVERRIDE,
     },
 )

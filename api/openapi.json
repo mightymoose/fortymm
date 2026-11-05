@@ -2499,6 +2499,16 @@
               }
             }
           },
+          "409": {
+            "description": "A merge made both sides of the match one player",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
           "422": {
             "description": "The body is invalid. If the reason is blank or the scores aren't a legal ending to the match, the body is in the `errors` shape instead",
             "content": {

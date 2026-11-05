@@ -13,7 +13,11 @@ from fortymm_api.auth import NoValidSession
 from fortymm_api.database import create_database_engine, migrate
 from fortymm_api.identity_provider import IdentityProvider
 from fortymm_api.services.authorization import MissingPermission
-from fortymm_api.services.match_results import IllegalEnding, InvalidOverrideReason
+from fortymm_api.services.match_results import (
+    IllegalEnding,
+    InvalidOverrideReason,
+    SidesAreOnePlayer,
+)
 from fortymm_api.services.matches import (
     MatchNotFound,
     MergedPlayer,
@@ -98,6 +102,7 @@ MATCH_ERRORS: dict[type[Exception], tuple[int, str]] = {
     SamePlayer: (422, "Both sides of the match are the same player"),
     IllegalEnding: (422, "The scores aren't a legal ending to the match"),
     InvalidOverrideReason: (422, "An override needs a reason"),
+    SidesAreOnePlayer: (409, "Both sides of the match are now the same player"),
 }
 AUTH0_SETTINGS = ("AUTH0_DOMAIN", "AUTH0_CLIENT_ID", "AUTH0_CLIENT_SECRET")
 
