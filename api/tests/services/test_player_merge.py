@@ -4,10 +4,11 @@ match naming any two players."""
 
 import json
 import uuid
+from collections.abc import Callable
 from uuid import UUID
 
 import pytest
-from locks import wait_behind
+from locks import overlap, wait_behind
 from match_setup import (
     add_account,
     add_player,
@@ -30,8 +31,8 @@ from fortymm_api.services.match_results import (
     override_result,
     record_result,
 )
-from fortymm_api.services.matches import Refusal, Refused
-from fortymm_api.services.player_merge import Merged, PlayedEachOther
+from fortymm_api.services.matches import Refusal, Refused, sides_are_one_player
+from fortymm_api.services.player_merge import Merged, PlayedEachOther, merge_players
 from fortymm_api.services.players import (
     Answer,
     Answered,
@@ -307,6 +308,44 @@ def test_a_merge_during_an_override_refuses_the_override(
 
     with pytest.raises(SidesAreOnePlayer):
         waiting.result()
+
+
+def test_a_result_and_a_merge_of_its_side_players_survivor_take_turns(
+    migrated_database: Engine,
+) -> None:
+    """A side player already merged into Ann, while Ann merges with Cy. The
+    merge locks Ann and Cy, then the players merged into them. A result
+    holds the side players, then its approval's foreign key takes Ann FOR
+    KEY SHARE. Unless both lock in one order, each waits for the other."""
+
+    def setup(session: Session) -> AccountId:
+        add_player(session, ANN)
+        add_player(session, BO)
+        add_player(session, CY)
+        old = add_player(session)
+        ann = add_account(session, plays_as=ANN, manages=[CY])
+        played(session, (old, BO), with_result=False, match=VECTOR_MATCH)
+        merge(session, old, ANN)
+        return ann
+
+    ann = in_transaction(migrated_database, setup)
+
+    def hold(session: Session, let_merge_wait: Callable[[], None]) -> bool:
+        one_player = sides_are_one_player(session, VECTOR_MATCH)
+        let_merge_wait()
+        session.execute(
+            select(Player.id)
+            .where(Player.id == ANN)
+            .with_for_update(read=True, key_share=True)
+        )
+        return one_player
+
+    one_player, merging = overlap(
+        migrated_database, hold, lambda session: merge_players(session, ann, CY, ANN)
+    )
+
+    assert one_player is False
+    assert isinstance(merging.result(), Merged)
 
 
 def test_adoption_asks_instead_of_merging_two_players_who_played_each_other(

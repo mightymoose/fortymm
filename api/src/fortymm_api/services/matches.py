@@ -243,17 +243,40 @@ def match_differences(
 
 
 def sides_are_one_player(session: Session, match_id: MatchId) -> bool:
-    """Whether a merge made both sides of the match one player. Holds the
-    side players FOR SHARE until the transaction ends, so a merge of them,
-    which locks them FOR UPDATE, takes turns with the caller."""
-    survivors = session.scalars(
-        select(func.coalesce(Player.merged_into, Player.id))
-        .select_from(Player)
-        .join(MatchSidePlayer, MatchSidePlayer.player_id == Player.id)
+    """Whether a merge made both sides of the match one player. Holds each
+    side's surviving player, then the side players, FOR SHARE until the
+    transaction ends. So a merge of them, which locks them FOR UPDATE, takes
+    turns with the caller, and the later one sees the earlier.
+
+    The locks go in the merge's order: survivors by created_at and id, then
+    the players merged into them. In the other order, a caller holding a
+    merged side player and a merge holding its survivor would each wait for
+    the other, and Postgres would abort one as a deadlock.
+    """
+    side = aliased(Player)
+    survivors = (
+        select(func.coalesce(side.merged_into, side.id))
+        .join(MatchSidePlayer, MatchSidePlayer.player_id == side.id)
         .where(MatchSidePlayer.match_id == match_id)
-        .with_for_update(read=True, of=Player)
-    ).all()
-    return len(set(survivors)) < len(survivors)
+    )
+    while True:
+        locked = session.execute(
+            select(Player.id, Player.merged_into)
+            .where(Player.id.in_(survivors.scalar_subquery()))
+            .order_by(Player.created_at, Player.id)
+            .with_for_update(read=True)
+        ).all()
+        # A merge between the read and the lock moved a survivor. Its
+        # survivor is the one to hold now.
+        if any(merged_into is not None for _, merged_into in locked):
+            continue
+        resolved = session.scalars(
+            survivors.order_by(side.created_at, side.id).with_for_update(
+                read=True, of=side
+            )
+        ).all()
+        if set(resolved) <= {player for player, _ in locked}:
+            return len(set(resolved)) < len(resolved)
 
 
 def stored_details(session: Session, match: Match) -> MatchDetails:

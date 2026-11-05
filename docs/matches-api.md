@@ -262,7 +262,8 @@ only checked, and added fields.
   ending (`IllegalEnding`) answer 422 in the `errors` shape, and an
   unknown match 404, before anything is written. So does a match whose
   sides a merge made one player (`SidesAreOnePlayer`, 409). That check
-  holds the side players `FOR SHARE`, as a result's does, so a merge that
+  holds the side players `FOR SHARE`, as a result's does, survivors first
+  as a merge locks them, so a merge that
   races the override waits, then sees its result and refuses.
 
 ## Signing keys
