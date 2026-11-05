@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
-import type { AdminSigningKey } from '../../api/queries'
+import type { AdminPlayerDetail, AdminSigningKey } from '../../api/queries'
 import { AdminPage, type AdminTab } from '../../test/pages/AdminPage'
 import { HomePage } from '../../test/pages/HomePage'
 import {
@@ -76,6 +76,38 @@ const guestsOldBrowser = signingKey('e', 'Old browser', guest, {
   revoked_by: guest.id,
 })
 
+// Ann's own player, which Ben manages too.
+const excitedEgret: AdminPlayerDetail = {
+  id: '3c2b1a09-8f7e-4d6c-9b5a-4f3e2d1c0b9a',
+  display_name: 'excited egret 387',
+  created_at: '2026-03-14T09:30:00Z',
+  merged_into: null,
+  merged_into_display_name: null,
+  match_count: 4,
+  managers: [
+    { id: ann.id, email: ann.email, relationship: 'self', open_question: false },
+    { id: ben.id, email: ben.email, relationship: 'managed', open_question: true },
+  ],
+  leagues: ['FortyMM'],
+}
+// A guest's player.
+const curiousCrane: AdminPlayerDetail = {
+  ...excitedEgret,
+  id: '7a6b5c4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d',
+  display_name: 'curious crane 512',
+  match_count: 0,
+  managers: [{ id: guest.id, email: null, relationship: 'self', open_question: false }],
+}
+// A player that merged into Ann's.
+const oldEgret: AdminPlayerDetail = {
+  ...excitedEgret,
+  id: 'e5f4d3c2-b1a0-4f9e-8d7c-6b5a49382716',
+  display_name: 'early egret 101',
+  merged_into: excitedEgret.id,
+  merged_into_display_name: excitedEgret.display_name,
+  managers: [],
+}
+
 // Ann, signed in, is the administrator.
 function admin(state: Partial<AdminState> = {}) {
   return mockAdmin({
@@ -83,6 +115,7 @@ function admin(state: Partial<AdminState> = {}) {
     roles: [administrator, userRole, viewer],
     accounts: [ann, ben],
     signingKeys: [annsPhone, guestsBrowser, bensLaptop, bensPhone, guestsOldBrowser],
+    players: [excitedEgret, curiousCrane, oldEgret],
     ...state,
   })
 }
@@ -124,6 +157,7 @@ describe('the admin page', () => {
     { tab: 'Roles', list: 'roles', label: 'Loading roles', content: 'Administrator' },
     { tab: 'Permissions', list: 'permissions', label: 'Loading permissions', content: 'games.record' },
     { tab: 'Accounts', list: 'accounts', label: 'Loading accounts', content: 'ben@example.com' },
+    { tab: 'Players', list: 'players', label: 'Loading players', content: 'excited egret 387' },
     { tab: 'Signing keys', list: 'signing-keys', label: 'Loading signing keys', content: 'Ann’s iPhone' },
   ]
 
@@ -393,6 +427,141 @@ describe('accounts', () => {
     await page.openTab('Accounts')
     await page.findRow('ann@example.com')
     expect(page.panel).toHaveTextContent('Showing the first 50.')
+  })
+})
+
+describe('players', () => {
+  it('lists each player with the account that plays as it, but no merged player', async () => {
+    admin()
+    const page = await AdminPage.render()
+    await page.openTab('Players')
+    await page.findRow('curious crane 512')
+    expect(page.rows).toEqual([
+      ['curious crane 512', 'Guest', '1'],
+      ['excited egret 387', 'ann@example.com', '2'],
+    ])
+    expect(within(page.panel).getByRole('link', { name: 'ann@example.com' })).toHaveAttribute(
+      'href',
+      `/admin/accounts/${ann.id}`,
+    )
+  })
+
+  it('finds players by name', async () => {
+    admin()
+    const page = await AdminPage.render()
+    await page.openTab('Players')
+    await page.findRow('curious crane 512')
+    await page.searchPlayers('EGRET')
+    await waitFor(() => expect(page.rows.map(([name]) => name)).toEqual(['excited egret 387']))
+  })
+
+  it('says when no player matches', async () => {
+    admin()
+    const page = await AdminPage.render()
+    await page.openTab('Players')
+    await page.findRow('curious crane 512')
+    await page.searchPlayers('zebra')
+    expect(await within(page.panel).findByText('No players match')).toBeInTheDocument()
+  })
+
+  it('says when it shows only the first 50', async () => {
+    const many = Array.from({ length: 51 }, (_, index) => ({
+      ...curiousCrane,
+      id: crypto.randomUUID(),
+      display_name: `player ${index}`,
+    }))
+    admin({ players: many })
+    const page = await AdminPage.render()
+    await page.openTab('Players')
+    await page.findRow('player 0')
+    expect(page.panel).toHaveTextContent('Showing the first 50.')
+  })
+
+  it('links each player to its own page', async () => {
+    admin()
+    const page = await AdminPage.render('/admin?tab=players')
+    await page.findRow('excited egret 387')
+    await page.follow('excited egret 387')
+    expect(page.href).toBe(`/admin/players/${excitedEgret.id}`)
+    expect(await page.findHeading('excited egret 387')).toBeInTheDocument()
+  })
+})
+
+describe('a player’s page', () => {
+  it('shows the player, its leagues and its matches', async () => {
+    admin()
+    const page = await AdminPage.renderPlayer(excitedEgret.id)
+    await page.findHeading('excited egret 387')
+    expect(document.body).toHaveTextContent('Matches4')
+    expect(document.body).toHaveTextContent('LeaguesFortyMM')
+    expect(document.body).toHaveTextContent('Added')
+  })
+
+  it('lists the accounts that play as it or manage it', async () => {
+    admin()
+    const page = await AdminPage.renderPlayer(excitedEgret.id)
+    await page.findHeading('excited egret 387')
+    const items = within(page.accountsCard).getAllByRole('listitem')
+    expect(items.map((item) => item.textContent)).toEqual([
+      'ann@example.comPlays as',
+      'ben@example.comManagesHasn’t answered “Is this you?”',
+    ])
+    await page.follow('ben@example.com')
+    expect(page.href).toBe(`/admin/accounts/${ben.id}`)
+  })
+
+  it('names a guest that plays as it', async () => {
+    admin()
+    const page = await AdminPage.renderPlayer(curiousCrane.id)
+    await page.findHeading('curious crane 512')
+    expect(page.accountsCard).toHaveTextContent('GuestPlays as')
+    expect(within(page.accountsCard).queryByRole('link')).toBeNull()
+  })
+
+  it('links a merged player to the one it merged into', async () => {
+    admin()
+    const page = await AdminPage.renderPlayer(oldEgret.id)
+    await page.findHeading('early egret 101')
+    expect(page.accountsCard).toHaveTextContent('No account plays as this player or manages it.')
+    await page.follow('excited egret 387')
+    expect(await page.findHeading('excited egret 387')).toBeInTheDocument()
+  })
+
+  it('goes back to the Players tab', async () => {
+    admin()
+    const page = await AdminPage.renderPlayer(excitedEgret.id)
+    await page.findHeading('excited egret 387')
+    await page.follow('Players')
+    expect(page.href).toBe('/admin?tab=players')
+    expect(page.selectedTab).toBe('Players')
+    expect(await page.findRow('excited egret 387')).toBeInTheDocument()
+  })
+
+  it('says when no player has the id', async () => {
+    admin()
+    const page = await AdminPage.renderPlayer(crypto.randomUUID())
+    expect(await page.findHeading('No such player')).toBeInTheDocument()
+  })
+
+  it('shows a skeleton while the player loads', async () => {
+    admin()
+    const held = holdAdmin(`players/${excitedEgret.id}`)
+    const page = await AdminPage.renderPlayer(excitedEgret.id)
+    expect(document.body).toHaveTextContent('Loading player')
+    await held.release()
+    expect(await page.findHeading('excited egret 387')).toBeInTheDocument()
+  })
+
+  it('shows an error with Try again when the player fails', async () => {
+    admin()
+    failAdminOnce(`players/${excitedEgret.id}`, 500)
+    const page = await AdminPage.renderPlayer(excitedEgret.id)
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('Something went wrong'),
+    )
+    expect(screen.getByRole('link', { name: 'Players' })).toBeInTheDocument()
+    await page.user.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(await page.findHeading('excited egret 387')).toBeInTheDocument()
   })
 })
 

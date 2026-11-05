@@ -1,6 +1,7 @@
 /* The admin page (Admin.tsx): a title, the tabs, then each tab's toolbar
    over its table. An account's page (AccountAdmin.tsx): the breadcrumb, its
-   email, its facts, then a card of its roles. */
+   email, its facts, then a card of its roles. A player's page
+   (PlayerAdmin.tsx): the same, with a card of its accounts. */
 .admin{display:flex;flex-direction:column;gap:var(--s-6)}
 .admin [role=tabpanel]{padding-top:var(--s-6)}
 .admin-section{display:flex;flex-direction:column;gap:var(--s-5)}

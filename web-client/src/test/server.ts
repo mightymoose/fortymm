@@ -96,6 +96,12 @@ export const server = setupServer(
       meta: { has_more: false },
     }),
   ),
+  http.get(`${API_BASE_URL}/v1/admin/players`, () =>
+    HttpResponse.json<components['schemas']['AdminPlayersResponse']>({
+      data: [],
+      meta: { has_more: false },
+    }),
+  ),
 )
 
 // Records each signing key registration, and answers them with `answers` in
@@ -370,6 +376,7 @@ type AdminPermission = components['schemas']['AdminPermission']
 type AdminRole = components['schemas']['AdminRole']
 type AdminAccount = components['schemas']['AdminAccount']
 type AdminSigningKey = components['schemas']['AdminSigningKey']
+type AdminPlayerDetail = components['schemas']['AdminPlayerDetail']
 // The admin lists the mock API holds. It counts each permission's roles and
 // each role's accounts itself.
 export type AdminState = {
@@ -377,14 +384,19 @@ export type AdminState = {
   roles: Omit<AdminRole, 'account_count'>[]
   accounts: AdminAccount[]
   signingKeys: AdminSigningKey[]
+  // Every player, merged ones too, as its page shows it. The list leaves
+  // out the merged ones, and counts each player's managers itself.
+  players?: AdminPlayerDetail[]
 }
-// A list, or one account's page, such as `accounts/<id>`.
+// A list, or one account's or player's page, such as `accounts/<id>`.
 export type AdminList =
   | 'permissions'
   | 'roles'
   | 'accounts'
   | 'signing-keys'
+  | 'players'
   | `accounts/${string}`
+  | `players/${string}`
 
 // The built-in permissions, the Administrator role and the default role, as
 // the migrations make them.
@@ -504,6 +516,31 @@ export function mockAdmin(initial: AdminState) {
             })),
         },
       })
+    }),
+    http.get(`${API_BASE_URL}/v1/admin/players`, ({ request }) => {
+      const name = new URL(request.url).searchParams.get('name')?.trim().toLowerCase() ?? ''
+      const found = (state.players ?? [])
+        .filter((player) => player.merged_into === null)
+        .filter((player) => player.display_name.toLowerCase().includes(name))
+        .sort((a, b) => a.display_name.toLowerCase().localeCompare(b.display_name.toLowerCase()))
+      return HttpResponse.json<components['schemas']['AdminPlayersResponse']>({
+        data: found.slice(0, 50).map((player) => {
+          const self = player.managers.find((manager) => manager.relationship === 'self')
+          return {
+            id: player.id,
+            display_name: player.display_name,
+            account_id: self?.id ?? null,
+            account_email: self?.email ?? null,
+            manager_count: player.managers.length,
+          }
+        }),
+        meta: { has_more: found.length > 50 },
+      })
+    }),
+    http.get<{ id: string }>(`${API_BASE_URL}/v1/admin/players/:id`, ({ params }) => {
+      const player = state.players?.find((found) => found.id === params.id)
+      if (!player) return refuse(404, 'No player has this id')
+      return HttpResponse.json<components['schemas']['AdminPlayerDetailResponse']>({ data: player })
     }),
     // The API answers 415 to a write that isn't JSON, a bodyless DELETE too.
     http.all(`${API_BASE_URL}/v1/admin/*`, async ({ request }) => {
