@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as DesignSystemRouteImport } from './routes/design-system'
+import { Route as DevReviewPreviewRouteImport } from './routes/dev-review-preview'
 import { Route as SignInStoppedRouteImport } from './routes/sign-in-stopped'
 import { Route as SignedOutRouteImport } from './routes/signed-out'
 import { Route as AuthenticatedShellRouteImport } from './routes/_authenticated/_shell'
@@ -34,6 +35,11 @@ const AuthenticatedRoute = AuthenticatedRouteImport.update({
 const DesignSystemRoute = DesignSystemRouteImport.update({
   id: '/design-system',
   path: '/design-system',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DevReviewPreviewRoute = DevReviewPreviewRouteImport.update({
+  id: '/dev-review-preview',
+  path: '/dev-review-preview',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SignInStoppedRoute = SignInStoppedRouteImport.update({
@@ -125,6 +131,7 @@ const AuthenticatedMatchesMatchIdScoresGameGameNumberEditRoute =
 export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedShellIndexRoute
   '/design-system': typeof DesignSystemRoute
+  '/dev-review-preview': typeof DevReviewPreviewRoute
   '/sign-in-stopped': typeof SignInStoppedRoute
   '/signed-out': typeof SignedOutRoute
   '/review-players': typeof AuthenticatedReviewPlayersRoute
@@ -142,6 +149,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof AuthenticatedShellIndexRoute
   '/design-system': typeof DesignSystemRoute
+  '/dev-review-preview': typeof DevReviewPreviewRoute
   '/sign-in-stopped': typeof SignInStoppedRoute
   '/signed-out': typeof SignedOutRoute
   '/review-players': typeof AuthenticatedReviewPlayersRoute
@@ -159,6 +167,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/design-system': typeof DesignSystemRoute
+  '/dev-review-preview': typeof DevReviewPreviewRoute
   '/sign-in-stopped': typeof SignInStoppedRoute
   '/signed-out': typeof SignedOutRoute
   '/_authenticated/_shell': typeof AuthenticatedShellRouteWithChildren
@@ -180,6 +189,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/design-system'
+    | '/dev-review-preview'
     | '/sign-in-stopped'
     | '/signed-out'
     | '/review-players'
@@ -197,6 +207,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/design-system'
+    | '/dev-review-preview'
     | '/sign-in-stopped'
     | '/signed-out'
     | '/review-players'
@@ -213,6 +224,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_authenticated'
     | '/design-system'
+    | '/dev-review-preview'
     | '/sign-in-stopped'
     | '/signed-out'
     | '/_authenticated/_shell'
@@ -233,6 +245,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   DesignSystemRoute: typeof DesignSystemRoute
+  DevReviewPreviewRoute: typeof DevReviewPreviewRoute
   SignInStoppedRoute: typeof SignInStoppedRoute
   SignedOutRoute: typeof SignedOutRoute
 }
@@ -251,6 +264,13 @@ declare module '@tanstack/react-router' {
       path: '/design-system'
       fullPath: '/design-system'
       preLoaderRoute: typeof DesignSystemRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dev-review-preview': {
+      id: '/dev-review-preview'
+      path: '/dev-review-preview'
+      fullPath: '/dev-review-preview'
+      preLoaderRoute: typeof DevReviewPreviewRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sign-in-stopped': {
@@ -427,6 +447,7 @@ const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   DesignSystemRoute: DesignSystemRoute,
+  DevReviewPreviewRoute: DevReviewPreviewRoute,
   SignInStoppedRoute: SignInStoppedRoute,
   SignedOutRoute: SignedOutRoute,
 }
