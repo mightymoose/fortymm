@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { ApiError } from '../../api/errors'
-import { administrative, Permission } from '../../api/permissions'
+import { Permission } from '../../api/permissions'
 import {
   adminPermissionsQuery,
   adminRolesQuery,
@@ -109,7 +109,7 @@ function Roles() {
                       ))}
                     </span>
                   </td>
-                  <td className="n">{role.default ? 'Everyone' : role.account_count}</td>
+                  <td className="n">{role.account_count}</td>
                   {manage && (
                     <td className="admin-actions">
                       <Button
@@ -120,16 +120,14 @@ function Roles() {
                       >
                         Edit
                       </Button>
-                      {!role.default && (
-                        <Button
-                          variant="danger"
-                          size="sm"
-                          aria-label={`Delete ${role.name}`}
-                          onClick={() => setDeleting(role)}
-                        >
-                          Delete…
-                        </Button>
-                      )}
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        aria-label={`Delete ${role.name}`}
+                        onClick={() => setDeleting(role)}
+                      >
+                        Delete…
+                      </Button>
                     </td>
                   )}
                 </tr>
@@ -163,9 +161,6 @@ function RoleSheet({
   const showToast = useToast()
   const [failure, setFailure] = useState<unknown>(null)
   const [saved, setSaved] = useState(false)
-  const offered = role?.default
-    ? permissions.filter((permission) => !administrative.has(permission.key))
-    : permissions
   const save = useAdminWrite((api, draft: RoleDraft) =>
     role ? updateRole(api, { id: role.id, ...draft }) : createRole(api, draft),
   )
@@ -203,9 +198,7 @@ function RoleSheet({
     <FormSheet
       title={role ? `Edit ${role.name}` : 'New role'}
       subtitle={
-        role?.default
-          ? 'Every account holds this role, guests too, so it can’t grant a permission that administers FortyMM.'
-          : 'Accounts that hold the role get its permissions.'
+'Accounts that hold the role get its permissions.'
       }
       submitLabel={role ? 'Save role' : 'Create role'}
       submitting={isSubmitting}
@@ -229,7 +222,7 @@ function RoleSheet({
       />
       <fieldset className="fm-choices">
         <legend>Permissions</legend>
-        {offered.map((permission) => (
+        {permissions.map((permission) => (
           <label key={permission.key} className="fm-check admin-check">
             <input type="checkbox" value={permission.key} {...register('permissions')} />
             <span className="admin-check__text">

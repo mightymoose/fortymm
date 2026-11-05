@@ -330,6 +330,21 @@ def test_a_verified_account_with_a_new_email_reaches_a_new_account(
     assert signed_in(migrated_database, token) is None
 
 
+def test_a_new_verified_account_gets_the_default_roles(
+    migrated_database: Engine,
+) -> None:
+    token = sign_in(migrated_database, None, identity("a|1", "ann@example.com"))
+
+    ann = account_of(migrated_database, token)
+    held = count(
+        migrated_database,
+        "SELECT count(*) FROM account_roles JOIN roles ON roles.id = role_id"
+        " WHERE account_id = :account AND roles.is_default",
+        account=ann.id,
+    )
+    assert held == 1
+
+
 def test_two_identities_for_one_email_reach_one_account(
     migrated_database: Engine,
 ) -> None:

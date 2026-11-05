@@ -196,9 +196,9 @@ def test_lists_the_roles(
             {
                 "id": user_role(migrated_database),
                 "name": "User",
-                "description": "Every account holds this role, guests too.",
+                "description": "Every new account gets this role, guests too.",
                 "permissions": [],
-                "account_count": 0,
+                "account_count": 1,
                 "default": True,
             },
         ]
@@ -278,44 +278,6 @@ def test_updates_a_role(
     }
 
 
-def test_the_default_role_granting_an_administrative_permission_is_unprocessable(
-    client: TestClient, admin: dict[str, Any], migrated_database: Engine
-) -> None:
-    response = client.put(
-        f"/v1/admin/roles/{user_role(migrated_database)}",
-        json={"name": "User", "permissions": ["admin.view"]},
-    )
-
-    assert response.status_code == 422
-    assert response.json() == {
-        "errors": [
-            {
-                "status": "422",
-                "title": "Every account holds the default role, guests too, so it"
-                " can't grant a permission that administers FortyMM",
-            }
-        ]
-    }
-
-
-def test_deleting_the_default_role_conflicts(
-    client: TestClient, admin: dict[str, Any], migrated_database: Engine
-) -> None:
-    response = client.delete(
-        f"/v1/admin/roles/{user_role(migrated_database)}", headers=JSON
-    )
-
-    assert response.status_code == 409
-    assert response.json() == {
-        "errors": [
-            {
-                "status": "409",
-                "title": "Every account holds the default role, so it stays",
-            }
-        ]
-    }
-
-
 def test_deleting_the_last_administrator_role_conflicts(
     client: TestClient, admin: dict[str, Any], migrated_database: Engine
 ) -> None:
@@ -369,7 +331,9 @@ def test_lists_the_accounts(
                 "id": admin["id"],
                 "email": "ann@example.com",
                 "display_name": admin["player"]["display_name"],
-                "role_ids": [administrator(migrated_database)],
+                "role_ids": sorted(
+                    [administrator(migrated_database), user_role(migrated_database)]
+                ),
             }
         ],
         "meta": {"has_more": False},
@@ -386,13 +350,9 @@ def test_gets_an_account(
     assert data["email"] == "ann@example.com"
     assert data["display_name"] == admin["player"]["display_name"]
     assert {"created_at", "last_seen_at"} <= data.keys()
-    assert data["roles"] == [
-        {
-            "id": administrator(migrated_database),
-            "name": "Administrator",
-            "description": data["roles"][0]["description"],
-            "held": True,
-        }
+    assert [(role["id"], role["name"], role["held"]) for role in data["roles"]] == [
+        (administrator(migrated_database), "Administrator", True),
+        (user_role(migrated_database), "User", True),
     ]
 
 
@@ -407,25 +367,6 @@ def test_sets_an_accounts_roles(
 
     assert response.status_code == 200
     assert response.json()["data"]["role_ids"] == [role]
-
-
-def test_granting_the_default_role_is_unprocessable(
-    client: TestClient, admin: dict[str, Any], migrated_database: Engine
-) -> None:
-    response = client.put(
-        f"/v1/admin/accounts/{admin['id']}/roles",
-        json={"role_ids": [user_role(migrated_database)]},
-    )
-
-    assert response.status_code == 422
-    assert response.json() == {
-        "errors": [
-            {
-                "status": "422",
-                "title": "Every account holds the default role, so nobody grants it",
-            }
-        ]
-    }
 
 
 def test_a_guest_account_is_not_found(

@@ -505,9 +505,7 @@ export interface paths {
          *     `roles.manage`.
          *
          *     The API answers 409 if another role has the name, or if the change
-         *     would leave no account with `account_roles.manage`. It answers 422 if
-         *     the default role, which every account holds, would grant a permission
-         *     that administers FortyMM.
+         *     would leave no account with `account_roles.manage`.
          */
         put: operations["update_role"];
         post?: never;
@@ -516,8 +514,7 @@ export interface paths {
          * @description Delete the role. Every account that held it loses it. Needs
          *     `roles.manage`.
          *
-         *     The API answers 409 for the default role, which every account holds, or
-         *     if no account would keep `account_roles.manage`.
+         *     The API answers 409 if no account would keep `account_roles.manage`.
          */
         delete: operations["delete_role"];
         options?: never;
@@ -558,8 +555,8 @@ export interface paths {
         };
         /**
          * Admin Account
-         * @description The verified account, with every role but the default and whether it
-         *     holds each, for its admin page. Needs `admin.view`.
+         * @description The verified account, with every role and whether it holds each, for
+         *     its admin page. Needs `admin.view`.
          */
         get: operations["admin_account"];
         put?: never;
@@ -582,10 +579,9 @@ export interface paths {
          * Set Account Roles
          * @description Give the account exactly these roles. Needs `account_roles.manage`.
          *
-         *     Only a verified account holds roles, and none is granted the default
-         *     role, which every account holds. The API answers 409 if no account
-         *     would keep `account_roles.manage`, such as when the last administrator
-         *     revokes their own role.
+         *     The account must be verified. The API answers 409 if no account would
+         *     keep `account_roles.manage`, such as when the last administrator revokes
+         *     their own role.
          */
         put: operations["set_account_roles"];
         post?: never;
@@ -2348,7 +2344,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorsResponse"];
                 };
             };
-            /** @description The body is invalid. If a permission key names no permission, or the default role would grant a permission that administers FortyMM, the body is in the `errors` shape instead */
+            /** @description The body is invalid. If a permission key names no permission, the body is in the `errors` shape instead */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -2404,7 +2400,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorsResponse"];
                 };
             };
-            /** @description The role is the default role, or the change would leave no account with `account_roles.manage` */
+            /** @description The change would leave no account with `account_roles.manage`, so nobody could grant a role again */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2609,7 +2605,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorsResponse"];
                 };
             };
-            /** @description The body is invalid. If it names the default role, which every account holds, the body is in the `errors` shape instead */
+            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
