@@ -234,7 +234,8 @@ export interface paths {
          *     `open_question` is true for a player that a sign-in brought to the
          *     account, until the account answers "Is this you?" for it.
          *     `match_count` counts the player's matches, and `recent_matches` holds
-         *     its latest ones, newest first.
+         *     its latest ones, newest first, each with the other side's players and,
+         *     once it has one, the result from the player's side.
          */
         get: operations["account_players"];
         put?: never;
@@ -1257,6 +1258,17 @@ export interface components {
              * Format: date-time
              */
             played_at: string;
+            /** Opponents */
+            opponents: string[];
+            /** Result */
+            result?: components["schemas"]["RecentResult"];
+        };
+        /** RecentResult */
+        RecentResult: {
+            /** Won */
+            won: boolean;
+            /** Games */
+            games: number[];
         };
         /** RegisterKeyRequest */
         RegisterKeyRequest: {
