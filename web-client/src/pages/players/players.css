@@ -1,0 +1,54 @@
+/* The prototype player pages (Players.tsx, Player.tsx): the option
+   switcher, then the page in the chosen option. */
+.players{display:flex;flex-direction:column;gap:var(--s-6)}
+.players-proto{display:flex;flex-direction:column;gap:var(--s-2)}
+.players-page{display:flex;flex-direction:column;gap:var(--s-6);min-width:0}
+.players-page [role=tabpanel]{padding-top:var(--s-4)}
+.players-h2{margin:0 0 var(--s-2);font:600 var(--text-md)/var(--lh-snug) var(--font-ui);color:var(--fg-1)}
+.players-tools{display:flex;flex-direction:column;gap:var(--s-3)}
+.players-search{max-width:420px}
+.players-table-wrap{overflow-x:auto}
+.players-name{display:flex;align-items:center;gap:var(--s-2);color:var(--fg-1);overflow-wrap:anywhere}
+.players-rating{color:var(--fg-1)}
+.players-w{font-weight:700;color:var(--winner)}
+.players-l{color:var(--loser)}
+
+.players-head{display:flex;align-items:center;gap:var(--s-3)}
+.players-head .fm-avatar{width:56px;height:56px;font-size:var(--text-lg)}
+.players-head__name{margin:0;overflow-wrap:anywhere}
+.players-head p{margin:2px 0 0;display:flex;align-items:center;gap:var(--s-2)}
+
+.players-row,.players-pick__opt{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:var(--s-3);padding:var(--s-3) 0}
+.players-row__who{display:flex;flex-direction:column;min-width:0}
+.players-row__aside{display:flex;align-items:baseline;gap:var(--s-4)}
+
+.players-pick__opt{width:100%;padding:var(--s-2) var(--s-3);border:0;border-radius:var(--r-md);background:transparent;color:inherit;font:inherit;text-align:left;text-decoration:none;cursor:pointer;transition:background var(--dur-change) var(--ease-out)}
+.players-pick__opt:hover{background:var(--bg-hover)}
+.players-pick__opt:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.players-pick__opt[aria-pressed=true]{background:var(--accent-soft)}
+.players-pick__opt[aria-pressed=true] .players-name{color:var(--accent-text)}
+.players .fm-split:not([style]){--split:40%}
+.players-split__list{display:flex;flex-direction:column;gap:var(--s-4)}
+.players-split__detail{padding:var(--s-5);border-radius:var(--r-md);background:var(--bg-panel)}
+
+.players-result{display:grid;grid-template-columns:3.5ch minmax(0,1fr) auto auto;align-items:center;gap:var(--s-2) var(--s-4);padding:var(--s-3) 0}
+.players-result__score{font:500 var(--text-md) var(--font-num);color:var(--loser)}
+.players-result__score.w{font-weight:700;color:var(--winner)}
+.players-result__who{display:flex;flex-direction:column;min-width:0;color:var(--fg-1)}
+.players-result__games{white-space:pre}
+.players-result__change{text-align:right;min-width:7ch}
+.players-results{container-type:inline-size}
+@container (max-width:560px){
+  .players-result{grid-template-columns:3.5ch minmax(0,1fr) auto}
+  .players-result__games{grid-column:2/-1;grid-row:2}
+}
+
+.players-h2h{display:flex;align-items:baseline;gap:var(--s-3);margin:0 0 var(--s-2)}
+.players-h2h .num{font:600 var(--text-2xl) var(--font-num);color:var(--fg-1)}
+.players-form{display:flex;gap:var(--s-2);margin:0;padding:0;list-style:none}
+.players-form li{display:grid;place-items:center;width:32px;height:32px;border-radius:var(--r-sm);background:var(--ink-800);font:500 var(--text-sm) var(--font-num);color:var(--loser)}
+.players-form li.w{font-weight:700;color:var(--winner)}
+/* Names are the loudest thing on the page, so a name that links stays
+   white and shows it's a link on hover. */
+.players-name a,.players-result__who a,.players-page .fm-table td a{color:var(--fg-1);text-decoration:none}
+.players-name a:hover,.players-result__who a:hover,.players-page .fm-table td a:hover{text-decoration:underline}
