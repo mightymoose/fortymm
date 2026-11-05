@@ -3,6 +3,7 @@ database, so a test names exactly who plays as whom."""
 
 import uuid
 from collections.abc import Callable
+from datetime import datetime
 
 from sqlalchemy import Engine, insert, select, update
 from sqlalchemy.orm import Session, sessionmaker
@@ -48,9 +49,16 @@ def add_account(session: Session, plays_as: PlayerId | None = None) -> AccountId
     return account
 
 
-def add_match(session: Session, match: MatchId, details: MatchDetails) -> None:
+def add_match(
+    session: Session,
+    match: MatchId,
+    details: MatchDetails,
+    *,
+    created_at: datetime | None = None,
+) -> None:
     """The match, its settings, its two sides and their players, in the
-    default league."""
+    default league. A trigger keeps a match's created_at, so a test that
+    orders matches gives it here."""
     settings = session.scalars(
         insert(MatchSettings)
         .values(team_size=1, best_of=details.best_of, rated=details.rated)
@@ -58,7 +66,12 @@ def add_match(session: Session, match: MatchId, details: MatchDetails) -> None:
     ).one()
     league = session.scalars(select(League.id).where(League.is_default)).one()
     session.execute(
-        insert(Match).values(id=match, settings_id=settings, league_id=league)
+        insert(Match).values(
+            id=match,
+            settings_id=settings,
+            league_id=league,
+            **({"created_at": created_at} if created_at else {}),
+        )
     )
     for side, player in enumerate(details.players):
         side_id = session.scalars(

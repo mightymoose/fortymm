@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from fortymm_api.accounts import AccountId, PlayerId
 from fortymm_api.models import Account, PlayerManager
 from fortymm_api.ownership import OWNERSHIP_RULES, OwnershipRule
+from fortymm_api.services.player_matches import has_played
 from fortymm_api.services.player_merge import PlayedEachOther, merge_players
 from fortymm_api.services.sessions import convert_guest
 
@@ -16,9 +17,9 @@ PLAYER_MANAGERS = ("player_managers", "account_id")
 
 
 def has_activity(session: Session, player: PlayerId) -> bool:
-    """Whether the player has played. No table records play yet, so no
-    player has. The games work (#124) fills it."""
-    return False
+    """Whether the player has played: whether it's in a match, with a result
+    or not."""
+    return has_played(session, player)
 
 
 def hand_over_players(session: Session, guest: AccountId, into: AccountId) -> None:
