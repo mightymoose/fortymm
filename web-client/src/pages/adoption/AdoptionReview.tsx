@@ -65,8 +65,8 @@ function Reminder({
       </p>
       <p className="fm-alert__body">
         {one
-          ? `${open[0].display_name} was used on this device before you signed in. Choose whether it belongs on your account.`
-          : 'These players were used on this device before you signed in. Choose which belong on your account.'}
+          ? `${open[0].display_name} was used before you signed in. Choose whether it belongs on your account.`
+          : 'These players were used before you signed in. Choose which belong on your account.'}
       </p>
       <div className="fm-alert__actions">
         <Link to="/review-players" className="fm-btn fm-btn--primary" ref={linkRef}>

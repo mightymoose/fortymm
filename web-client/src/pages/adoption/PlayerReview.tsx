@@ -321,7 +321,7 @@ function Questions() {
             Is this you?
           </h1>
           <p className="review-playedas">
-            <b>{current.display_name}</b> was used on this device before you signed in.
+            <b>{current.display_name}</b> was used before you signed in.
           </p>
           {/* Results aren't recorded yet, so the preview gives only the
               count. The games work adds the player's recent matches here,

@@ -87,7 +87,7 @@ describe('Is this you?', () => {
     expect(page.href).toBe('/review-players')
     expect(page.heading).toHaveTextContent('Is this you?')
     expect(page.heading).toHaveFocus()
-    expect(page.text).toContain(`${egret.display_name} was used on this device before you signed in.`)
+    expect(page.text).toContain(`${egret.display_name} was used before you signed in.`)
     expect(page.answers).toHaveTextContent(
       `${egret.display_name} and ${dove.display_name} will become one player, your player.`,
     )
@@ -311,7 +311,7 @@ describe('Is this you?', () => {
 
     expect(api.answers).toEqual([{ playerId: egret.id, answer: 'yes' }])
     expect(page.counter).toBe('Player 2 of 2')
-    expect(page.text).toContain(`${badger.display_name} was used on this device`)
+    expect(page.text).toContain(`${badger.display_name} was used before you signed in.`)
     expect(page.loadError('Can’t reach FortyMM')).toBeNull()
   })
 
@@ -349,7 +349,7 @@ describe('Is this you?', () => {
 
       expect(page.notice).toBe(`${egret.display_name} was already answered in another tab.`)
       expect(page.counter).toBe('Player 3 of 3')
-      expect(page.text).toContain(`${heron.display_name} was used on this device`)
+      expect(page.text).toContain(`${heron.display_name} was used before you signed in.`)
       expect(page.button('Yes, this is me')).not.toHaveAccessibleDescription()
     },
   )
