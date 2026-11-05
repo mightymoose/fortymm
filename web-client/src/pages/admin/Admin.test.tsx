@@ -158,7 +158,7 @@ describe('roles', () => {
     expect(page.rows).toEqual([
       [
         'AdministratorEverything on the admin page.',
-        'account_roles.manageadmin.viewmatches.createroles.managesigning_keys.revoke',
+        'account_roles.manageadmin.viewmatches.creatematches.viewplayers.viewroles.managesigning_keys.revoke',
         '1',
         'EditDelete…',
       ],
@@ -177,7 +177,7 @@ describe('roles', () => {
       within(sheet)
         .getAllByRole('checkbox')
         .map((box) => box.getAttribute('value')),
-    ).toEqual(['matches.create', 'games.record'])
+    ).toEqual(['matches.create', 'matches.view', 'players.view', 'games.record'])
 
     await page.toggle(sheet, 'games.record')
     await page.press(sheet, 'Save role')

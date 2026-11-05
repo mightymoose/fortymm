@@ -81,6 +81,20 @@ export class HomePage {
     return screen.queryByRole('link', { name: 'New match' })
   }
 
+  // The sidebar's links to Matches and Players, or null.
+  get matchesLink(): HTMLElement | null {
+    return screen.queryByRole('link', { name: 'Matches' })
+  }
+
+  get playersLink(): HTMLElement | null {
+    return screen.queryByRole('link', { name: 'Players' })
+  }
+
+  // The sidebar, which is the tab bar below 900px.
+  get nav(): HTMLElement {
+    return screen.getByRole('navigation', { name: 'Main' })
+  }
+
   // The sidebar's link to Home, or null.
   get homeLink(): HTMLElement | null {
     return screen.queryByRole('link', { name: 'Home' })

@@ -187,6 +187,8 @@ def test_lists_the_roles(
                     "account_roles.manage",
                     "admin.view",
                     "matches.create",
+                    "matches.view",
+                    "players.view",
                     "roles.manage",
                     "signing_keys.revoke",
                 ],

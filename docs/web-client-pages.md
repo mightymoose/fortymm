@@ -19,7 +19,12 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   (`src/pages/AppShell.tsx`): a topbar over a sidebar of
   the `_shell` pages, which folds to its icons and remembers it in
   `localStorage`. Below 900px the sidebar is a tab bar along the bottom. To
-  add a page to the sidebar, add its link in `AppShell`. The topbar's right
+  add a page to the sidebar, add its `NavLink` in `AppShell`. It lists Home,
+  then Matches for an account with `matches.view` and Players for one with
+  `players.view`. Below 900px (`useNarrowLayout()`, `src/pages/`) the tab
+  bar ends with New match for an account with `matches.create`. Each link
+  is open only on its own page, so Matches isn't open on New match. The
+  links read the session without suspending, like the account menu. The topbar's right
   end shows `UserMenu` (`src/pages/userMenu/UserMenu.tsx`): a chip of the
   player's `PlayerAvatar` (`src/components/PlayerAvatar.tsx`, the initials
   of the display name, whose accessible name is the full name) and the
@@ -47,8 +52,13 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   where nothing failed.
 - Home (`src/pages/Home.tsx`) shows `AdoptionReview`
   (`src/pages/adoption/`), then a New match link to `/matches/new` for an
-  account with `matches.create`, above the roadmap. The link stays until matches have a page of their own. The
-  sidebar doesn't list it.
+  account with `matches.create`, above the roadmap. Below 900px the link
+  is in the tab bar instead. The sidebar doesn't list it.
+- `_shell/matches/index.tsx` and `_shell/players/index.tsx`: the pages
+  `Matches` (`src/pages/matches/Matches.tsx`) and `Players`
+  (`src/pages/players/Players.tsx`), which so far show only their title.
+  Each loader waits for the session, and sends an account without
+  `matches.view` or `players.view` to `/`.
 - `_shell/matches/new.tsx`: the page `NewMatch`
   (`src/pages/matches/NewMatch.tsx`, with its parts in `newMatch/`),
   which sets up a match. Its loader waits for the session, and sends an

@@ -120,6 +120,8 @@ def test_answers_with_a_verified_accounts_email_player_and_permissions(
                     "account_roles.manage",
                     "admin.view",
                     "matches.create",
+                    "matches.view",
+                    "players.view",
                     "roles.manage",
                     "signing_keys.revoke",
                 ],

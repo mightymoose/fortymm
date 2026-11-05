@@ -19,6 +19,8 @@ class Permission(StrEnum):
     ACCOUNT_ROLES_MANAGE = "account_roles.manage"
     SIGNING_KEYS_REVOKE = "signing_keys.revoke"
     MATCHES_CREATE = "matches.create"
+    MATCHES_VIEW = "matches.view"
+    PLAYERS_VIEW = "players.view"
 
 
 class Reach(Enum):
@@ -37,6 +39,8 @@ REACH: dict[Permission, Reach] = {
     Permission.ACCOUNT_ROLES_MANAGE: Reach.ADMINISTRATION,
     Permission.SIGNING_KEYS_REVOKE: Reach.ADMINISTRATION,
     Permission.MATCHES_CREATE: Reach.FEATURE,
+    Permission.MATCHES_VIEW: Reach.FEATURE,
+    Permission.PLAYERS_VIEW: Reach.FEATURE,
 }
 
 ADMINISTRATIVE = frozenset(

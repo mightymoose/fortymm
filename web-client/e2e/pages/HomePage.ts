@@ -16,6 +16,10 @@ export class HomePage {
   // The reminder of the players still to review, by its title.
   readonly reminder: Locator
 
+  // The sidebar, a tab bar below 900px, and the page's own New match link.
+  readonly nav: Locator
+  readonly pageNewMatchLink: Locator
+
   constructor(page: Page) {
     this.page = page
     this.title = page.getByRole('heading', { level: 1 })
@@ -26,6 +30,8 @@ export class HomePage {
       name: 'Sign out of this guest account?',
     })
     this.reminder = page.getByText(/^\d+ players? to review$/)
+    this.nav = page.getByRole('navigation', { name: 'Main' })
+    this.pageNewMatchLink = page.getByRole('main').getByRole('link', { name: 'New match' })
   }
 
   // Opens the account menu and picks `item`, such as Sign in. A verified
@@ -33,6 +39,11 @@ export class HomePage {
   async fromAccountMenu(item: 'Sign in' | 'Sign out'): Promise<void> {
     await this.accountButton.click()
     await this.accountMenu.getByRole('menuitem', { name: item }).click()
+  }
+
+  // The sidebar's link named `name`, such as Matches.
+  navLink(name: string): Locator {
+    return this.nav.getByRole('link', { name })
   }
 
   // The topbar's avatar of the player named `displayName`.

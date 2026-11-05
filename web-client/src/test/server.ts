@@ -185,6 +185,17 @@ export function holdSession() {
   }
 }
 
+// Answers the session with the default guest holding `permissions`.
+export function grantSession(...permissions: string[]) {
+  server.use(
+    http.post(`${API_BASE_URL}/v1/session`, () =>
+      HttpResponse.json<components['schemas']['SessionResponse']>({
+        data: { account: { ...sessionResponse.data.account, permissions } },
+      }),
+    ),
+  )
+}
+
 // Makes every session request fail with no response, as with no network.
 export function failSession() {
   server.use(http.post(`${API_BASE_URL}/v1/session`, () => HttpResponse.error()))
@@ -392,6 +403,8 @@ export const builtInPermissions: AdminState['permissions'] = [
   { key: 'account_roles.manage', description: 'Set which roles an account holds.', built_in: true },
   { key: 'admin.view', description: 'See the admin page.', built_in: true },
   { key: 'matches.create', description: 'Create a match.', built_in: true },
+  { key: 'matches.view', description: 'See the matches page.', built_in: true },
+  { key: 'players.view', description: 'See the players page.', built_in: true },
   { key: 'roles.manage', description: 'Edit roles and permissions.', built_in: true },
   { key: 'signing_keys.revoke', description: 'Revoke any account’s signing key.', built_in: true },
 ]
@@ -399,7 +412,15 @@ export const administrator: AdminState['roles'][number] = {
   id: 'a0d1f2e3-4b5c-4d6e-8f70-81920a1b2c3d',
   name: 'Administrator',
   description: 'Everything on the admin page.',
-  permissions: ['account_roles.manage', 'admin.view', 'matches.create', 'roles.manage', 'signing_keys.revoke'],
+  permissions: [
+    'account_roles.manage',
+    'admin.view',
+    'matches.create',
+    'matches.view',
+    'players.view',
+    'roles.manage',
+    'signing_keys.revoke',
+  ],
   default: false,
 }
 export const userRole: AdminState['roles'][number] = {

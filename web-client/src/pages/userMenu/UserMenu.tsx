@@ -11,7 +11,7 @@ import { PlayerAvatar } from '../../components/PlayerAvatar'
 import { mobileApps } from '../../mobileApps'
 import { useSignInHref } from '../useSignInHref'
 import { useSignOut } from '../useSignOut'
-import { useNarrowLayout } from './useNarrowLayout'
+import { useNarrowLayout } from '../useNarrowLayout'
 
 // The visitor's account at the topbar's right end, styled by `.user-menu` in
 // styles/base.css: a chip of the player's avatar and name that opens a menu.

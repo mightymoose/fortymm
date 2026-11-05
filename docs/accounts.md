@@ -303,8 +303,8 @@ routes, under `/v1/admin`.
   letters, digits and `_`, joined by dots, such as `games.record`, at most
   64 characters. The key never changes, because code checks it by key.
 - The built-in permissions are the ones the code checks: `admin.view`,
-  `roles.manage`, `account_roles.manage`, `signing_keys.revoke` and
-  `matches.create`. They are the members of
+  `roles.manage`, `account_roles.manage`, `signing_keys.revoke`,
+  `matches.create`, `matches.view` and `players.view`. They are the members of
   `Permission` in `permissions.py`, and their rows have `built_in` set. A
   test fails if the two differ, so a new check in code needs a migration
   that adds its row. Nobody can delete a built-in permission (409).
@@ -327,7 +327,8 @@ routes, under `/v1/admin`.
 - The default role grants no permission that administers FortyMM.
   `REACH` in `permissions.py` says whether each built-in permission is
   administration or a feature, and a test fails if one has no entry.
-  `matches.create` is a feature, and so is every custom permission. An
+  `matches.create`, `matches.view` and `players.view` are features, and so
+  is every custom permission. An
   update that gives the default role an administrative permission answers
   422. Its delete answers 409. Granting it to an account answers 422, and
   a sign-in skips an email grant of it. It can be renamed.
@@ -354,7 +355,8 @@ routes, under `/v1/admin`.
   permissions. It grants it to `mightymoose@fortymm.com`: to the account
   if one exists, or else as an email grant. In dev, signing in through the
   mock as that email makes an administrator. The migrations that added
-  `signing_keys.revoke` and `matches.create` granted each to every role
+  `signing_keys.revoke`, `matches.create`, `matches.view` and
+  `players.view` granted each to every role
   that granted `account_roles.manage`, which could already grant itself
   anything.
 - `GET /v1/admin/accounts` lists verified accounts by email, at most 50,
