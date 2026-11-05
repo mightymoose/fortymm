@@ -12,6 +12,7 @@ import {
   listedPlayer,
   mockVerifiedAccount,
   server,
+  STAND_IN,
 } from '../../test/server'
 
 const egret = listedPlayer({
@@ -221,6 +222,33 @@ describe('Is this you?', () => {
     const home = new HomePage(page.router)
     expect(home.avatar(egret.display_name)).toHaveTextContent('EE')
     expect(home.avatar(dove.display_name)).toBeNull()
+  })
+
+  it('says the account’s own player stays its player, and "Yes" keeps it', async () => {
+    const egretOwn = { ...egret, relationship: 'self' as const }
+    const api = mockVerifiedAccount([ant, egretOwn])
+    const page = await PlayerReviewPage.render()
+
+    expect(page.answers).toHaveTextContent(`${egret.display_name} stays your player.`)
+    expect(page.answers).not.toHaveTextContent('will become one player')
+
+    await page.click('Yes, this is me')
+
+    expect(api.answers).toEqual([{ playerId: egret.id, answer: 'yes' }])
+    expect(page.toasts).toEqual([`${egret.display_name} is your player now.`])
+    expect(new HomePage(page.router).avatar(egret.display_name)).toHaveTextContent('EE')
+  })
+
+  it('shows the account’s new player in the topbar once its own player is one it manages', async () => {
+    mockVerifiedAccount([{ ...egret, relationship: 'self' }])
+    const page = await PlayerReviewPage.render()
+    await page.click('Someone else played')
+
+    await page.click('I manage this player')
+
+    const home = new HomePage(page.router)
+    expect(await home.findAvatar(STAND_IN.display_name)).toHaveTextContent('CC')
+    expect(home.avatar(egret.display_name)).toBeNull()
   })
 
   it('asks whether the visitor manages the player, and goes back', async () => {

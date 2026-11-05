@@ -257,11 +257,20 @@ export function listedPlayer(
   return { played_against: [], ...player, match_count: 0, recent_matches: [] }
 }
 
+// The self player that a session request gives an account with none.
+export const STAND_IN = listedPlayer({
+  id: '6d5c4b3a-2f1e-4d0c-8b9a-7f6e5d4c3b2a',
+  display_name: 'calm crane 765',
+  relationship: 'self',
+  open_question: false,
+})
+
 // Signs the mock API in as a verified account that manages `players`, and
 // answers "Is this you?" as the API does. Returns the answers it received,
 // and answerInAnotherTab(), which answers without the page knowing. One of
 // `players` is the account's self player, and they are in the order the API
-// made them. So a merge keeps the first of the two, and it refuses two
+// made them. A session request when the account has none makes STAND_IN its
+// self player, as the API does. So a merge keeps the first of the two, and it refuses two
 // players who played each other. `failAnswers` makes every answer fail with
 // a 500. playersChange() replaces the players, as a match recorded
 // meanwhile can.
@@ -272,13 +281,16 @@ export function mockVerifiedAccount(
   let current = players
   const answers: ({ playerId: string } & AnswerRequest)[] = []
   const self = () => {
-    const found = current.find((player) => player.relationship === 'self')
-    if (!found) throw new Error('The account has no self player')
+    let found = current.find((player) => player.relationship === 'self')
+    if (!found) {
+      found = STAND_IN
+      current = [...current, found]
+    }
     return { id: found.id, display_name: found.display_name }
   }
 
-  // The older player survives, takes the relationship of `into`, and plays
-  // as both.
+  // The older player survives, takes the relationship and the question of
+  // `into`, and plays as both.
   function merge(player: AccountPlayer, into: AccountPlayer): AnswerMeta | Refusal {
     if (player.played_against.includes(into.id)) return PLAYED_EACH_OTHER
     const [survivor, merged] =
@@ -292,7 +304,7 @@ export function mockVerifiedAccount(
         {
           ...found,
           relationship: into.relationship,
-          open_question: false,
+          open_question: into.open_question,
           played_against: [...new Set([...played_against, ...merged.played_against])],
         },
       ]
@@ -323,7 +335,7 @@ export function mockVerifiedAccount(
         player === answered ? { ...player, relationship, open_question: false } : player,
       )
     }
-    const own = current.find((player) => player.relationship === 'self')
+    const own = current.find((player) => player.relationship === 'self' && player !== answered)
     switch (request.answer) {
       case 'yes':
         if (own) return merge(answered, own)

@@ -194,9 +194,15 @@ export function answerQuestionMutation(api: ApiClient, queryClient: QueryClient)
     onSuccess: ({ players, meta }: { players: AccountPlayer[]; meta: AnswerMeta }) => {
       queryClient.setQueryData(accountPlayersQuery(api).queryKey, players)
       const self = players.find((player) => player.relationship === 'self')
+      // The answer took the account's own player away, so the next session
+      // gives it a new one. Not awaited, so the answer doesn't wait for it.
+      if (!self) {
+        void queryClient.invalidateQueries({ queryKey: sessionQuery(api).queryKey })
+        return
+      }
       const selfChanged =
-        meta.outcome === 'self' || (meta.outcome === 'merged' && meta.survivor === self?.id)
-      if (!self || !selfChanged) return
+        meta.outcome === 'self' || (meta.outcome === 'merged' && meta.survivor === self.id)
+      if (!selfChanged) return
       queryClient.setQueryData(sessionQuery(api).queryKey, (account) =>
         account && { ...account, player: { id: self.id, display_name: self.display_name } },
       )

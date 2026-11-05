@@ -111,6 +111,12 @@ export class HomePage {
     return screen.queryByRole('img', { name: displayName })
   }
 
+  // Waits for the topbar's avatar of the player named `displayName`, such
+  // as after a session request that the page didn't wait for.
+  findAvatar(displayName: string): Promise<HTMLElement> {
+    return screen.findByRole('img', { name: displayName })
+  }
+
   // The topbar's button that opens the account menu, or null.
   get accountButton(): HTMLElement | null {
     return screen.queryByRole('button', { name: 'Your account' })

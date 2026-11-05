@@ -66,10 +66,6 @@ function review(state: Review, event: ReviewEvent): Review {
 
 const start: Review = { shown: new Set(), notice: null, step: null, failed: null }
 
-function selfPlayer(players: readonly AccountPlayer[]): AccountPlayer | undefined {
-  return players.find((found) => found.relationship === 'self')
-}
-
 function alreadyAnswered(player: AccountPlayer): Notice {
   return { text: `${player.display_name} was already answered in another tab.`, icon: 'info' }
 }
@@ -185,7 +181,9 @@ function Questions() {
   const shown = new Set([...state.shown, ...queue.map((player) => player.id)])
   if (shown.size > state.shown.size) dispatch({ type: 'queued', shown })
   const total = shown.size
-  const own = selfPlayer(players)
+  // The account's own player, unless the question is about it.
+  const own = players.find((found) => found.relationship === 'self' && found.id !== current?.id)
+  const isOwn = current?.relationship === 'self'
   // Two players who played each other are two people, so the API refuses
   // to merge them.
   const playedOwn = own !== undefined && current?.played_against.includes(own.id) === true
@@ -336,6 +334,11 @@ function Questions() {
             <p className="review-outcome">
               <b>{current.display_name}</b> and <b>{own.display_name}</b> will become
               one player, your player.
+            </p>
+          )}
+          {isOwn && (
+            <p className="review-outcome">
+              <b>{current.display_name}</b> stays your player.
             </p>
           )}
           {!playedOwn && answerButton({ answer: 'yes' }, 'primary', 'Yes, this is me')}
