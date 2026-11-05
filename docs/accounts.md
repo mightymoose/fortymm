@@ -86,15 +86,17 @@ account has no `email`. A verified account has one, always lowercase.
 
 A sign-in can bring players that have played to an account with
 `adopted_from` set (see Sign-in). Each one is an open "Is this you?"
-question. No table records play yet, so today no sign-in asks it.
+question. A player has played once it's in a match, with a result or
+not (`services/player_matches.py`), counting the players merged into it.
 `services/players.py` holds the rules, and `v1/players.py` the routes.
 
 - `GET /v1/account/players` lists the account's players, its `self`
   player first, then by display name. Each has `relationship`,
   `open_question`, `match_count`, `recent_matches` and `played_against`,
   the account's other listed players that it played. It leaves out merged
-  players. No player has a match yet, so the service always gives
-  `match_count` 0 and no `recent_matches`. The games work fills them.
+  players. `match_count` and `recent_matches` (the latest five, newest
+  first) count every match the player is in, with a result or not. A
+  match's `played_at` is when it was made, until results record a time.
 - `POST /v1/account/players/{player_id}/answer` takes `{"answer": "yes"}`,
   `"no"`, `"not_mine"`, or `"same_as"` with a `player_id`. It returns the
   same list after the answer as `data`, and what the answer did as `meta`.
@@ -235,8 +237,8 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   `hand_over_players()` in `services/adoption.py`, with the guest account
   as the target.
 - `hand_over_players()` asks "Is this you?" only about a player that has
-  played. `has_activity()` in `services/adoption.py` decides it. It says no
-  for every player until the games work fills it (#124). Such a player's
+  played. `has_activity()` in `services/adoption.py` decides it: a player
+  in any match, with a result or not, has played. Such a player's
   row becomes `managed`, with `adopted_from` set to the guest account (see
   Is this you?). A player that hasn't played asks nothing. `VerifyInPlace`
   keeps it as it is, so the guest keeps its player and name. `AdoptGuest`

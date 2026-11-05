@@ -323,10 +323,11 @@ function Questions() {
           <p className="review-playedas">
             <b>{current.display_name}</b> was used on this device before you signed in.
           </p>
-          {/* No player has a match yet. The games work adds the player's
-              recent matches here, and a way to see them all. */}
+          {/* Results aren't recorded yet, so the preview gives only the
+              count. The games work adds the player's recent matches here,
+              and a way to see them all. */}
           <section className="review-preview" aria-label="Recent matches">
-            <p className="review-preview__head">No matches yet</p>
+            <p className="review-preview__head">{matchCount(current.match_count)}</p>
           </section>
         </main>
         <div className="review-actions" role="group" aria-label="Your answer">
@@ -535,4 +536,9 @@ function DestButton({
       )}
     </>
   )
+}
+
+function matchCount(count: number): string {
+  if (count === 0) return 'No matches yet'
+  return count === 1 ? '1 match' : `${count} matches`
 }

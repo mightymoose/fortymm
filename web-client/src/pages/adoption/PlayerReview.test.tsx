@@ -458,6 +458,13 @@ describe('Is this you?', () => {
     expect(page.toasts).toEqual([])
   })
 
+  it('shows how many matches the player is in', async () => {
+    mockVerifiedAccount([{ ...egret, match_count: 3 }, dove])
+    const page = await PlayerReviewPage.render()
+
+    expect(page.matchPreview).toHaveTextContent('3 matches')
+  })
+
   it('shows an empty match preview, with no way to see all matches', async () => {
     mockVerifiedAccount([egret, dove])
     const page = await PlayerReviewPage.render()

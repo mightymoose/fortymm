@@ -5,12 +5,16 @@ from ipaddress import ip_address
 
 import pytest
 from locks import wait_behind
+from match_setup import add_match
+from match_setup import add_player as add_opponent
 from sqlalchemy import Engine, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from fortymm_api.accounts import AccountId, Email, PlayerId
+from fortymm_api.matches import MatchId
 from fortymm_api.models import Account, Player, PlayerManager
 from fortymm_api.services.adoption import adopt_guest, hand_over_players
+from fortymm_api.services.matches import MatchDetails
 from fortymm_api.services.player_merge import Merged
 from fortymm_api.services.players import (
     AccountPlayer,
@@ -126,7 +130,7 @@ def players_of(database: Engine, account: AccountId) -> list[AccountPlayer]:
 def listed(
     id: PlayerId, display_name: str, relationship: Relationship, *, open_question: bool
 ) -> AccountPlayer:
-    """A listed player. No player has a match until games exist."""
+    """A listed player, in no match."""
     return AccountPlayer(
         id,
         display_name,
@@ -223,6 +227,22 @@ def test_lists_the_self_player_first_then_the_rest_by_name(
         listed(ant, "able ant 102", "managed", open_question=False),
         listed(question.player, EGRET, "managed", open_question=True),
     ]
+
+
+def test_lists_a_players_matches(migrated_database: Engine) -> None:
+    question = adopted(migrated_database)
+
+    def setup(session: Session) -> MatchId:
+        match = MatchId(uuid.uuid4())
+        details = MatchDetails(3, False, (question.player, add_opponent(session)))
+        add_match(session, match, details)
+        return match
+
+    match = in_transaction(migrated_database, setup)
+
+    [player] = players_of(migrated_database, question.account)
+    assert player.match_count == 1
+    assert [recent.id for recent in player.recent_matches] == [match]
 
 
 @SETUPS

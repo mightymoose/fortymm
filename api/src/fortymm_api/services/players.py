@@ -7,16 +7,15 @@ A merged player is hidden: the account no longer plays as it or manages it.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
 from enum import StrEnum
 from typing import Literal
-from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from fortymm_api.accounts import AccountId, PlayerId
 from fortymm_api.models import Player, PlayerManager
+from fortymm_api.services.player_matches import RecentMatch, played_matches
 from fortymm_api.services.player_merge import Merged, merge_players, opponents
 from fortymm_api.services.sessions import lock_account_for_write
 
@@ -53,12 +52,6 @@ class Settled:
 
 
 type Outcome = Settled | Merged
-
-
-@dataclass(frozen=True)
-class RecentMatch:
-    id: UUID
-    played_at: datetime
 
 
 @dataclass(frozen=True)
@@ -186,16 +179,15 @@ def _players(session: Session, account: AccountId) -> list[AccountPlayer]:
     ).all()
     listed = {id for id, *_ in found}
     played = opponents(session, listed)
-    # No games are played yet, so no player has a match. The games work
-    # fills match_count and recent_matches.
+    matches = played_matches(session, listed)
     return [
         AccountPlayer(
             id,
             display_name,
             _relationship(relationship),
             open_question,
-            match_count=0,
-            recent_matches=(),
+            match_count=matches[id].count,
+            recent_matches=matches[id].recent,
             played_against=played[id] & listed,
         )
         for id, display_name, relationship, open_question in found
