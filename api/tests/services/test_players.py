@@ -49,16 +49,32 @@ def in_transaction[T](database: Engine, work: Callable[[Session], T]) -> T:
 @dataclass(frozen=True)
 class Question:
     """An open "Is this you?" question: the account, the player it asks
-    about, and the guest account the player came from."""
+    about, and the guest account the player came from. `relationship` is
+    the player's while the question is open, and `token` is a session of
+    the account."""
 
     account: AccountId
     player: PlayerId
     adopted_from: AccountId
+    relationship: Relationship = "managed"
+    token: str = ""
 
 
 def new_guest(session: Session, display_name: str) -> tuple[AccountId, PlayerId]:
     started = start_session(session, None, ANN, new_display_name=lambda: display_name)
     return started.account.id, started.player.id
+
+
+def started_player(database: Engine, question: Question, display_name: str) -> PlayerId:
+    """The self player of the account's next session."""
+    return in_transaction(
+        database,
+        lambda session: (
+            start_session(
+                session, question.token, ANN, new_display_name=lambda: display_name
+            ).player.id
+        ),
+    )
 
 
 def adopted(database: Engine) -> Question:
@@ -69,8 +85,8 @@ def adopted(database: Engine) -> Question:
         session.add(bob)
         session.flush()
         guest, player = new_guest(session, EGRET)
-        adopt_guest(session, guest, bob.id)
-        return Question(bob.id, player, guest)
+        token = adopt_guest(session, guest, bob.id)
+        return Question(bob.id, player, guest, "managed", token)
 
     return in_transaction(database, setup)
 
@@ -80,14 +96,15 @@ def verified_in_place(database: Engine) -> Question:
     does. The question names the account itself."""
 
     def setup(session: Session) -> Question:
-        guest, player = new_guest(session, EGRET)
+        started = start_session(session, None, ANN, new_display_name=lambda: EGRET)
+        guest = started.account.id
         session.execute(
             update(Account)
             .where(Account.id == guest)
             .values(email=Email("ann@example.com"))
         )
         hand_over_players(session, guest, guest)
-        return Question(guest, player, guest)
+        return Question(guest, started.player.id, guest, "self", started.token)
 
     return in_transaction(database, setup)
 
@@ -211,7 +228,7 @@ def test_lists_a_player_with_an_open_question(
     question = setup(migrated_database)
 
     assert players_of(migrated_database, question.account) == [
-        listed(question.player, EGRET, "managed", open_question=True)
+        listed(question.player, EGRET, question.relationship, open_question=True)
     ]
 
 
@@ -262,7 +279,7 @@ def test_yes_makes_the_player_the_accounts_own(
 
 
 @SETUPS
-def test_no_keeps_the_player_as_one_the_account_manages(
+def test_no_makes_the_player_one_the_account_manages(
     migrated_database: Engine, setup: Setup
 ) -> None:
     question = setup(migrated_database)
@@ -292,11 +309,10 @@ def test_not_mine_takes_the_player_off_the_account_and_keeps_it(
     assert exists(migrated_database, "accounts", question.adopted_from)
 
 
-@SETUPS
 def test_yes_merges_the_accounts_newer_self_player_into_the_player(
-    migrated_database: Engine, setup: Setup
+    migrated_database: Engine,
 ) -> None:
-    question = setup(migrated_database)
+    question = adopted(migrated_database)
     dove = add_player(migrated_database, question.account, "dreamy dove 412", "self")
     created(migrated_database, question.player, days_ago=1)
 
@@ -314,11 +330,10 @@ def test_yes_merges_the_accounts_newer_self_player_into_the_player(
     ]
 
 
-@SETUPS
 def test_yes_merges_the_player_into_the_accounts_older_self_player(
-    migrated_database: Engine, setup: Setup
+    migrated_database: Engine,
 ) -> None:
-    question = setup(migrated_database)
+    question = adopted(migrated_database)
     zebra = add_player(migrated_database, question.account, "zany zebra 101", "self")
     created(migrated_database, zebra, days_ago=1)
 
@@ -333,6 +348,99 @@ def test_yes_merges_the_player_into_the_accounts_older_self_player(
     assert self_players(migrated_database, question.account) == [zebra]
     assert manager_rows(migrated_database, question.player) == [
         (question.account, "managed", None)
+    ]
+
+
+def test_yes_on_the_accounts_own_player_keeps_it(migrated_database: Engine) -> None:
+    question = verified_in_place(migrated_database)
+
+    found = answer(migrated_database, question, Answer.YES)
+
+    assert found == Answered(
+        Settled("self"), [listed(question.player, EGRET, "self", open_question=False)]
+    )
+    assert merged_into(migrated_database, question.player) is None
+    assert started_player(migrated_database, question, "zany zebra 101") == (
+        question.player
+    )
+    assert self_players(migrated_database, question.account) == [question.player]
+
+
+def test_the_accounts_own_player_with_an_open_question_stays_its_player(
+    migrated_database: Engine,
+) -> None:
+    question = verified_in_place(migrated_database)
+
+    assert started_player(migrated_database, question, "zany zebra 101") == (
+        question.player
+    )
+    assert manager_rows(migrated_database, question.player) == [
+        (question.account, "self", question.account)
+    ]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [lambda ant: Answer.NO, lambda ant: Answer.NOT_MINE, SameAs],
+    ids=["no", "not_mine", "same_as"],
+)
+def test_an_answer_but_yes_on_the_accounts_own_player_leaves_it_none(
+    migrated_database: Engine, reply: Callable[[PlayerId], Reply]
+) -> None:
+    question = verified_in_place(migrated_database)
+    ant = add_player(migrated_database, question.account, "able ant 102", "managed")
+
+    answer(migrated_database, question, reply(ant))
+
+    assert self_players(migrated_database, question.account) == []
+    started = started_player(migrated_database, question, "zany zebra 101")
+    assert started not in (question.player, ant)
+    assert self_players(migrated_database, question.account) == [started]
+
+
+def test_yes_into_a_self_player_with_an_open_question_keeps_it_open(
+    migrated_database: Engine,
+) -> None:
+    question = verified_in_place(migrated_database)
+    badger = add_player(
+        migrated_database,
+        question.account,
+        "brave badger 214",
+        "managed",
+        adopted_from=question.adopted_from,
+    )
+    created(migrated_database, badger, days_ago=1)
+
+    found = answer(
+        migrated_database,
+        Question(question.account, badger, question.adopted_from),
+        Answer.YES,
+    )
+
+    assert found == Answered(
+        Merged(survivor=badger, merged=question.player),
+        [listed(badger, "brave badger 214", "self", open_question=True)],
+    )
+
+
+def test_adoption_into_a_self_player_with_an_open_question_keeps_it_open(
+    migrated_database: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    question = verified_in_place(migrated_database)
+    monkeypatch.setattr(
+        "fortymm_api.services.adoption.has_activity", lambda session, player: False
+    )
+
+    def second_device(session: Session) -> PlayerId:
+        guest, player = new_guest(session, "brave badger 214")
+        adopt_guest(session, guest, question.account)
+        return player
+
+    badger = in_transaction(migrated_database, second_device)
+
+    assert merged_into(migrated_database, badger) == question.player
+    assert players_of(migrated_database, question.account) == [
+        listed(question.player, EGRET, "self", open_question=True)
     ]
 
 

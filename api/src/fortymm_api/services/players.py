@@ -1,7 +1,8 @@
 """The account's players, and its answers to "Is this you?".
 
 A question is open while the account's player_managers row for the player
-has `adopted_from` set. Sign-in sets it, through hand_over_players().
+has `adopted_from` set. Sign-in sets it, through hand_over_players(). The
+row may be `self` or `managed` while the question is open.
 
 A merged player is hidden: the account no longer plays as it or manages it.
 """
@@ -23,10 +24,11 @@ type Relationship = Literal["self", "managed"]
 
 
 class Answer(StrEnum):
-    # The row becomes 'self'. If the account has a self player, the two
-    # players merge, and the survivor's row becomes 'self'.
+    # The row becomes 'self'. If the account has another self player, the
+    # two players merge, and the survivor's row becomes 'self'.
     YES = "yes"
-    # The row stays 'managed'.
+    # The row becomes 'managed'. If it was the self player, the account has
+    # none until its next session makes one.
     NO = "no"
     # The row goes. The player stays, with no manager.
     NOT_MINE = "not_mine"
@@ -149,13 +151,14 @@ def answer_question(
                 (id for id, other in rows.items() if other.relationship == "self"),
                 None,
             )
-            if self_player is None:
+            if self_player is None or self_player == player:
                 row.relationship = "self"
                 row.adopted_from = None
                 outcome = Settled("self")
             else:
                 outcome = merge_players(session, account, player, self_player)
         case Answer.NO:
+            row.relationship = "managed"
             row.adopted_from = None
             outcome = Settled("managed")
         case Answer.NOT_MINE:

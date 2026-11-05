@@ -276,10 +276,16 @@ def test_verify_in_place_asks_is_this_you_about_a_player_that_has_played(
     guest = new_guest(migrated_database)
     played_a_match(migrated_database, guest.player.id)
 
-    sign_in(migrated_database, guest.token, identity("a|1", "ann@example.com"))
+    new_token = sign_in(
+        migrated_database, guest.token, identity("a|1", "ann@example.com")
+    )
 
     assert managers_of_players_from(migrated_database, guest.account.id) == [
-        (guest.account.id, "managed")
+        (guest.account.id, "self")
+    ]
+    assert resume(migrated_database, new_token).player == guest.player
+    assert players_listed(migrated_database, guest.account.id) == [
+        (guest.player.id, "self", True)
     ]
 
 

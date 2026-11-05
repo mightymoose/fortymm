@@ -26,9 +26,11 @@ def hand_over_players(session: Session, guest: AccountId, into: AccountId) -> No
     """Give `into` every player the guest account manages. Verify in place
     passes the guest account as `into`.
 
-    A player that has played becomes `managed`, with `adopted_from` set to
-    the guest account. That sets up "Is this you?": a guest's player could be
-    a child who played on a parent's computer.
+    A player that has played gets `adopted_from` set to the guest account.
+    That sets up "Is this you?": a guest's player could be a child who played
+    on a parent's computer. Adoption makes it `managed`. Verify in place
+    keeps its relationship, so the account plays as its self player until
+    the person answers.
 
     A player that hasn't played asks nothing. Verify in place keeps it as it
     is, so the guest keeps its player and name. Adoption merges a self
@@ -60,9 +62,14 @@ def hand_over_players(session: Session, guest: AccountId, into: AccountId) -> No
             PlayerManager.account_id == guest, PlayerManager.player_id == player
         )
         if has_activity(session, player):
-            session.execute(
-                row.values(account_id=into, relationship="managed", adopted_from=guest)
-            )
+            if guest == into:
+                session.execute(row.values(adopted_from=guest))
+            else:
+                session.execute(
+                    row.values(
+                        account_id=into, relationship="managed", adopted_from=guest
+                    )
+                )
         elif guest == into:
             continue
         elif relationship == "self" and self_player is not None:
