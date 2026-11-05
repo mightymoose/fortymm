@@ -19,3 +19,5 @@ POST /v1/auth/logout removed `#/components/schemas/LogoutRequest, subschema #2` 
 GET /v1/admin/accounts the response property `data/items/email` became nullable for the status `200`
 GET /v1/admin/accounts/{account_id} the response property `data/email` became nullable for the status `200`
 PUT /v1/admin/accounts/{account_id}/roles the response property `data/email` became nullable for the status `200`
+# #231: sending a signed result needs a session holding matches.score.
+POST /v1/matches/{match_id}/approvals the endpoint no longer allows anonymous access and now only accepts `session`
