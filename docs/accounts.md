@@ -86,7 +86,8 @@ account has no `email`. A verified account has one, always lowercase.
 
 A sign-in can bring players that have played to an account with
 `adopted_from` set (see Sign-in). Each one is an open "Is this you?"
-question. A player has played once it's in a match, with a result or
+question. The row may be `self` or `managed` while the question is
+open. A player has played once it's in a match, with a result or
 not (`services/player_matches.py`), counting the players merged into it.
 `services/players.py` holds the rules, and `v1/players.py` the routes.
 
@@ -107,9 +108,11 @@ not (`services/player_matches.py`), counting the players merged into it.
 - `POST /v1/account/players/{player_id}/answer` takes `{"answer": "yes"}`,
   `"no"`, `"not_mine"`, or `"same_as"` with a `player_id`. It returns the
   same list after the answer as `data`, and what the answer did as `meta`.
-  `yes` makes the row `self`. If the account already has a `self` player,
-  `yes` merges the two players instead (see below). `no` keeps it
-  `managed`. `not_mine` deletes the `player_managers` row. The player
+  `yes` makes the row `self`. If the account already has another `self`
+  player, `yes` merges the two players instead (see below). `no` makes it
+  `managed`. If it was the account's `self` player, the account has none,
+  and the next `POST /v1/session` makes one. `not_mine` deletes the
+  `player_managers` row. The player
   stays, with no manager. `same_as` merges it with the player that
   `player_id` names. That player must be a `managed` player of the account
   with a closed question. A merge would close an open question with no
@@ -137,10 +140,11 @@ not (`services/player_matches.py`), counting the players merged into it.
   another player the account manages: the `self` player for `yes`, a
   `managed` player for `same_as`. The original player survives. It is the
   one created first (`players.created_at`, then `id`). It keeps its id and
-  display name. Its row takes the relationship of the player it merged
-  into, so a `yes` keeps the account's `self` player. The other player gets
-  `merged_into` set to the survivor and gives up its display name. Its row
-  stays, as `managed` (`STAYS_ON_PLAYER_MERGE`). The merge also points
+  display name. Its row takes the relationship and the `adopted_from` of
+  the player it merged into. So a `yes` keeps the account's `self` player,
+  and a merge never closes that player's open question. The other player
+  gets `merged_into` set to the survivor and gives up its display name. Its
+  row stays, as `managed` with no question (`STAYS_ON_PLAYER_MERGE`). The merge also points
   every player already merged into the merged player at the survivor. So
   `merged_into` always names a player that isn't merged.
 - Two players who played each other are two people, so they never merge.
@@ -246,8 +250,10 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
 - `hand_over_players()` asks "Is this you?" only about a player that has
   played. `has_activity()` in `services/adoption.py` decides it: a player
   in any match, with a result or not, has played. Such a player's
-  row becomes `managed`, with `adopted_from` set to the guest account (see
-  Is this you?). A player that hasn't played asks nothing. `VerifyInPlace`
+  row gets `adopted_from` set to the guest account (see Is this you?).
+  `AdoptGuest` makes it `managed`. `VerifyInPlace` keeps its relationship,
+  so the account keeps playing as its `self` player until the person
+  answers. A player that hasn't played asks nothing. `VerifyInPlace`
   keeps it as it is, so the guest keeps its player and name. `AdoptGuest`
   merges the guest's `self` player into the target account's `self`
   player, as "Yes" does, so the older player survives. If the target

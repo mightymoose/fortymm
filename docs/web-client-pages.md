@@ -115,7 +115,8 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   out. A match with no opponents names "another player".
   "Yes, this is me" answers `yes`. A player whose `played_against` names
   the account's `self` player gets no "Yes, this is me", and the page says
-  that it played that player. "Someone else played" asks "Do you
+  that it played that player. When the question is about the account's
+  `self` player itself, the page says it stays your player. "Someone else played" asks "Do you
   manage this player?". There "Remove from my account" answers `not_mine`,
   and Back goes back. "I manage this player" answers `no`, unless the
   account manages another player with a closed question. Then it asks
@@ -129,12 +130,14 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   flight, so a second quick click sends nothing. An answer button also
   ignores a click whose `detail` is above 1. That is the second click of a
   double click, which can land on the next player's button. A keyboard
-  press has `detail` 0. "Yes" says it merges the player into the `self`
+  press has `detail` 0. "Yes" says it merges the player into the other `self`
   player of the players list. An answer first cancels a players request
   in flight, because that request read the list from before the answer.
   An answer puts the API's list in the players query. If `meta` says the
   account's `self` player changed, the answer also puts the list's `self`
-  player in the session's account, so the topbar shows it. The
+  player in the session's account, so the topbar shows it. If the list has
+  no `self` player, the session fetches again, so `POST /v1/session` makes
+  one and the topbar shows it. The
   confirmation comes from `meta`, such as "brave badger 214 merged into
   excited egret 387, your player." A merge into a `managed` player drops
   ", your player". The merged player can be the reviewed one or the other
