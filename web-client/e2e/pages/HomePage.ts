@@ -13,9 +13,6 @@ export class HomePage {
   readonly accountMenu: Locator
   readonly guestSignOutDialog: Locator
 
-  // The reminder of the players still to review, by its title.
-  readonly reminder: Locator
-
   // The sidebar, a tab bar below 900px, and the page's own New match link.
   readonly nav: Locator
   readonly pageNewMatchLink: Locator
@@ -29,7 +26,6 @@ export class HomePage {
     this.guestSignOutDialog = page.getByRole('dialog', {
       name: 'Sign out of this guest account?',
     })
-    this.reminder = page.getByText(/^\d+ players? to review$/)
     this.nav = page.getByRole('navigation', { name: 'Main' })
     this.pageNewMatchLink = page.getByRole('main').getByRole('link', { name: 'New match' })
   }

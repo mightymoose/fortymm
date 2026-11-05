@@ -38,7 +38,7 @@ declare module '@tanstack/react-router' {
 declare module '@tanstack/history' {
   interface HistoryState {
     // Set by the player review when it goes to Home, so Home moves focus to
-    // what comes next.
+    // its title.
     fromReview?: true
     // Set by the scoring page's route when it drops a fragment it can't
     // read, so the page says why its scores start empty.

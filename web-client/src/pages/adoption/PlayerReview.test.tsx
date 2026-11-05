@@ -74,6 +74,18 @@ function playedEachOther(a: AccountPlayer, b: AccountPlayer): [AccountPlayer, Ac
   ]
 }
 
+// Records each players request, and answers it with the egret.
+function recordPlayersRequests(): Request[] {
+  const requests: Request[] = []
+  server.use(
+    http.get(`${API_BASE_URL}/v1/account/players`, ({ request }) => {
+      requests.push(request)
+      return HttpResponse.json<components['schemas']['AccountPlayersResponse']>({ data: [egret] })
+    }),
+  )
+  return requests
+}
+
 describe('Is this you?', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -99,21 +111,33 @@ describe('Is this you?', () => {
     const page = await PlayerReviewPage.render('/?signed_in=1')
 
     expect(page.href).toBe('/')
-    expect(page.reminderTitle).toBeNull()
+    expect(new HomePage(page.router).title).toHaveTextContent('What’s coming, and when.')
   })
 
-  it('reminds on Home, and its link opens the review', async () => {
-    mockVerifiedAccount([egret, badger, dove])
+  it('takes signed_in out of the URL for a guest, and asks for no players', async () => {
+    const requests = recordPlayersRequests()
+    const page = await PlayerReviewPage.render('/?signed_in=1')
+
+    expect(requests).toEqual([])
+    expect(page.href).toBe('/')
+  })
+
+  it('asks for no players on a visit to Home that doesn’t follow a sign-in', async () => {
+    mockVerifiedAccount([egret, dove])
+    const requests = recordPlayersRequests()
     const page = await PlayerReviewPage.render('/')
 
+    expect(requests).toEqual([])
     expect(page.href).toBe('/')
-    expect(page.reminderTitle).toBe('2 players to review')
+    expect(new HomePage(page.router).title).toHaveTextContent('What’s coming, and when.')
+  })
 
-    await page.review()
+  it('offers only answers, with no way to leave without one', async () => {
+    mockVerifiedAccount([egret, dove])
+    const page = await PlayerReviewPage.render()
 
-    expect(page.href).toBe('/review-players')
-    expect(page.heading).toHaveTextContent('Is this you?')
-    expect(page.counter).toBe('Player 1 of 2')
+    expect(page.actions).toEqual(['Yes, this is me', 'Someone else played'])
+    expect(page.text).not.toContain('Review later')
   })
 
   it.each([
@@ -137,7 +161,6 @@ describe('Is this you?', () => {
     expect(api.answers).toEqual([{ playerId: egret.id, answer }])
     expect(page.href).toBe('/')
     expect(page.toasts).toEqual([toast])
-    expect(page.reminderTitle).toBeNull()
     expect(new HomePage(page.router).title).toHaveFocus()
   })
 
@@ -209,18 +232,6 @@ describe('Is this you?', () => {
     expect(api.answers).toEqual([])
   })
 
-  it('reviews later without an answer, and Home keeps the reminder', async () => {
-    const api = mockVerifiedAccount([egret, dove])
-    const page = await PlayerReviewPage.render()
-
-    await page.click('Review later')
-
-    expect(api.answers).toEqual([])
-    expect(page.href).toBe('/')
-    expect(page.reminderTitle).toBe('1 player to review')
-    expect(page.reviewLink).toHaveFocus()
-  })
-
   it('says under the button that a failed answer wasn’t saved, and stays on the step', async () => {
     const api = mockVerifiedAccount([egret, dove], { failAnswers: true })
     const page = await PlayerReviewPage.render()
@@ -285,8 +296,9 @@ describe('Is this you?', () => {
 
   it('keeps an answered player gone when an older players request comes back after it', async () => {
     const api = mockVerifiedAccount([egret, badger, dove])
-    const page = await PlayerReviewPage.render('/')
-    // Home's players are a minute old, so the review fetches them again.
+    const page = await PlayerReviewPage.render()
+    // The first visit's players are a minute old, so the second visit
+    // fetches them again.
     const now = Date.now()
     vi.spyOn(Date, 'now').mockReturnValue(now + 60_000)
     let release = () => {}
@@ -303,7 +315,7 @@ describe('Is this you?', () => {
         { once: true },
       ),
     )
-    await page.review()
+    await page.reopen()
 
     await page.click('Yes, this is me')
     release()
@@ -317,7 +329,7 @@ describe('Is this you?', () => {
 
   it('names the self player of the latest players list in what "Yes" does', async () => {
     mockVerifiedAccount([egret, dove])
-    const page = await PlayerReviewPage.render('/')
+    const page = await PlayerReviewPage.render()
     vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000)
     // Another tab merged the dove into Ama's older player.
     server.use(
@@ -326,7 +338,7 @@ describe('Is this you?', () => {
       ),
     )
 
-    await page.review()
+    await page.reopen()
 
     expect(page.answers).toHaveTextContent(
       `${egret.display_name} and ${ama.display_name} will become one player, your player.`,
@@ -606,7 +618,6 @@ describe('Is this you?', () => {
     const saving = within(page.answers).getByRole('button', { name: 'Saving…' })
     expect(saving).toHaveAttribute('aria-busy', 'true')
     expect(page.button('Someone else played')).toBeDisabled()
-    expect(page.button('Review later')).toBeDisabled()
 
     release()
     await page.settle()
@@ -615,27 +626,20 @@ describe('Is this you?', () => {
     expect(page.toasts).toEqual([`${dove.display_name} merged into ${egret.display_name}, your player.`])
   })
 
-  it('leaves for Home when no player waits', async () => {
+  it('leaves for Home when no player waits, and Home’s title takes focus', async () => {
     mockVerifiedAccount([ama])
     const page = await PlayerReviewPage.render()
 
     expect(page.href).toBe('/')
-    expect(page.reminderTitle).toBeNull()
+    expect(new HomePage(page.router).title).toHaveFocus()
   })
 
   it('asks a guest for no players, and leaves for Home', async () => {
-    const requests: Request[] = []
-    server.use(
-      http.get(`${API_BASE_URL}/v1/account/players`, ({ request }) => {
-        requests.push(request)
-        return HttpResponse.json({ data: [egret] })
-      }),
-    )
+    const requests = recordPlayersRequests()
     const page = await PlayerReviewPage.render()
 
     expect(requests).toEqual([])
     expect(page.href).toBe('/')
-    expect(page.reminderTitle).toBeNull()
   })
 
   it('shows a skeleton while the players load, then the question', async () => {
@@ -671,13 +675,20 @@ describe('Is this you?', () => {
     expect(page.heading).toHaveTextContent('Is this you?')
   })
 
-  it('keeps Home working when its reminder can’t load', async () => {
+  it('keeps Home working when the players after a sign-in can’t load, and Try again opens the review', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     mockVerifiedAccount([egret, dove])
     failPlayersOnce(500)
-    const page = await PlayerReviewPage.render('/')
+    const page = await PlayerReviewPage.render('/?signed_in=1')
 
-    expect(page.loadError('Something went wrong')).not.toBeNull()
+    const alert = page.loadError('Something went wrong')
+    expect(alert).not.toBeNull()
     expect(new HomePage(page.router).title).toHaveTextContent('What’s coming, and when.')
+
+    await page.tryAgain(alert!)
+    await page.findQuestion()
+
+    expect(page.href).toBe('/review-players')
+    expect(page.heading).toHaveTextContent('Is this you?')
   })
 })
