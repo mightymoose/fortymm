@@ -40,6 +40,9 @@ services:
       # The browser can't resolve `oidc`, so it reaches the mock's sign-in page
       # through the web-client dev server's /oidc proxy.
       AUTH0_AUTHORIZE_URL: /oidc/default/authorize
+      # The mock has no Auth0 /v2/logout, so sign-out uses its OpenID Connect
+      # end-session endpoint, which sends the browser on to /signed-out.
+      AUTH0_LOGOUT_URL: /oidc/default/endsession
     command:
       - uv
       - run

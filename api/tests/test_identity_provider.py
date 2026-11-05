@@ -116,3 +116,17 @@ def test_a_provider_that_stops_answering_fails_the_exchange(
 
     with pytest.raises(ExchangeFailed):
         provider.exchange("code", VERIFIER, REDIRECT_URI, "n1")
+
+
+def test_an_end_session_url_signs_out_through_it() -> None:
+    domain = os.environ["AUTH0_DOMAIN"]
+    provider = IdentityProvider(
+        domain, "fortymm-test", "secret", end_session_url=f"{domain}/endsession"
+    )
+
+    response = httpx.get(
+        provider.logout_url("https://testserver/signed-out"), follow_redirects=False
+    )
+
+    assert response.status_code == 302
+    assert response.headers["Location"] == "https://testserver/signed-out"

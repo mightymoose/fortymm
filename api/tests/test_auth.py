@@ -40,6 +40,7 @@ def app(
     # The tests reach the mock's sign-in page directly, not through the dev
     # server's proxy.
     monkeypatch.delenv("AUTH0_AUTHORIZE_URL", raising=False)
+    monkeypatch.delenv("AUTH0_LOGOUT_URL", raising=False)
     app = create_app()
     with TestClient(app):
         yield app

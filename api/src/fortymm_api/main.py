@@ -208,6 +208,7 @@ def identity_provider_from_env() -> IdentityProvider | None:
         os.environ.get("AUTH0_CLIENT_ID", ""),
         os.environ.get("AUTH0_CLIENT_SECRET", ""),
         os.environ.get("AUTH0_AUTHORIZE_URL") or None,
+        os.environ.get("AUTH0_LOGOUT_URL") or None,
     )
 
 
