@@ -19,3 +19,5 @@ class Permission(StrEnum):
     ACCOUNT_ROLES_MANAGE = "account_roles.manage"
     SIGNING_KEYS_REVOKE = "signing_keys.revoke"
     MATCHES_CREATE = "matches.create"
+    MATCHES_VIEW = "matches.view"
+    PLAYERS_VIEW = "players.view"

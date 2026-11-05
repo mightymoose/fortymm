@@ -192,7 +192,7 @@ describe('roles', () => {
     expect(page.rows).toEqual([
       [
         'AdministratorEverything on the admin page.',
-        'account_roles.manageadmin.viewmatches.createroles.managesigning_keys.revoke',
+        'account_roles.manageadmin.viewmatches.creatematches.viewplayers.viewroles.managesigning_keys.revoke',
         '1',
         'EditDelete…',
       ],
@@ -559,7 +559,7 @@ describe('a player’s page', () => {
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent('Something went wrong'),
     )
-    expect(screen.getByRole('link', { name: 'Players' })).toBeInTheDocument()
+    expect(page.link('Players')).toBeInTheDocument()
     await page.user.click(screen.getByRole('button', { name: 'Try again' }))
     expect(await page.findHeading('excited egret 387')).toBeInTheDocument()
   })

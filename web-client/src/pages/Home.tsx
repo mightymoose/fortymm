@@ -5,6 +5,7 @@ import { can, Permission } from '../api/permissions'
 import { sessionQuery } from '../api/queries'
 import { Icon, type IconName } from '../components/Icon'
 import { AdoptionReview } from './adoption/AdoptionReview'
+import { useNarrowLayout } from './useNarrowLayout'
 
 type Stage = 'ready' | 'building' | 'next' | 'later'
 
@@ -43,7 +44,8 @@ const parts: readonly { title: string; body: string; icon: IconName; stage: Stag
   },
 ]
 
-// The "Is this you?" reminder over the roadmap. Back from the review, focus
+// The "Is this you?" reminder over the roadmap. Below 900px the New match
+// link is in the tab bar instead (AppShell). Back from the review, focus
 // goes to the reminder's link while questions remain, or else to the title.
 export function Home() {
   const reviewLink = useRef<HTMLAnchorElement>(null)
@@ -51,6 +53,7 @@ export function Home() {
   const fromReview = useRouterState({ select: (state) => state.location.state.fromReview })
   const { api } = useRouteContext({ from: '__root__' })
   const { data: account } = useSuspenseQuery(sessionQuery(api))
+  const narrow = useNarrowLayout()
 
   useEffect(() => {
     if (fromReview) (reviewLink.current ?? title.current)?.focus()
@@ -59,7 +62,7 @@ export function Home() {
   return (
     <div className="home">
       <AdoptionReview linkRef={reviewLink} />
-      {can(account, Permission.matchesCreate) && (
+      {!narrow && can(account, Permission.matchesCreate) && (
         <div>
           <Link to="/matches/new" className="fm-btn fm-btn--primary">
             <Icon name="plus" />

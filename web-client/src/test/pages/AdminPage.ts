@@ -48,9 +48,14 @@ export class AdminPage {
     return screen.queryByRole('tab', { selected: true })?.textContent ?? null
   }
 
-  // A link in the panel or, on an account's page, in its breadcrumb.
+  // A link in the panel or, on an account's page, in its breadcrumb, not in
+  // the sidebar, which has its own Players link.
   async follow(name: string): Promise<void> {
-    await this.user.click(screen.getByRole('link', { name }))
+    await this.user.click(this.link(name))
+  }
+
+  link(name: string): HTMLElement {
+    return within(screen.getByRole('main')).getByRole('link', { name })
   }
 
   // An account's or a player's page: its heading, once it loads.

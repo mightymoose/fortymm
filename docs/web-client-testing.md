@@ -44,7 +44,8 @@ key. `mockSigningKeys(answers)` records each registration and answers
 with `answers` in order, each a `KeyAnswer` (`live`, `revoked` or
 `taken`, a 409), then `live`. With `hold`, each answer waits for
 `release()`. A default handler answers `GET /v1/matches/opponents` with
-no players. `mockMatches()` gives the session's account `matches.create`.
+no players. `grantSession(...permissions)` gives the default guest
+those permissions. `mockMatches()` gives the session's account `matches.create`.
 It answers the recent opponents with `recent`
 and a search from `everyone`, and records each `POST /v1/matches` in
 `creates`. It answers it with `create`: `created`, `{ refused: title }`

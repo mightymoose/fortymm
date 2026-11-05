@@ -8,6 +8,8 @@ export const Permission = {
   accountRolesManage: 'account_roles.manage',
   signingKeysRevoke: 'signing_keys.revoke',
   matchesCreate: 'matches.create',
+  matchesView: 'matches.view',
+  playersView: 'players.view',
 } as const
 
 export type BuiltInPermission = (typeof Permission)[keyof typeof Permission]

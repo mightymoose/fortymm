@@ -311,8 +311,8 @@ routes, under `/v1/admin`.
   letters, digits and `_`, joined by dots, such as `games.record`, at most
   64 characters. The key never changes, because code checks it by key.
 - The built-in permissions are the ones the code checks: `admin.view`,
-  `roles.manage`, `account_roles.manage`, `signing_keys.revoke` and
-  `matches.create`. They are the members of
+  `roles.manage`, `account_roles.manage`, `signing_keys.revoke`,
+  `matches.create`, `matches.view` and `players.view`. They are the members of
   `Permission` in `permissions.py`, and their rows have `built_in` set. A
   test fails if the two differ, so a new check in code needs a migration
   that adds its row. Nobody can delete a built-in permission (409).
@@ -355,7 +355,8 @@ routes, under `/v1/admin`.
   permissions. It grants it to `mightymoose@fortymm.com`: to the account
   if one exists, or else as an email grant. In dev, signing in through the
   mock as that email makes an administrator. The migrations that added
-  `signing_keys.revoke` and `matches.create` granted each to every role
+  `signing_keys.revoke`, `matches.create`, `matches.view` and
+  `players.view` granted each to every role
   that granted `account_roles.manage`, which could already grant itself
   anything.
 - `GET /v1/admin/accounts` lists verified accounts by email, at most 50,
