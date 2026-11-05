@@ -97,6 +97,13 @@ not (`services/player_matches.py`), counting the players merged into it.
   players. `match_count` and `recent_matches` (the latest five, newest
   first) count every match the player is in, with a result or not. A
   match's `played_at` is when it was made, until results record a time.
+  Its `opponents` are the display names of the players on the side that
+  doesn't name the player, each named by its survivor, in name order.
+  `result` comes from the match's current result once it has one, and is
+  absent before: `won`, and `games`, the games the player's side won and
+  then the other side's. A retired match's unfinished last game counts
+  for nobody, and the side that didn't retire won. A match whose two sides
+  both merged into the player has no opponents and no `result`.
 - `POST /v1/account/players/{player_id}/answer` takes `{"answer": "yes"}`,
   `"no"`, `"not_mine"`, or `"same_as"` with a `player_id`. It returns the
   same list after the answer as `data`, and what the answer did as `meta`.
