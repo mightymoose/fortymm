@@ -103,6 +103,13 @@ export class PlayerReviewPage {
     return screen.getByRole('region', { name: 'Recent matches' })
   }
 
+  // Each match the preview lists, as its opponent, outcome and day · time.
+  get previewMatches(): string[][] {
+    return within(this.matchPreview)
+      .queryAllByRole('listitem')
+      .map((match) => [...match.children].map((part) => part.textContent ?? ''))
+  }
+
   // The confirmation of the last answer, while more players remain.
   get notice(): string | null {
     return within(this.answers).queryByRole('status')?.textContent ?? null

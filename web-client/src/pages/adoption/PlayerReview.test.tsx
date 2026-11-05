@@ -1,6 +1,6 @@
 import { act, fireEvent, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { sessionQuery } from '../../api/queries'
 import type { components } from '../../api/schema'
 import { HomePage } from '../../test/pages/HomePage'
@@ -68,6 +68,8 @@ const PLAYED_EACH_OTHER = 'These players played each other, so they are two peop
 
 // `a` and `b` as the players list gives them once they played each other.
 type AccountPlayer = components['schemas']['AccountPlayer']
+type RecentMatch = components['schemas']['RecentMatch']
+type RecentResult = components['schemas']['RecentResult']
 function playedEachOther(a: AccountPlayer, b: AccountPlayer): [AccountPlayer, AccountPlayer] {
   return [
     { ...a, played_against: [...a.played_against, b.id] },
@@ -477,11 +479,89 @@ describe('Is this you?', () => {
     expect(page.toasts).toEqual([])
   })
 
-  it('shows how many matches the player is in', async () => {
-    mockVerifiedAccount([{ ...egret, match_count: 3 }, dove])
-    const page = await PlayerReviewPage.render()
+  describe('the match preview', () => {
+    // Noon, so every match below was today.
+    const NOW = new Date(2026, 10, 5, 12)
+    const TODAY = /^Today · /
 
-    expect(page.matchPreview).toHaveTextContent('3 matches')
+    function played(
+      minutesAgo: number,
+      opponents: string[],
+      result?: RecentResult,
+    ): RecentMatch {
+      return {
+        id: crypto.randomUUID(),
+        played_at: new Date(NOW.getTime() - minutesAgo * 60_000).toISOString(),
+        opponents,
+        ...(result && { result }),
+      }
+    }
+
+    function withMatches(recent: RecentMatch[], count = recent.length): AccountPlayer {
+      return { ...egret, match_count: count, recent_matches: recent }
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(NOW)
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('shows a match with no result', async () => {
+      mockVerifiedAccount([withMatches([played(30, ['Sam'])]), dove])
+      const page = await PlayerReviewPage.render()
+
+      expect(page.matchPreview).toHaveTextContent('1 match today, against Sam')
+      expect(page.previewMatches).toEqual([['Sam', 'No result', expect.stringMatching(TODAY)]])
+      expect(page.matchPreview).not.toHaveTextContent('earlier')
+    })
+
+    it("sums up today's matches and shows each one's score", async () => {
+      mockVerifiedAccount([
+        withMatches([
+          played(10, ['Sam'], { won: true, games: [3, 1] }),
+          played(40, ['Kofi'], { won: false, games: [1, 3] }),
+          played(70, ['Sam']),
+        ]),
+        dove,
+      ])
+      const page = await PlayerReviewPage.render()
+
+      expect(page.matchPreview).toHaveTextContent('3 matches today, last one against Sam')
+      expect(page.previewMatches).toEqual([
+        ['Sam', 'Won 3–1', expect.stringMatching(TODAY)],
+        ['Kofi', 'Lost 1–3', expect.stringMatching(TODAY)],
+        ['Sam', 'No result', expect.stringMatching(TODAY)],
+      ])
+    })
+
+    it('counts the matches it doesn’t list', async () => {
+      const recent = [1, 2, 3, 4, 5].map((n) => played(n * 10, ['Sam']))
+      mockVerifiedAccount([withMatches(recent, 7), dove])
+      const page = await PlayerReviewPage.render()
+
+      expect(page.matchPreview).toHaveTextContent('7 matches, last one today against Sam')
+      expect(page.previewMatches).toHaveLength(5)
+      expect(page.matchPreview).toHaveTextContent('2 earlier matches')
+    })
+
+    it('names a match with no opponent another player', async () => {
+      mockVerifiedAccount([withMatches([played(30, [])]), dove])
+      const page = await PlayerReviewPage.render()
+
+      expect(page.matchPreview).toHaveTextContent('1 match today, against another player')
+      expect(page.previewMatches).toEqual([['Another player', 'No result', expect.stringMatching(TODAY)]])
+    })
+
+    it('joins the players of a side', async () => {
+      mockVerifiedAccount([withMatches([played(30, ['Kofi', 'Sam'])]), dove])
+      const page = await PlayerReviewPage.render()
+
+      expect(page.matchPreview).toHaveTextContent('1 match today, against Kofi & Sam')
+    })
   })
 
   it('shows an empty match preview, with no way to see all matches', async () => {
