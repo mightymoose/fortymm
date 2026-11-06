@@ -1,7 +1,7 @@
-import { act, fireEvent, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { sessionQuery } from '../../api/queries'
+import { accountPlayersQuery, sessionQuery } from '../../api/queries'
 import type { components } from '../../api/schema'
 import { HomePage } from '../../test/pages/HomePage'
 import { PlayerReviewPage, type ReviewAction } from '../../test/pages/PlayerReviewPage'
@@ -331,6 +331,34 @@ describe('Is this you?', () => {
 
     await page.click('I manage this player')
 
+    const home = new HomePage(page.router)
+    expect(home.avatar(STAND_IN.display_name)).toHaveTextContent('CC')
+    expect(home.avatar(egret.display_name)).toBeNull()
+  })
+
+  it('shows the account’s new player when the app loads again with no signal', async () => {
+    mockVerifiedAccount([egretOwn])
+    const page = await PlayerReviewPage.render()
+    await page.click('Someone else played')
+    await page.click('I manage this player')
+
+    cleanup()
+    failSession()
+    const home = await HomePage.render()
+
+    expect(home.avatar(STAND_IN.display_name)).toHaveTextContent('CC')
+    expect(home.avatar(egret.display_name)).toBeNull()
+  })
+
+  it('shows the account’s new player when the players refetch after another tab said No to its own player', async () => {
+    const api = mockVerifiedAccount([egretOwn])
+    const page = await PlayerReviewPage.render()
+    api.answerInAnotherTab(egret.id, { answer: 'no' })
+
+    const { api: client, queryClient } = page.router.options.context
+    await act(() => queryClient.refetchQueries({ queryKey: accountPlayersQuery(client).queryKey }))
+
+    await vi.waitFor(() => expect(page.href).toBe('/'))
     const home = new HomePage(page.router)
     expect(home.avatar(STAND_IN.display_name)).toHaveTextContent('CC')
     expect(home.avatar(egret.display_name)).toBeNull()
