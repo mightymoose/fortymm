@@ -1,31 +1,40 @@
 import { Link } from '@tanstack/react-router'
-import { useId, useState } from 'react'
+import { useId, useState, type ReactNode } from 'react'
 import { EmptyState } from '../../../components/EmptyState'
 import {
   formatDay,
   formatLabel,
   formatTime,
   needsYou,
-  opponent,
   sampleMatches,
   score,
   yourSide,
   type MatchRecord,
   type Side,
 } from './sampleMatches'
-import { MatchStatus, RatingChange } from './parts'
+import { MatchStatus } from './parts'
 import { vsLabel, type Variant } from './variants'
 
+// Every match, not only the viewer's. Scores read in side order.
 export function MatchList({ variant }: { variant: Variant }) {
   if (variant === 'b') return <HistoryTable />
   if (variant === 'c') return <TabbedCards />
   return <GroupedRows />
 }
 
+const isLive = (match: MatchRecord) => match.status.kind === 'live'
+const isSigning = (match: MatchRecord) => match.status.kind === 'awaiting' || match.status.kind === 'disputed'
+const isFinal = (match: MatchRecord) => match.status.kind === 'final'
+const isYours = (match: MatchRecord) => yourSide(match) !== null
+
+// Disputes first: they're the ones stuck until a player acts.
+const signingOrder = (a: MatchRecord, b: MatchRecord) =>
+  Number(b.status.kind === 'disputed') - Number(a.status.kind === 'disputed')
+
 function MatchLink({ match, variant, children, className }: {
   match: MatchRecord
   variant: Variant
-  children: React.ReactNode
+  children: ReactNode
   className?: string
 }) {
   return (
@@ -35,19 +44,19 @@ function MatchLink({ match, variant, children, className }: {
   )
 }
 
-// A: the design system's match rows, grouped by what the viewer can do:
-// matches waiting on them, matches in play, then the rest by day.
+// A: the design system's match rows, grouped by state: live, then waiting
+// for sign-off, then final matches by day.
 function GroupedRows() {
-  const waiting = sampleMatches.filter(needsYou)
-  const live = sampleMatches.filter((match) => match.status.kind === 'live')
-  const rest = sampleMatches.filter((match) => !needsYou(match) && match.status.kind !== 'live')
-  const days = [...new Set(rest.map((match) => formatDay(match.startedAt)))]
+  const live = sampleMatches.filter(isLive)
+  const signing = sampleMatches.filter(isSigning).sort(signingOrder)
+  const final = sampleMatches.filter(isFinal)
+  const days = [...new Set(final.map((match) => formatDay(match.startedAt)))]
   return (
     <div className="match-groups">
-      <RowGroup title="Needs you" matches={waiting} />
       <RowGroup title="Live" matches={live} />
+      <RowGroup title="Waiting for sign-off" matches={signing} />
       {days.map((day) => (
-        <RowGroup key={day} title={day} matches={rest.filter((match) => formatDay(match.startedAt) === day)} />
+        <RowGroup key={day} title={day} matches={final.filter((match) => formatDay(match.startedAt) === day)} />
       ))}
     </div>
   )
@@ -59,7 +68,7 @@ function RowGroup({ title, matches }: { title: string; matches: readonly MatchRe
   return (
     <section aria-labelledby={id}>
       <h2 className="fm-section-title" id={id}>
-        {title}
+        {title} <span className="num match-muted">{matches.length}</span>
       </h2>
       <div className="fm-matches">
         {matches.map((match) => (
@@ -80,10 +89,13 @@ export function ScoreRow({ match, large = false, headHidden = false }: {
   headHidden?: boolean
 }) {
   const { current, won, winner } = score(match)
-  const live = match.status.kind === 'live'
-  const state = live ? 'live' : 'final'
+  const live = isLive(match)
   return (
-    <article className={large ? 'fm-match fm-match--lg' : 'fm-match'} data-state={state} aria-label={vsLabel(match)}>
+    <article
+      className={large ? 'fm-match fm-match--lg' : 'fm-match'}
+      data-state={live ? 'live' : 'final'}
+      aria-label={vsLabel(match)}
+    >
       <div className="fm-match__head" hidden={headHidden}>
         <MatchStatus match={match} />
         <span>
@@ -127,20 +139,25 @@ export function ScoreRow({ match, large = false, headHidden = false }: {
 }
 
 const FILTERS = [
-  { key: 'live', label: 'Live', test: (m: MatchRecord) => m.status.kind === 'live' },
-  { key: 'you', label: 'Needs you', test: needsYou },
-  { key: 'final', label: 'Final', test: (m: MatchRecord) => m.status.kind === 'final' },
+  { key: 'live', label: 'Live', test: isLive },
+  { key: 'signing', label: 'Waiting for sign-off', test: isSigning },
+  { key: 'final', label: 'Final', test: isFinal },
+  { key: 'yours', label: 'Your matches', test: isYours },
 ] as const
 type FilterKey = (typeof FILTERS)[number]['key']
+const STATE_FILTERS: readonly FilterKey[] = ['live', 'signing', 'final']
 
-// B: a dense history table, newest first, narrowed by filter chips. Scores
-// read from the viewer's side.
+const gameScores = (match: MatchRecord) => match.games.map((game) => `${game[0]}–${game[1]}`).join('  ')
+
+// B: a dense table of every match, newest first, narrowed by filter chips.
+// The state chips widen each other (any of them); "Your matches" narrows.
 function HistoryTable() {
   const [on, setOn] = useState<readonly FilterKey[]>([])
   const toggle = (key: FilterKey) => setOn(on.includes(key) ? on.filter((k) => k !== key) : [...on, key])
-  const shown = on.length
-    ? sampleMatches.filter((match) => FILTERS.some((f) => on.includes(f.key) && f.test(match)))
-    : sampleMatches
+  const states = FILTERS.filter((f) => STATE_FILTERS.includes(f.key) && on.includes(f.key))
+  const shown = sampleMatches.filter(
+    (match) => (!states.length || states.some((f) => f.test(match))) && (!on.includes('yours') || isYours(match)),
+  )
   return (
     <div className="match-groups">
       <div className="fm-chips" aria-label="Filter matches">
@@ -167,17 +184,15 @@ function HistoryTable() {
             <thead>
               <tr>
                 <th scope="col">Date</th>
-                <th scope="col">Opponent</th>
+                <th scope="col">Players</th>
                 <th scope="col">Status</th>
                 <th scope="col" className="n">Games</th>
                 <th scope="col">Game scores</th>
-                <th scope="col" className="n">Rating</th>
+                <th scope="col">Format</th>
               </tr>
             </thead>
             <tbody>
               {shown.map((match) => {
-                const mine = yourSide(match) ?? 0
-                const theirs: Side = mine === 0 ? 1 : 0
                 const { won, winner } = score(match)
                 return (
                   <tr key={match.id}>
@@ -185,23 +200,26 @@ function HistoryTable() {
                       {formatDay(match.startedAt)} <span className="num match-muted">{formatTime(match.startedAt)}</span>
                     </td>
                     <td>
-                      <MatchLink match={match} variant="b">
-                        {opponent(match).name}
+                      <MatchLink match={match} variant="b" className="match-players">
+                        {([0, 1] as const).map((side) => (
+                          <span
+                            key={side}
+                            className={winner === null ? undefined : winner === side ? 'match-strong' : 'match-muted'}
+                          >
+                            {match.players[side].name}
+                            {match.players[side].you && ' (you)'}
+                          </span>
+                        ))}
                       </MatchLink>
-                      <span className="match-muted match-block">{formatLabel(match)}</span>
                     </td>
                     <td>
                       <MatchStatus match={match} />
                     </td>
-                    <td className={winner === mine ? 'n match-strong' : 'n'}>
-                      {won[mine]}–{won[theirs]}
-                    </td>
-                    <td className="num match-muted">
-                      {match.games.map((game) => `${game[mine]}–${game[theirs]}`).join('  ')}
-                    </td>
                     <td className="n">
-                      <RatingChange match={match} />
+                      {won[0]}–{won[1]}
                     </td>
+                    <td className="num match-muted">{gameScores(match)}</td>
+                    <td className="match-muted">{formatLabel(match)}</td>
                   </tr>
                 )
               })}
@@ -214,21 +232,22 @@ function HistoryTable() {
 }
 
 const TABS = [
-  { key: 'todo', label: 'To do', test: needsYou },
-  { key: 'live', label: 'Live', test: (m: MatchRecord) => m.status.kind === 'live' },
-  { key: 'done', label: 'Finished', test: (m: MatchRecord) => !needsYou(m) && m.status.kind !== 'live' },
+  { key: 'live', label: 'Live', test: isLive },
+  { key: 'signing', label: 'Waiting for sign-off', test: isSigning },
+  { key: 'final', label: 'Final', test: isFinal },
 ] as const
 
-// C: tabs by what's left to do, each match a card that leads with its next
-// action.
+// C: tabs by state, each match a card that leads with what can be done
+// with it: keep score, sign, or look.
 function TabbedCards() {
-  const [tab, setTab] = useState<(typeof TABS)[number]['key']>('todo')
+  const [tab, setTab] = useState<(typeof TABS)[number]['key']>('live')
   const id = useId()
   const current = TABS.find((t) => t.key === tab) ?? TABS[0]
   const shown = sampleMatches.filter(current.test)
+  if (tab === 'signing') shown.sort(signingOrder)
   return (
     <div className="match-groups">
-      <div className="fm-tabs" role="tablist" aria-label="Matches by status">
+      <div className="fm-tabs" role="tablist" aria-label="Matches by state">
         {TABS.map((t) => (
           <button
             key={t.key}
@@ -245,7 +264,7 @@ function TabbedCards() {
       </div>
       <div role="tabpanel" id={`${id}-panel`} aria-labelledby={`${id}-${tab}`} className="match-cards">
         {shown.length === 0 ? (
-          <EmptyState title="Nothing to do">No match is waiting on you.</EmptyState>
+          <EmptyState title="No matches here">No match is in this state right now.</EmptyState>
         ) : (
           shown.map((match) => <ActionCard key={match.id} match={match} />)
         )}
@@ -255,27 +274,26 @@ function TabbedCards() {
 }
 
 function nextAction(match: MatchRecord): { label: string; primary: boolean } {
-  if (match.status.kind === 'live') return { label: 'Keep score', primary: true }
-  if (match.status.kind === 'disputed') return { label: 'Review their scores', primary: true }
-  if (needsYou(match)) return { label: 'Review and approve', primary: true }
+  if (needsYou(match))
+    return { label: match.status.kind === 'disputed' ? 'Review their scores' : 'Review and approve', primary: true }
+  if (isLive(match)) return { label: 'Keep score', primary: false }
   return { label: 'View match', primary: false }
 }
 
 function ActionCard({ match }: { match: MatchRecord }) {
   const id = useId()
-  const { won } = score(match)
-  const mine = yourSide(match) ?? 0
-  const theirs: Side = mine === 0 ? 1 : 0
+  const { won, winner } = score(match)
   const action = nextAction(match)
   return (
     <section className="fm-card" aria-labelledby={id}>
       <div className="fm-card__head">
         <div>
           <h3 className="fm-card__title" id={id}>
-            vs {opponent(match).name}
+            {vsLabel(match)}
           </h3>
           <p className="fm-card__sub">
             {formatDay(match.startedAt)} · {formatLabel(match)}
+            {isYours(match) && ' · Your match'}
           </p>
         </div>
         <MatchStatus match={match} />
@@ -283,23 +301,16 @@ function ActionCard({ match }: { match: MatchRecord }) {
       <div className="fm-card__body">
         <dl className="fm-dl">
           <div>
-            <dt>Games, you first</dt>
+            <dt>Games</dt>
             <dd className="num">
-              {won[mine]}–{won[theirs]}
+              <span className={winner === 0 ? 'match-strong' : undefined}>{won[0]}</span>–
+              <span className={winner === 1 ? 'match-strong' : undefined}>{won[1]}</span>
             </dd>
           </div>
           <div>
             <dt>Scores</dt>
-            <dd className="num">{match.games.map((game) => `${game[mine]}–${game[theirs]}`).join(' ')}</dd>
+            <dd className="num">{gameScores(match)}</dd>
           </div>
-          {match.status.kind === 'final' && match.status.rating && (
-            <div>
-              <dt>Rating</dt>
-              <dd>
-                <RatingChange match={match} />
-              </dd>
-            </div>
-          )}
         </dl>
       </div>
       <div className="fm-card__foot">

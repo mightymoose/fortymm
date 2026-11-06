@@ -4,8 +4,6 @@ import {
   formatDay,
   formatLabel,
   formatTime,
-  needsYou,
-  opponent,
   score,
   yourSide,
   type GameScore,
@@ -30,18 +28,21 @@ type Situation = {
   actions: readonly Action[]
 }
 
-const gamesText = (games: readonly GameScore[], mine: Side) =>
-  games.map((game) => `${game[mine]}–${game[mine === 0 ? 1 : 0]}`).join(', ')
+const other = (side: Side): Side => (side === 0 ? 1 : 0)
+
+const gamesText = (games: readonly GameScore[], first: Side) =>
+  games.map((game) => `${game[first]}–${game[other(first)]}`).join(', ')
 
 function wonOf(games: readonly GameScore[], side: Side) {
   return games.filter((game) => game[side] > game[side === 0 ? 1 : 0]).length
 }
 
-// What the match asks of the viewer now, from its state and their side.
+// What the match asks of the viewer now: a player of the match is asked to
+// sign, anyone else is told where it stands.
 function situation(match: MatchRecord): Situation {
   const { status } = match
-  const mine = yourSide(match) ?? 0
-  const them = opponent(match).name
+  const mine = yourSide(match)
+  const name = (side: Side) => match.players[side].name
   switch (status.kind) {
     case 'live':
       return {
@@ -49,32 +50,56 @@ function situation(match: MatchRecord): Situation {
         alert: null,
         actions: [{ label: 'Keep score', kind: 'primary' }, { label: 'Share match', kind: 'ghost' }],
       }
-    case 'awaiting':
-      if (needsYou(match)) {
+    case 'awaiting': {
+      const signer = name(status.signedBy)
+      const waiting = other(status.signedBy)
+      const at = formatTime(status.signedAt)
+      if (mine === waiting) {
         const { won } = score(match)
         return {
-          notice: { icon: 'clock', text: `${them} signed these scores at ${formatTime(status.signedAt)}. Approve them if they’re right.` },
+          notice: { icon: 'clock', text: `${signer} signed these scores at ${at}. Approve them if they’re right.` },
           alert: null,
           actions: [
-            { label: `Approve ${won[mine]}–${won[mine === 0 ? 1 : 0]}`, kind: 'primary' },
+            { label: `Approve ${won[mine]}–${won[other(mine)]}`, kind: 'primary' },
             { label: 'Enter different scores', kind: 'secondary' },
           ],
         }
       }
+      if (mine === status.signedBy)
+        return {
+          notice: { icon: 'clock', text: `You signed at ${at}. The result counts once ${name(waiting)} approves it.` },
+          alert: null,
+          actions: [{ label: 'Show QR code', kind: 'secondary' }, { label: 'Share result', kind: 'ghost' }],
+        }
       return {
-        notice: { icon: 'clock', text: `You signed at ${formatTime(status.signedAt)}. The result counts once ${them} approves it.` },
+        notice: { icon: 'clock', text: `${signer} signed at ${at}. The result counts once ${name(waiting)} approves it.` },
         alert: null,
-        actions: [{ label: 'Show QR code', kind: 'secondary' }, { label: 'Share result', kind: 'ghost' }],
+        actions: [{ label: 'Share match', kind: 'ghost' }],
       }
+    }
     case 'disputed': {
-      const yours = status.signedBy === mine ? match.games : status.theirGames
-      const theirs = status.signedBy === mine ? status.theirGames : match.games
-      const other: Side = mine === 0 ? 1 : 0
+      const versions: Record<Side, readonly GameScore[]> =
+        status.signedBy === 0 ? { 0: match.games, 1: status.theirGames } : { 0: status.theirGames, 1: match.games }
+      const version = (side: Side) => {
+        const games = versions[side]
+        const who = side === mine ? 'You' : name(side)
+        return `${who} signed ${wonOf(games, 0)}–${wonOf(games, 1)} (${gamesText(games, 0)})`
+      }
+      if (mine === null)
+        return {
+          notice: null,
+          alert: {
+            title: 'The players signed different scores',
+            body: `${version(0)}. ${version(1)}. It counts once they both sign the same scores.`,
+          },
+          actions: [{ label: 'Share match', kind: 'ghost' }],
+        }
+      const them = name(other(mine))
       return {
         notice: null,
         alert: {
           title: `${them} signed different scores`,
-          body: `You signed ${wonOf(yours, mine)}–${wonOf(yours, other)} (${gamesText(yours, mine)}). ${them} signed ${wonOf(theirs, mine)}–${wonOf(theirs, other)} (${gamesText(theirs, mine)}). It counts once you both sign the same scores.`,
+          body: `${version(mine)}. ${version(other(mine))}. It counts once you both sign the same scores.`,
         },
         actions: [
           { label: `Approve ${them}’s scores`, kind: 'primary' },
@@ -187,14 +212,16 @@ function Facts({ match }: { match: MatchRecord }) {
           {formatDay(match.startedAt)}, <span className="num">{formatTime(match.startedAt)}</span>
         </dd>
       </div>
-      {match.status.kind === 'final' && match.status.rating && (
-        <div>
-          <dt>Your rating</dt>
-          <dd>
-            <RatingChange match={match} />
-          </dd>
-        </div>
-      )}
+      {match.status.kind === 'final' &&
+        match.status.rating &&
+        ([0, 1] as const).map((side) => (
+          <div key={side}>
+            <dt>{match.players[side].name}’s rating</dt>
+            <dd>
+              <RatingChange match={match} side={side} />
+            </dd>
+          </div>
+        ))}
     </dl>
   )
 }
@@ -258,7 +285,7 @@ function DetailCard({ match }: { match: MatchRecord }) {
         <div className="fm-card__head">
           <div>
             <h2 className="fm-card__title" id={titleId}>
-              vs {opponent(match).name}
+              {vsLabel(match)}
             </h2>
             <p className="fm-card__sub">
               {formatDay(match.startedAt)} · {formatLabel(match)}

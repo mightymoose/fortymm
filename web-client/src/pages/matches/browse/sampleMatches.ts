@@ -37,7 +37,7 @@ export const YOU = 'Alex Rivera'
 const you: MatchPlayer = { name: YOU, you: true }
 const p = (name: string): MatchPlayer => ({ name })
 
-export const sampleMatches: readonly MatchRecord[] = [
+const unsorted: readonly MatchRecord[] = [
   {
     id: '0193f1a2-live-0001',
     bestOf: 5,
@@ -122,7 +122,80 @@ export const sampleMatches: readonly MatchRecord[] = [
       { at: '2026-10-29T20:05:00', who: 'Élodie Moreau', what: 'Approved the result' },
     ],
   },
+  {
+    id: '0193f1a2-live-0007',
+    bestOf: 3,
+    rated: false,
+    players: [p('Giulia Rossi'), p('Youssef Haddad')],
+    games: [[4, 11], [9, 8]],
+    startedAt: '2026-11-05T19:25:00',
+    status: { kind: 'live', serve: 0 },
+    history: [
+      { at: '2026-11-05T19:25:00', who: 'Giulia Rossi', what: 'Started the match' },
+      { at: '2026-11-05T19:33:00', who: 'Giulia Rossi', what: 'Entered game 1, 4–11' },
+    ],
+  },
+  {
+    id: '0193f1a2-await-0008',
+    bestOf: 5,
+    rated: true,
+    players: [p('Erik Lindqvist'), p('Camille Dubois')],
+    games: [[11, 7], [11, 5], [9, 11], [11, 8]],
+    startedAt: '2026-11-05T17:40:00',
+    status: { kind: 'awaiting', signedBy: 1, signedAt: '2026-11-05T18:22:00' },
+    history: [
+      { at: '2026-11-05T17:40:00', who: 'Erik Lindqvist', what: 'Started the match' },
+      { at: '2026-11-05T18:22:00', who: 'Camille Dubois', what: 'Signed the result, 3–1' },
+    ],
+  },
+  {
+    id: '0193f1a2-final-0009',
+    bestOf: 5,
+    rated: true,
+    players: [p('Ji-ho Park'), p('Marisol Fernández-Castillo')],
+    games: [[11, 13], [11, 9], [8, 11], [11, 6], [9, 11]],
+    startedAt: '2026-11-05T16:10:00',
+    status: { kind: 'final', approvedAt: '2026-11-05T17:02:00', rating: [-9, 9] },
+    history: [
+      { at: '2026-11-05T16:10:00', who: 'Ji-ho Park', what: 'Started the match' },
+      { at: '2026-11-05T16:58:00', who: 'Marisol Fernández-Castillo', what: 'Signed the result, 3–2' },
+      { at: '2026-11-05T17:02:00', who: 'Ji-ho Park', what: 'Approved the result' },
+    ],
+  },
+  {
+    id: '0193f1a2-final-0010',
+    bestOf: 3,
+    rated: true,
+    players: [p('Wei Chen'), p('Meera Okafor')],
+    games: [[11, 8], [12, 10]],
+    startedAt: '2026-11-04T18:15:00',
+    status: { kind: 'final', approvedAt: '2026-11-04T18:39:00', rating: [8, -8] },
+    history: [
+      { at: '2026-11-04T18:15:00', who: 'Meera Okafor', what: 'Started the match' },
+      { at: '2026-11-04T18:36:00', who: 'Wei Chen', what: 'Signed the result, 2–0' },
+      { at: '2026-11-04T18:39:00', who: 'Meera Okafor', what: 'Approved the result' },
+    ],
+  },
+  {
+    id: '0193f1a2-disp-0011',
+    bestOf: 3,
+    rated: true,
+    players: [p('Thanh Nguyen'), p('Rashid Ali')],
+    games: [[11, 9], [11, 7]],
+    startedAt: '2026-11-03T19:05:00',
+    status: { kind: 'disputed', signedBy: 0, theirGames: [[11, 9], [7, 11], [9, 11]] },
+    history: [
+      { at: '2026-11-03T19:05:00', who: 'Rashid Ali', what: 'Started the match' },
+      { at: '2026-11-03T19:31:00', who: 'Thanh Nguyen', what: 'Signed the result, 2–0' },
+      { at: '2026-11-03T19:40:00', who: 'Rashid Ali', what: 'Signed different scores, 1–2' },
+    ],
+  },
 ]
+
+// Newest first, as a list of every match would show them.
+export const sampleMatches: readonly MatchRecord[] = [...unsorted].sort((a, b) =>
+  b.startedAt.localeCompare(a.startedAt),
+)
 
 export function findMatch(id: string): MatchRecord | undefined {
   return sampleMatches.find((match) => match.id === id)
@@ -146,10 +219,6 @@ export function yourSide(match: MatchRecord): Side | null {
   if (match.players[0].you) return 0
   if (match.players[1].you) return 1
   return null
-}
-
-export function opponent(match: MatchRecord): MatchPlayer {
-  return match.players[yourSide(match) === 0 ? 1 : 0]
 }
 
 // Whether the viewer is the one the match waits on: the other side signed,
