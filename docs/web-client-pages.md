@@ -55,9 +55,22 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   is in the tab bar instead. The sidebar doesn't list it.
 - `_shell/matches/index.tsx` and `_shell/players/index.tsx`: the pages
   `Matches` (`src/pages/matches/Matches.tsx`) and `Players`
-  (`src/pages/players/Players.tsx`), which so far show only their title.
+  (`src/pages/players/Players.tsx`). Players so far shows only its title.
   Each loader waits for the session, and sends an account without
   `matches.view` or `players.view` to `/`.
+- Matches lists every match, not only the viewer's, newest first. Filter
+  chips narrow it: the state chips (Live, Waiting for sign-off, Final)
+  widen each other, and Your matches narrows to the viewer's. From 900px
+  it's a table whose game scores wrap, so it fits beside the sidebar.
+  Below 900px each match is a design system match row. Each match links
+  to `_shell/matches/$matchId.tsx`, its page (`browse/SignOff.tsx`): the
+  games, each player's signature, what the viewer can do about the result
+  (a spectator only sees where it stands), and the history.
+- Both pages read sample matches (`browse/sampleMatches.ts`) through
+  `matchesQuery()` and `matchQuery()` (`browse/matchQueries.ts`), because
+  the API doesn't list or read matches yet. Each loader prefetches its
+  query without waiting for it, so a link's preload (hover, focus or
+  touch) loads the data, and the page's own boundary shows the skeleton.
 - `_shell/matches/new.tsx`: the page `NewMatch`
   (`src/pages/matches/NewMatch.tsx`, with its parts in `newMatch/`),
   which sets up a match. Its loader waits for the session, and sends an

@@ -1,5 +1,6 @@
-// Sample matches for the match list and match page prototypes. The API
-// doesn't list or read matches yet, so every variant draws these.
+// Sample matches for the Matches page and a match's page. The API doesn't
+// list or read matches yet, so `loadMatches()` and `loadMatch()` stand in
+// for `GET /v1/matches` and `GET /v1/matches/{id}`.
 
 export type Side = 0 | 1
 export type GameScore = readonly [number, number]
@@ -197,8 +198,12 @@ export const sampleMatches: readonly MatchRecord[] = [...unsorted].sort((a, b) =
   b.startedAt.localeCompare(a.startedAt),
 )
 
-export function findMatch(id: string): MatchRecord | undefined {
-  return sampleMatches.find((match) => match.id === id)
+export async function loadMatches(): Promise<readonly MatchRecord[]> {
+  return sampleMatches
+}
+
+export async function loadMatch(id: string): Promise<MatchRecord | null> {
+  return sampleMatches.find((match) => match.id === id) ?? null
 }
 
 const other = (side: Side): Side => (side === 0 ? 1 : 0)
@@ -229,6 +234,8 @@ export function needsYou(match: MatchRecord): boolean {
   if (match.status.kind === 'awaiting') return match.status.signedBy !== side
   return match.status.kind === 'disputed'
 }
+
+export const vsLabel = (match: MatchRecord) => `${match.players[0].name} vs ${match.players[1].name}`
 
 export const formatLabel = (match: MatchRecord) =>
   `Best of ${match.bestOf} · ${match.rated ? 'Rated' : 'Unrated'}`
