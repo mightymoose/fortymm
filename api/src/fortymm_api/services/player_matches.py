@@ -171,7 +171,10 @@ def _recent_match(
         if found.side not in mine
     }
     return RecentMatch(
-        match, made_at, tuple(sorted(opponents.values(), key=str.casefold)), _recent_result(result, mine)
+        match,
+        made_at,
+        tuple(sorted(opponents.values(), key=str.casefold)),
+        _recent_result(result, mine),
     )
 
 
