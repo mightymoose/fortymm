@@ -2,14 +2,11 @@ import { useState } from 'react'
 import { EmptyState } from '../../components/EmptyState'
 import { SegmentedControl } from '../../components/SegmentedControl'
 import { dayLabel, opponentsOf, timeLabel, type Dashboard, type PlayerSummary, type RecentMatch, matchCountText, recordText, streakText } from './dashboard'
-import { useAttentionCopy } from './attention'
 import { NewMatchLink, ResultText, Skeleton } from './parts'
 
-// Option C, "Day by day": one narrow column. What needs doing as rows, only
-// when something does, then the matches as a feed grouped by day, one
+// Option C, "Day by day": one narrow column of matches grouped by day, one
 // sentence each. An account that manages players switches between them.
 export function OptionC({ dashboard, now }: { dashboard: Dashboard; now: Date }) {
-  const copy = useAttentionCopy()
   const everyone = [dashboard.me, ...dashboard.managed].slice(0, 4)
   const [shownId, setShownId] = useState(dashboard.me.player.id)
   const shown = everyone.find((summary) => summary.player.id === shownId) ?? dashboard.me
@@ -21,28 +18,6 @@ export function OptionC({ dashboard, now }: { dashboard: Dashboard; now: Date })
         <h1 className="dash__title">Home</h1>
         {dashboard.canCreateMatch && <NewMatchLink size="sm" />}
       </header>
-
-      {dashboard.attention.length > 0 && (
-        <section aria-labelledby="dash-c-attention">
-          <h2 className="h3" id="dash-c-attention">
-            Needs your attention
-          </h2>
-          <ul className="fm-list fm-list--divided">
-            {dashboard.attention.map((item) => {
-              const { title, body, action } = copy(item, 'sm')
-              return (
-                <li key={item.kind} className="dash-c__task">
-                  <div>
-                    <p className="dash__name">{title}</p>
-                    <p className="meta">{body}</p>
-                  </div>
-                  {action}
-                </li>
-              )
-            })}
-          </ul>
-        </section>
-      )}
 
       <section aria-labelledby="dash-c-feed" className="dash-c__feed">
         <div className="dash__section-head">

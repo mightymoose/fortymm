@@ -71,15 +71,6 @@ export function sample(kind: Sample, account: Session, now: Date): { account: Se
             ],
             played_against: [],
           },
-          {
-            id: 'sample-question',
-            display_name: 'quiet heron 52',
-            relationship: 'managed',
-            open_question: true,
-            match_count: 2,
-            recent_matches: [match('q1', ago(6, 12, 15), 'Park, Ji-ho', [3, 2])],
-            played_against: [],
-          },
         ],
       }
     case 'new':

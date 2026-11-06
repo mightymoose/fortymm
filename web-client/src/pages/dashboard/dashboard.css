@@ -146,15 +146,17 @@
   margin-top: var(--s-3);
 }
 
-/* A: Next step. */
+/* A: Results. */
 .dash-a {
   max-width: 640px;
 }
 
 .dash-a__head {
   display: flex;
-  flex-direction: column;
-  gap: var(--s-1);
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s-3);
 }
 
 .dash-a__managed {
@@ -223,19 +225,6 @@
   gap: var(--s-3);
 }
 
-.dash-c__task {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-4);
-}
-
-.dash-c__task > :first-child {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
 .dash-c__feed {
   display: flex;
   flex-direction: column;
@@ -246,10 +235,6 @@
   align-self: flex-start;
   max-width: 100%;
   overflow-x: auto;
-}
-
-.dash-c__task > .fm-btn {
-  flex: none;
 }
 
 .dash-c__day {

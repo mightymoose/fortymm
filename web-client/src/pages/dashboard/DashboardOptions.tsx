@@ -12,7 +12,7 @@ import { sample, sampleLabels } from './samples'
 import { SAMPLES, VARIANTS, type Sample, type Variant } from './search'
 
 const OPTIONS: Record<Variant, { label: string; View: ComponentType<{ dashboard: Dashboard; now: Date }>; Skeleton: ComponentType }> = {
-  a: { label: 'A · Next step', View: OptionA, Skeleton: OptionASkeleton },
+  a: { label: 'A · Results', View: OptionA, Skeleton: OptionASkeleton },
   b: { label: 'B · Your game', View: OptionB, Skeleton: OptionBSkeleton },
   c: { label: 'C · Day by day', View: OptionC, Skeleton: OptionCSkeleton },
 }

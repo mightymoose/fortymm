@@ -1,51 +1,23 @@
-import { Card } from '../../components/Card'
 import { EmptyState } from '../../components/EmptyState'
-import { Icon } from '../../components/Icon'
 import { dayInSentence, dayLabel, opponentsOf, timeLabel, type Dashboard, type PlayerSummary, type RecentMatch, matchCountText } from './dashboard'
-import { type AttentionCopy, useAttentionCopy } from './attention'
 import { NewMatchLink, ResultText, Skeleton } from './parts'
 
-// Option A, "Next step": one card with the single most useful thing to do,
-// then the player's results as match rows, then the players they manage.
+// Option A, "Results": the player's last matches as match rows, the winner
+// bold, then the players they manage.
 export function OptionA({ dashboard, now }: { dashboard: Dashboard; now: Date }) {
-  const copy = useAttentionCopy()
-  const [lead, ...rest] = dashboard.attention
   const { me } = dashboard
 
   return (
     <div className="dash dash-a">
       <header className="dash-a__head">
-        <h1 className="dash__title">Hi, {me.player.display_name}</h1>
-        <p className="meta">{now.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}</p>
+        <div>
+          <h1 className="dash__title">Hi, {me.player.display_name}</h1>
+          <p className="meta">
+            {me.last ? `Last played ${dayInSentence(me.last.played_at, now)}` : 'No matches yet'}
+          </p>
+        </div>
+        {dashboard.canCreateMatch && <NewMatchLink />}
       </header>
-
-      {lead ? (
-        <LeadCard copy={copy(lead, 'lg')} />
-      ) : (
-        <Card
-          title="Your next match"
-          subtitle={me.last ? `Last played ${dayInSentence(me.last.played_at, now)}` : undefined}
-          actions={dashboard.canCreateMatch ? <NewMatchLink size="lg" /> : undefined}
-        >
-          <p className="dash__body">
-            {dashboard.canCreateMatch
-              ? 'Set up a match when you get to the table. Scoring works with no signal.'
-              : 'Your matches show here after you play. Scoring works with no signal.'}
-          </p>
-        </Card>
-      )}
-
-      {rest.map((item) => {
-        const { title, body } = copy(item)
-        return (
-          <p key={item.kind} className="fm-notice">
-            <Icon name="info" />
-            <span>
-              <b>{title}.</b> {body}
-            </span>
-          </p>
-        )
-      })}
 
       <section aria-labelledby="dash-a-results">
         <div className="dash__section-head">
@@ -67,14 +39,6 @@ export function OptionA({ dashboard, now }: { dashboard: Dashboard; now: Date })
 
       {dashboard.managed.length > 0 && <Managed players={dashboard.managed} now={now} />}
     </div>
-  )
-}
-
-function LeadCard({ copy: { title, body, action } }: { copy: AttentionCopy }) {
-  return (
-    <Card title={title} actions={action}>
-      <p className="dash__body">{body}</p>
-    </Card>
   )
 }
 
@@ -122,7 +86,7 @@ function Managed({ players, now }: { players: readonly PlayerSummary[]; now: Dat
                 {last && <> · last played {dayInSentence(last.played_at, now)}</>}
               </p>
             </div>
-            {player.open_question ? <span className="fm-status">Is this you?</span> : last && <ResultText match={last} />}
+            {last && <ResultText match={last} />}
           </li>
         ))}
       </ul>
@@ -137,11 +101,6 @@ export function OptionASkeleton() {
         <Skeleton width={260} height={36} />
         <Skeleton width={140} height={14} />
       </header>
-      <div className="fm-card">
-        <Skeleton width={180} height={20} />
-        <Skeleton width="80%" />
-        <Skeleton width={140} height={44} />
-      </div>
       <section>
         <Skeleton width={120} height={20} />
         {[0, 1, 2].map((row) => (

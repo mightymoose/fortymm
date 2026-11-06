@@ -1,20 +1,14 @@
 import { Card } from '../../components/Card'
 import { DetailList } from '../../components/DetailList'
 import { EmptyState } from '../../components/EmptyState'
-import { Icon } from '../../components/Icon'
 import { dayLabel, opponentsOf, type Dashboard, type PlayerSummary, matchCountText, recordText, streakText } from './dashboard'
-import { useAttentionCopy } from './attention'
 import { FormStrip, NewMatchLink, ResultText, Skeleton } from './parts'
 
 // Option B, "Your game": the numbers first. A record card with the last
 // five results beside a table of them, then a table of the players the
-// account manages. A player with no matches gets a first-match card in the
-// grid's place.
+// account manages.
 export function OptionB({ dashboard, now }: { dashboard: Dashboard; now: Date }) {
-  const copy = useAttentionCopy()
   const { me } = dashboard
-  const firstMatch = dashboard.attention.some((item) => item.kind === 'first-match')
-  const alerts = dashboard.attention.filter((item) => item.kind !== 'first-match')
 
   return (
     <div className="dash dash-b">
@@ -23,33 +17,12 @@ export function OptionB({ dashboard, now }: { dashboard: Dashboard; now: Date })
           <h1 className="dash__title">Your game</h1>
           <p className="meta">{me.player.display_name}</p>
         </div>
-        {dashboard.canCreateMatch && !firstMatch && <NewMatchLink variant="secondary" />}
+        {dashboard.canCreateMatch && <NewMatchLink variant="secondary" />}
       </header>
-
-      {alerts.map((item) => {
-        const { title, body, action } = copy(item, 'sm')
-        return (
-          <div key={item.kind} className="fm-alert fm-alert--warning">
-            <Icon name="alert" />
-            <p className="fm-alert__title">{title}</p>
-            <p className="fm-alert__body">{body}</p>
-            <div className="fm-alert__actions">{action}</div>
-          </div>
-        )
-      })}
 
       <div className="dash-b__grid">
         <RecordCard summary={me} />
-        {firstMatch ? (
-          <Card title="Log your first match" actions={<NewMatchLink size="lg" />}>
-            <p className="dash__body">
-              Pick who you played and the format, then keep score at the table. Your record starts with your first
-              result.
-            </p>
-          </Card>
-        ) : (
-          <RecentCard summary={me} now={now} />
-        )}
+        <RecentCard summary={me} now={now} />
       </div>
 
       {dashboard.managed.length > 0 && <ManagedTable players={dashboard.managed} now={now} />}
@@ -144,7 +117,6 @@ function ManagedTable({ players, now }: { players: readonly PlayerSummary[]; now
               <tr key={summary.player.id}>
                 <td className="dash__name">
                   {summary.player.display_name}
-                  {summary.player.open_question && <span className="meta"> · Is this you?</span>}
                 </td>
                 <td className="n">{summary.player.match_count}</td>
                 <td>{summary.form.length > 0 ? <FormStrip form={summary.form} /> : <span className="meta">No results</span>}</td>

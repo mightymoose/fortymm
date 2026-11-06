@@ -18,18 +18,9 @@ export type PlayerSummary = {
   last: RecentMatch | null
 }
 
-// Something the account should do, most pressing first. Each option shows
-// the first one as its lead and may list the rest.
-export type Attention =
-  | { kind: 'review-players'; count: number }
-  | { kind: 'keep-guest-matches'; matchCount: number }
-  | { kind: 'first-match' }
-
 export type Dashboard = {
   me: PlayerSummary
   managed: readonly PlayerSummary[]
-  attention: readonly Attention[]
-  guest: boolean
   canCreateMatch: boolean
 }
 
@@ -50,22 +41,6 @@ export function summarize(player: AccountPlayer): PlayerSummary {
   }
 }
 
-// Which attention items apply, in the order they show.
-const ATTENTION: readonly ((input: { account: Session; players: readonly AccountPlayer[] }) => Attention | null)[] = [
-  ({ players }) => {
-    const count = players.filter((player) => player.open_question).length
-    return count > 0 ? { kind: 'review-players', count } : null
-  },
-  ({ account, players }) => {
-    const matchCount = players.reduce((sum, player) => sum + player.match_count, 0)
-    return account.kind === 'guest' && matchCount > 0 ? { kind: 'keep-guest-matches', matchCount } : null
-  },
-  ({ account, players }) =>
-    can(account, Permission.matchesCreate) && players.every((player) => player.match_count === 0)
-      ? { kind: 'first-match' }
-      : null,
-]
-
 export function dashboard(account: Session, players: readonly AccountPlayer[]): Dashboard {
   const self = players.find((player) => player.relationship === 'self') ?? {
     id: account.player.id,
@@ -79,8 +54,6 @@ export function dashboard(account: Session, players: readonly AccountPlayer[]): 
   return {
     me: summarize(self),
     managed: players.filter((player) => player !== self).map(summarize),
-    attention: ATTENTION.map((rule) => rule({ account, players })).filter((item) => item !== null),
-    guest: account.kind === 'guest',
     canCreateMatch: can(account, Permission.matchesCreate),
   }
 }
