@@ -1,23 +1,65 @@
-import { useId, useState } from 'react'
+import { useSuspenseQuery } from '@tanstack/react-query'
+import { useState } from 'react'
+import { EmptyState } from '../../../components/EmptyState'
 import { Icon } from '../../../components/Icon'
+import { QueryBoundary } from '../../../components/QueryBoundary'
+import { matchQuery } from './matchQueries'
+import { MatchStatus, RatingChange } from './MatchStatus'
 import {
   formatDay,
   formatLabel,
   formatTime,
   score,
+  vsLabel,
   yourSide,
   type GameScore,
   type MatchRecord,
   type Side,
 } from './sampleMatches'
-import { MatchStatus, RatingChange } from './parts'
-import { vsLabel, type Variant } from './variants'
-import { ScoreRow } from './MatchLists'
 
-export function MatchDetails({ match, variant }: { match: MatchRecord; variant: Variant }) {
-  if (variant === 'b') return <DetailCard match={match} />
-  if (variant === 'c') return <DetailSignOff match={match} />
-  return <DetailScoreboard match={match} />
+// A match's page, in its own boundary: the games, each player's signature,
+// and what the viewer can do about the result.
+export function MatchSignOff({ id }: { id: string }) {
+  return (
+    <QueryBoundary skeleton={<SignOffSkeleton />}>
+      <LoadedSignOff id={id} />
+    </QueryBoundary>
+  )
+}
+
+function SignOffSkeleton() {
+  return (
+    <div className="match-page" aria-busy="true">
+      <span className="fm-sr" role="status">
+        Loading match
+      </span>
+      <div className="match-page__head" aria-hidden="true">
+        <div className="fm-skeleton match-skel match-skel--status" />
+        <div className="fm-skeleton match-skel match-skel--title" />
+        <div className="fm-skeleton match-skel match-skel--line" />
+      </div>
+      <div className="match-columns" aria-hidden="true">
+        <div className="match-section">
+          {[0, 1, 2, 3].map((row) => (
+            <div key={row} className="fm-skeleton match-skel match-skel--game" />
+          ))}
+        </div>
+        <div className="fm-skeleton match-skel match-skel--card" />
+      </div>
+    </div>
+  )
+}
+
+function LoadedSignOff({ id }: { id: string }) {
+  const { data: match } = useSuspenseQuery(matchQuery(id))
+  if (!match)
+    return (
+      <>
+        <h1>No such match</h1>
+        <EmptyState title="This match isn’t here">The link may be wrong. Find the match on the Matches page.</EmptyState>
+      </>
+    )
+  return <DetailSignOff match={match} />
 }
 
 type Action = { label: string; kind: 'primary' | 'secondary' | 'ghost' }
@@ -116,7 +158,7 @@ function situation(match: MatchRecord): Situation {
   }
 }
 
-// A button for an action the prototype can't do. Pressing it says so.
+// A button for an action the app can't do yet. Pressing it says so.
 function DemoButton({ action }: { action: Action }) {
   const [pressed, setPressed] = useState(false)
   return (
@@ -125,7 +167,7 @@ function DemoButton({ action }: { action: Action }) {
       className={`fm-btn fm-btn--${action.kind}`}
       onClick={() => setPressed(true)}
     >
-      {pressed ? 'Not in the prototype' : action.label}
+      {pressed ? 'Not ready yet' : action.label}
     </button>
   )
 }
@@ -160,72 +202,6 @@ function SituationNotes({ s }: { s: Situation }) {
   )
 }
 
-// The game history as the design system's `.fm-games` draws it, in side
-// order, the game in play marked "now".
-function GameTable({ match }: { match: MatchRecord }) {
-  const live = match.status.kind === 'live'
-  if (!match.games.length) return <p className="fm-help">No games played yet.</p>
-  const isCurrent = (index: number) => live && index === match.games.length - 1
-  return (
-    <div className="fm-scroll">
-      <table className="fm-games">
-        <caption className="fm-sr">Game scores, {vsLabel(match)}</caption>
-        <thead>
-          <tr>
-            <th scope="col">
-              <span className="fm-sr">Player</span>
-            </th>
-            {match.games.map((_, index) => (
-              <th key={index} scope="col" className={isCurrent(index) ? 'cur' : undefined}>
-                {isCurrent(index) ? `Game ${index + 1} · now` : `Game ${index + 1}`}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {([0, 1] as const).map((side) => (
-            <tr key={side}>
-              <th scope="row">{match.players[side].name}</th>
-              {match.games.map((game, index) => (
-                <td key={index} className={isCurrent(index) ? 'cur' : game[side] > game[side === 0 ? 1 : 0] ? 'w' : undefined}>
-                  {game[side]}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-function Facts({ match }: { match: MatchRecord }) {
-  return (
-    <dl className="fm-dl">
-      <div>
-        <dt>Format</dt>
-        <dd>{formatLabel(match)}</dd>
-      </div>
-      <div>
-        <dt>Started</dt>
-        <dd>
-          {formatDay(match.startedAt)}, <span className="num">{formatTime(match.startedAt)}</span>
-        </dd>
-      </div>
-      {match.status.kind === 'final' &&
-        match.status.rating &&
-        ([0, 1] as const).map((side) => (
-          <div key={side}>
-            <dt>{match.players[side].name}’s rating</dt>
-            <dd>
-              <RatingChange match={match} side={side} />
-            </dd>
-          </div>
-        ))}
-    </dl>
-  )
-}
-
 function History({ match }: { match: MatchRecord }) {
   return (
     <ol className="fm-list fm-list--divided">
@@ -241,88 +217,8 @@ function History({ match }: { match: MatchRecord }) {
   )
 }
 
-// A: a scoreboard page. The large match row leads, then what to do, the
-// game scores, the facts and the history, each a section of its own.
-function DetailScoreboard({ match }: { match: MatchRecord }) {
-  const s = situation(match)
-  return (
-    <div className="match-page">
-      <div className="match-page__head">
-        <MatchStatus match={match} />
-        <h1 className="match-title">{vsLabel(match)}</h1>
-      </div>
-      <ScoreRow match={match} large headHidden />
-      <SituationNotes s={s} />
-      <Actions actions={s.actions} />
-      <section className="match-section">
-        <h2 className="fm-section-title">Game scores</h2>
-        <GameTable match={match} />
-      </section>
-      <section className="match-section">
-        <h2 className="fm-section-title">Details</h2>
-        <Facts match={match} />
-      </section>
-      <section className="match-section">
-        <h2 className="fm-section-title">History</h2>
-        <History match={match} />
-      </section>
-    </div>
-  )
-}
-
-// B: one card, as the design system's match detail draws it: title and
-// status, the row, the problem or notice, game scores and facts, actions at
-// the foot. The history folds away.
-function DetailCard({ match }: { match: MatchRecord }) {
-  const s = situation(match)
-  const titleId = useId()
-  const historyId = useId()
-  const [historyShown, setHistoryShown] = useState(false)
-  return (
-    <div className="match-page match-page--narrow">
-      <h1 className="fm-sr">{vsLabel(match)}</h1>
-      <section className="fm-card" aria-labelledby={titleId}>
-        <div className="fm-card__head">
-          <div>
-            <h2 className="fm-card__title" id={titleId}>
-              {vsLabel(match)}
-            </h2>
-            <p className="fm-card__sub">
-              {formatDay(match.startedAt)} · {formatLabel(match)}
-            </p>
-          </div>
-          <MatchStatus match={match} />
-        </div>
-        <div className="fm-card__body">
-          <ScoreRow match={match} large headHidden />
-          <SituationNotes s={s} />
-          <div>
-            <h3 className="fm-section-title match-subhead">Game scores</h3>
-            <GameTable match={match} />
-          </div>
-          <Facts match={match} />
-          <button
-            type="button"
-            className="fm-match__toggle"
-            aria-expanded={historyShown}
-            aria-controls={historyId}
-            onClick={() => setHistoryShown(!historyShown)}
-          >
-            History
-            <Icon name="chevron" />
-          </button>
-          <div id={historyId} hidden={!historyShown}>
-            <History match={match} />
-          </div>
-        </div>
-        <Actions actions={s.actions} className="fm-card__foot" />
-      </section>
-    </div>
-  )
-}
-
-// C: the sign-off. Each game reads as a sentence on the left; the right
-// shows each player's signature and what's left before the result counts.
+// Each game reads as a line on the left; the right shows each player's
+// signature and what's left before the result counts.
 function DetailSignOff({ match }: { match: MatchRecord }) {
   const s = situation(match)
   const { won, winner } = score(match)
