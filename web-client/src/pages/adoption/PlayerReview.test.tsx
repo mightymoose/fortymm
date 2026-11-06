@@ -273,6 +273,39 @@ describe('Is this you?', () => {
     expect(home.avatar(egret.display_name)).toBeNull()
   })
 
+  it('asks about the account’s own player last, as it said, once another player became its own', async () => {
+    const antOwn = { ...ant, relationship: 'self' as const, open_question: true }
+    // In the API's order once badger is the account's own: the ant's name
+    // comes before the egret's.
+    mockVerifiedAccount([badger, antOwn, egret])
+    const page = await PlayerReviewPage.render()
+
+    expect(page.answers).toHaveTextContent(
+      `${badger.display_name} becomes your player. We’ll ask about ${ant.display_name} last.`,
+    )
+    await page.click('Yes, this is me')
+    expect(page.text).toContain(`${egret.display_name} was used before you signed in.`)
+    await page.click('Yes, this is me')
+
+    expect(page.text).toContain(`${ant.display_name} was used before you signed in.`)
+  })
+
+  it('takes the account’s own player from the players a refused merge refetches', async () => {
+    const [egretPlayedBadger, badgerPlayedEgret] = playedEachOther(egret, badger)
+    // The badger is older than the dove, so another tab's "Yes" for it
+    // merges the dove into it.
+    const api = mockVerifiedAccount([egretPlayedBadger, badgerPlayedEgret, dove])
+    const page = await PlayerReviewPage.render()
+    api.answerInAnotherTab(badger.id, { answer: 'yes' })
+    await page.click('Yes, this is me')
+
+    await act(() => page.router.navigate({ to: '/' }))
+
+    const home = new HomePage(page.router)
+    expect(home.avatar(badger.display_name)).toHaveTextContent('BB')
+    expect(home.avatar(dove.display_name)).toBeNull()
+  })
+
   it('keeps the account’s own player when another is one it manages, and "Yes" merges nothing', async () => {
     const api = mockVerifiedAccount([egretOwn, badger])
     const page = await PlayerReviewPage.render()
