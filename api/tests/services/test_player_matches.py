@@ -174,12 +174,12 @@ def test_an_opponent_is_named_by_its_survivor(migrated_database: Engine) -> None
     assert recent(migrated_database, ann).opponents == (sam_name,)
 
 
-def test_the_other_sides_players_are_in_name_order(migrated_database: Engine) -> None:
+def test_the_other_sides_players_are_in_name_order_whatever_their_case(migrated_database: Engine) -> None:
     # A side of two fails the team size check at commit, so this rolls back.
     with Session(migrated_database) as session:
         ann, zed, amy = (
             add_player(session, "ann"),
-            add_player(session, "zed"),
+            add_player(session, "Zed"),
             add_player(session, "amy"),
         )
         match = made(session, (ann, zed))
