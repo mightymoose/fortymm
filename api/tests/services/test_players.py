@@ -384,64 +384,129 @@ def test_the_accounts_own_player_with_an_open_question_stays_its_player(
     [lambda ant: Answer.NO, lambda ant: Answer.NOT_MINE, SameAs],
     ids=["no", "not_mine", "same_as"],
 )
-def test_an_answer_but_yes_on_the_accounts_own_player_leaves_it_none(
+def test_an_answer_but_yes_on_the_accounts_own_player_gives_it_a_new_one(
     migrated_database: Engine, reply: Callable[[PlayerId], Reply]
 ) -> None:
     question = verified_in_place(migrated_database)
     ant = add_player(migrated_database, question.account, "able ant 102", "managed")
 
-    answer(migrated_database, question, reply(ant))
+    found = in_transaction(
+        migrated_database,
+        lambda session: answer_question(
+            session,
+            question.account,
+            question.player,
+            reply(ant),
+            new_display_name=lambda: "zany zebra 101",
+        ),
+    )
 
-    assert self_players(migrated_database, question.account) == []
-    started = started_player(migrated_database, question, "zany zebra 101")
-    assert started not in (question.player, ant)
-    assert self_players(migrated_database, question.account) == [started]
+    [zebra] = self_players(migrated_database, question.account)
+    assert zebra not in (question.player, ant)
+    assert found.players[0] == listed(
+        zebra, "zany zebra 101", "self", open_question=False
+    )
+    assert started_player(migrated_database, question, "calm crane 765") == zebra
 
 
-def test_yes_into_a_self_player_with_an_open_question_keeps_it_open(
-    migrated_database: Engine,
+@pytest.mark.parametrize("other_older", [False, True], ids=["own_older", "other_older"])
+def test_yes_on_another_player_makes_it_the_accounts_own_and_keeps_the_own_question(
+    migrated_database: Engine, other_older: bool
 ) -> None:
-    question = verified_in_place(migrated_database)
+    own = verified_in_place(migrated_database)
     badger = add_player(
         migrated_database,
-        question.account,
+        own.account,
         "brave badger 214",
         "managed",
-        adopted_from=question.adopted_from,
+        adopted_from=own.adopted_from,
     )
-    created(migrated_database, badger, days_ago=1)
+    if other_older:
+        created(migrated_database, badger, days_ago=1)
 
     found = answer(
-        migrated_database,
-        Question(question.account, badger, question.adopted_from),
-        Answer.YES,
+        migrated_database, Question(own.account, badger, own.adopted_from), Answer.YES
     )
 
     assert found == Answered(
-        Merged(survivor=badger, merged=question.player),
-        [listed(badger, "brave badger 214", "self", open_question=True)],
+        Settled("self"),
+        [
+            listed(badger, "brave badger 214", "self", open_question=False),
+            listed(own.player, EGRET, "managed", open_question=True),
+        ],
     )
+    assert answer(migrated_database, own, Answer.NO).players == [
+        listed(badger, "brave badger 214", "self", open_question=False),
+        listed(own.player, EGRET, "managed", open_question=False),
+    ]
+    assert started_player(migrated_database, own, "calm crane 765") == badger
 
 
-def test_adoption_into_a_self_player_with_an_open_question_keeps_it_open(
+def test_an_unplayed_guest_becomes_the_accounts_own_player_in_place_of_one_with_an_open_question(
     migrated_database: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    question = verified_in_place(migrated_database)
+    own = verified_in_place(migrated_database)
     monkeypatch.setattr(
         "fortymm_api.services.adoption.has_activity", lambda session, player: False
     )
 
     def second_device(session: Session) -> PlayerId:
         guest, player = new_guest(session, "brave badger 214")
-        adopt_guest(session, guest, question.account)
+        adopt_guest(session, guest, own.account)
         return player
 
     badger = in_transaction(migrated_database, second_device)
+    created(migrated_database, badger, days_ago=7)
 
-    assert merged_into(migrated_database, badger) == question.player
-    assert players_of(migrated_database, question.account) == [
-        listed(question.player, EGRET, "self", open_question=True)
+    assert players_of(migrated_database, own.account) == [
+        listed(badger, "brave badger 214", "self", open_question=False),
+        listed(own.player, EGRET, "managed", open_question=True),
     ]
+    assert answer(migrated_database, own, Answer.YES) == Answered(
+        Merged(survivor=badger, merged=own.player),
+        [listed(badger, "brave badger 214", "self", open_question=False)],
+    )
+
+
+def test_two_answers_at_once_that_each_need_an_own_player_leave_one(
+    migrated_database: Engine,
+) -> None:
+    own = verified_in_place(migrated_database)
+    badger = add_player(
+        migrated_database,
+        own.account,
+        "brave badger 214",
+        "managed",
+        adopted_from=own.adopted_from,
+    )
+
+    wait_behind(
+        migrated_database,
+        lambda session: answer_question(session, own.account, own.player, Answer.NO),
+        lambda session: answer_question(session, own.account, badger, Answer.YES),
+    )[1].result()
+
+    assert self_players(migrated_database, own.account) == [badger]
+
+
+@pytest.mark.parametrize("answer_first", [True, False], ids=["answer", "session"])
+def test_no_on_the_accounts_own_player_and_a_session_at_once_leave_one_own_player(
+    migrated_database: Engine, answer_first: bool
+) -> None:
+    own = verified_in_place(migrated_database)
+
+    def no(session: Session) -> Answered:
+        return answer_question(session, own.account, own.player, Answer.NO)
+
+    def start(session: Session) -> PlayerId:
+        return start_session(
+            session, own.token, ANN, new_display_name=lambda: "calm crane 765"
+        ).player.id
+
+    holder, waiter = (no, start) if answer_first else (start, no)
+    wait_behind(migrated_database, holder, waiter)[1].result()
+
+    assert len(self_players(migrated_database, own.account)) == 1
 
 
 @pytest.mark.parametrize("value", PLAIN_ANSWERS)

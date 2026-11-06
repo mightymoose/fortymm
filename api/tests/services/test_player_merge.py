@@ -348,28 +348,6 @@ def test_a_result_and_a_merge_of_its_side_players_survivor_take_turns(
     assert isinstance(merging.result(), Merged)
 
 
-def test_the_survivor_keeps_the_open_question_of_the_player_merged_into(
-    migrated_database: Engine,
-) -> None:
-    def setup(session: Session) -> tuple[AccountId, AccountId, Merged]:
-        add_player(session, ANN)
-        add_player(session, CY)
-        ann = add_account(session, manages=[CY])
-        guest = add_account(session)
-        session.add(
-            PlayerManager(
-                player_id=ANN, account_id=ann, relationship="self", adopted_from=guest
-            )
-        )
-        session.flush()
-        return ann, guest, merge_players(session, ann, CY, ANN)
-
-    ann, guest, merged = in_transaction(migrated_database, setup)
-
-    assert manager_rows(migrated_database, merged.survivor) == [(ann, "self", guest)]
-    assert manager_rows(migrated_database, merged.merged) == [(ann, "managed", None)]
-
-
 def test_adoption_asks_instead_of_merging_two_players_who_played_each_other(
     migrated_database: Engine,
 ) -> None:
