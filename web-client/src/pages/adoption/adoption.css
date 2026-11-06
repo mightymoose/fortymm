@@ -57,7 +57,9 @@
 .review-skeleton--counter{width:30%;height:calc(var(--text-sm) * var(--lh-snug));margin-bottom:var(--s-2)}
 .review-skeleton--question{width:60%;height:calc(var(--text-2xl) * var(--lh-snug))}
 .review-skeleton--line{height:calc(var(--text-base) * var(--lh-normal));margin-top:var(--s-2)}
-.review-skeleton--preview{height:calc(var(--s-1) + var(--s-3) + var(--text-base) * var(--lh-snug) + 2px + var(--s-2));margin-top:var(--s-6);border-radius:var(--r-md)}
+/* A sign-in asks only about a player that has played, so the preview has
+   its headline and at least one match row. */
+.review-skeleton--preview{height:calc(var(--s-1) + var(--s-3) + var(--text-base) * var(--lh-snug) + 2px + var(--s-1) + 2 * var(--s-3) + var(--text-md) * var(--lh-snug) + 2px + var(--text-sm) * var(--lh-snug) + var(--s-2));margin-top:var(--s-6);border-radius:var(--r-md)}
 .review-skeleton--outcome{height:calc(2 * var(--text-sm) * var(--lh-normal))}
 .review-skeleton--button{height:var(--s-12);border-radius:var(--r-md)}
 
