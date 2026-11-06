@@ -271,9 +271,14 @@ _MATCH_COLUMNS: _MatchQuery = select(
 
 
 def _match_rows(session: Session, query: _MatchQuery) -> list[_MatchRow]:
+    # Each later statement of the read sees what committed before it, so a
+    # result committing between two of them would show half its rows. Every
+    # write to a match holds lock_match() first, and the share lock makes it
+    # wait for the read to end.
+    locked = query.with_for_update(read=True, of=Match)
     return [
         _MatchRow(MatchId(id), created_at, created_by, as_best_of(best_of), rated)
-        for id, created_at, created_by, best_of, rated in session.execute(query)
+        for id, created_at, created_by, best_of, rated in session.execute(locked)
     ]
 
 

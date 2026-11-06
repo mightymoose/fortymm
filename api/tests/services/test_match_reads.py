@@ -3,11 +3,15 @@ read of one match goes through both, and checks that they show it alike.
 The boards, results and overrides are recorded through their services, so
 the reads see what the routes write."""
 
+import time
 import uuid
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from locks import backend_waits_for_a_lock
 from match_setup import (
     add_account,
     add_match,
@@ -17,8 +21,8 @@ from match_setup import (
     sender,
 )
 from signed_result_vectors import KEYS
-from sqlalchemy import Engine, event, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy import Connection, Engine, event, select, text, update
+from sqlalchemy.orm import Session, sessionmaker
 
 from fortymm_api.accounts import AccountId, PlayerId
 from fortymm_api.matches import MatchId
@@ -109,9 +113,10 @@ def result_of(
     rated: bool = True,
     ending: Ending = COMPLETED,
     replaces: Recorded | None = None,
+    match: MatchId = MATCH,
 ) -> MatchResult:
     return MatchResult(
-        match=MATCH,
+        match=match,
         best_of=3,
         rated=rated,
         players=(s.ann, s.bo),
@@ -131,9 +136,14 @@ def envelope_of(
     return data
 
 
-def upload(database: Engine, data: bytes, account: AccountId | None = None) -> Recorded:
+def upload(
+    database: Engine,
+    data: bytes,
+    account: AccountId | None = None,
+    match: MatchId = MATCH,
+) -> Recorded:
     answer = in_transaction(
-        database, lambda session: record_result(session, MATCH, data, sender(account))
+        database, lambda session: record_result(session, match, data, sender(account))
     )
     assert isinstance(answer, Recorded), answer
     return answer
@@ -592,4 +602,116 @@ def test_one_upload_both_sides_signed_gives_an_event_per_side(
     assert events[1:] == (
         MatchEvent(uploaded, "signed", "Ann", 0, FIRST),
         MatchEvent(uploaded, "signed", "Bo", 1, FIRST),
+    )
+
+
+def statements_of(database: Engine, work: Callable[[Session], object]) -> int:
+    count = 0
+
+    def counted(*_: object) -> None:
+        nonlocal count
+        count += 1
+
+    event.listen(database, "before_cursor_execute", counted)
+    try:
+        in_transaction(database, work)
+    finally:
+        event.remove(database, "before_cursor_execute", counted)
+    return count
+
+
+def countered_during_each_statement[T](
+    database: Engine, s: Scene, reading: Callable[[Session, MatchId], T]
+) -> None:
+    """For each statement of the read, a new match whose result Ann signed,
+    and Bo's counter to it, committed from another connection just after
+    that statement. The read shows the match as it was before the counter
+    or after it, and never fails."""
+    upload(database, envelope_of(result_of(s, FIRST), (ANN_KEY, s.ann)))
+    statements = statements_of(database, lambda session: reading(session, MATCH))
+    for k in range(1, statements + 1):
+        countered_after_statement(database, s, reading, k)
+
+
+def countered_after_statement[T](
+    database: Engine, s: Scene, reading: Callable[[Session, MatchId], T], k: int
+) -> None:
+    match = MatchId(uuid.uuid4())
+    in_transaction(
+        database,
+        lambda session: add_match(
+            session, match, MatchDetails(3, True, (s.ann, s.bo)), s.ann_account
+        ),
+    )
+    r1 = upload(
+        database,
+        envelope_of(result_of(s, FIRST, match=match), (ANN_KEY, s.ann)),
+        match=match,
+    )
+    counter = envelope_of(result_of(s, OTHER, replaces=r1, match=match), (BO_KEY, s.bo))
+    before = in_transaction(database, lambda session: reading(session, match))
+    sessions = sessionmaker(database)
+    pids: list[int] = []
+    reader: Connection | None = None
+    seen = 0
+    writer: Future[Recorded | Refused] | None = None
+
+    def write() -> Recorded | Refused:
+        with sessions.begin() as session:
+            pids.append(session.scalar(text("SELECT pg_backend_pid()")))
+            return record_result(session, match, counter, sender(None))
+
+    def read(session: Session) -> T:
+        nonlocal reader
+        reader = session.connection()
+        return reading(session, match)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+
+        def after(conn: Connection, *_: object) -> None:
+            nonlocal seen, writer
+            if conn is not reader:
+                return
+            seen += 1
+            if seen != k:
+                return
+            writer = executor.submit(write)
+            deadline = time.monotonic() + 10
+            while not (
+                writer.done() or (pids and backend_waits_for_a_lock(database, pids[0]))
+            ):
+                assert time.monotonic() < deadline, "the counter never ran"
+                time.sleep(0.02)
+
+        event.listen(database, "after_cursor_execute", after)
+        try:
+            during = in_transaction(database, read)
+        finally:
+            event.remove(database, "after_cursor_execute", after)
+        assert writer is not None, f"statement {k} never ran"
+        assert isinstance(writer.result(timeout=10), Recorded)
+
+    after_counter = in_transaction(database, lambda session: reading(session, match))
+    assert during in (before, after_counter), f"after statement {k}"
+
+
+def test_the_list_holds_still_while_a_result_commits(
+    migrated_database: Engine,
+) -> None:
+    s = scene(migrated_database)
+
+    countered_during_each_statement(
+        migrated_database, s, lambda session, _: list_matches(session, s.spectator)
+    )
+
+
+def test_a_match_and_its_history_hold_still_while_a_result_commits(
+    migrated_database: Engine,
+) -> None:
+    s = scene(migrated_database)
+
+    countered_during_each_statement(
+        migrated_database,
+        s,
+        lambda session, match: get_match(session, match, s.spectator),
     )
