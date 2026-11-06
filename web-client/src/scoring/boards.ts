@@ -48,9 +48,8 @@ export function learnBoard(matchId: string, text: string): void {
   update(matchId, { synced: text })
 }
 
-export function forgetBoards(matchId?: string): void {
-  if (matchId === undefined) boards.clear()
-  else boards.delete(matchId)
+export function forgetBoards(): void {
+  boards.clear()
   for (const listener of listeners) listener()
 }
 

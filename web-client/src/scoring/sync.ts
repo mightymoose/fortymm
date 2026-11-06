@@ -1,7 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { ApiError, classifyFailure } from '../api/errors'
 import { acknowledge, boardsOf, dropBoard, matchesWithPending, subscribeBoards } from './boards'
-import { fetchBoard, knownOffline, putBoard, subscribeNetwork } from './demoServer'
+import { fetchBoard, putBoard } from './demoServer'
 
 // Sends a match's board to the server in the background, so spectators and
 // tournament directors can watch it. It's best effort: the URL keeps the
@@ -76,7 +76,6 @@ class MatchSync {
   // The server's board may have changed since the last pull.
   private needsPull = true
   private readonly unsubscribe: () => void
-  private readonly unsubscribeNetwork: () => void
   private readonly matchId: string
 
   constructor(matchId: string) {
@@ -88,11 +87,6 @@ class MatchSync {
       void this.step()
     })
     window.addEventListener('online', this.kick)
-    // A switch of the demo network plays a connection that came back, so a
-    // waiting board sends at once rather than at its next retry.
-    this.unsubscribeNetwork = subscribeNetwork(() => {
-      if (!knownOffline()) this.kick()
-    })
   }
 
   // Syncs now rather than at the next retry, and pulls the server's board,
@@ -114,7 +108,6 @@ class MatchSync {
     if (this.state.kind === 'waitingRetry') clearTimeout(this.state.timer)
     this.state = { kind: 'stopped' }
     this.unsubscribe()
-    this.unsubscribeNetwork()
     window.removeEventListener('online', this.kick)
   }
 
@@ -139,7 +132,7 @@ class MatchSync {
     const { pending } = boardsOf(this.matchId)
     const step = nextStep({
       pending,
-      offline: knownOffline(),
+      offline: !navigator.onLine,
       wantsPull: this.needsPull && this.watchers.size > 0,
     })
     switch (step) {

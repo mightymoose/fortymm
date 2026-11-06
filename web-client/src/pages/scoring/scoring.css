@@ -102,13 +102,6 @@
 .approval-form{display:flex;flex-direction:column;gap:var(--s-4)}
 .approval-actions{display:flex;flex-wrap:wrap;gap:var(--s-3)}
 
-/* The testing tools, set apart from the match by a rule above them. */
-.score-testing{display:flex;flex-direction:column;gap:var(--s-3);margin-top:var(--s-6);padding-top:var(--s-6);border-top:1px solid var(--border-subtle)}
-.score-testing__title{margin:0;font:600 var(--text-md)/var(--lh-snug) var(--font-ui);color:var(--fg-2)}
-.score-testing__network{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-3)}
-.score-testing__network .fm-seg{max-width:100%;overflow-x:auto}
-.score-testing__actions{display:flex;flex-wrap:wrap;gap:var(--s-2)}
-
 /* Phones keep the two sides next to each other, so the whole pad stays
    above the fold, and the type shrinks instead. */
 @media (max-width:880px){

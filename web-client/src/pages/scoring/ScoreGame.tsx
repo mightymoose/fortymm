@@ -15,7 +15,6 @@ import { ResultPanel } from './ResultPanel'
 import { ScoreEntry } from './ScoreEntry'
 import { useSubmitResult } from './useSubmitResult'
 import { midSentence, PATH, playerLabel, ROUTE, sidesFor } from './sides'
-import { TestingPanel } from './TestingPanel'
 import './scoring.css'
 
 // One match's scores, open at one game. The URL's fragment holds every
@@ -103,7 +102,6 @@ export function ScoreGame() {
           sync={sync}
         />
         <ResultPanel match={match} viewer={viewer} />
-        <TestingPanel match={match} />
       </main>
     </div>
   )

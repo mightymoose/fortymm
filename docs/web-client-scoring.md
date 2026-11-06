@@ -96,10 +96,10 @@ The scoring pages, the URL fragment, board sync and the result pages.
 - A match's sync is a state machine of `idle`, `sending`,
   `waitingRetry`, `waitingOnline`, `pulling` and `stopped`, with why the
   last send got stuck kept beside it. `nextStep()` picks what an idle
-  sync does. While the browser knows it's offline (`navigator.onLine`,
-  or the demo's `offline`), it sends nothing and waits for `online`. A
-  board that can't get through waits, with a backoff of 2, 4, 8, 15 and
-  then 30 seconds, and goes as soon as the browser fires `online`. A 4xx
+  sync does. While the browser knows it's offline (`navigator.onLine`
+  is false), it sends nothing and waits for `online`. A board that
+  can't get through waits, with a backoff of 2, 4, 8, 15 and then 30
+  seconds, and goes as soon as the browser fires `online`. A 4xx
   other than 429 drops the board. `useAppSync()` runs in `Root`, on every
   page, for each match with a board to send, so it still goes after the
   person leaves the scoring page. A sync stops when its last holder lets
@@ -116,20 +116,7 @@ The scoring pages, the URL fragment, board sync and the result pages.
   board issued later, so opening it never undoes it.
 - `src/scoring/demoServer.ts` stands in for the API's match routes. It
   keeps the latest board per match under `fortymm-demo-server:<matchId>`,
-  with `putBoard()` and `fetchBoard()`. Each call waits, then may fail,
-  as the demo network says: `normal` (300ms), `slow` (2.5s), `flaky`
-  (every second request on that network answers 503), `offline` (each
-  request fails at once) or `broken` (500). The network is in
-  `localStorage` under `fortymm-demo-network`, and each request reads it.
-  A switch to any network but `offline` fires `online`, as a connection
-  that came back does. Tests set it with `setDemoNetwork()`.
-- A Testing panel at the bottom of the edit page (`TestingPanel.tsx`)
-  switches the network. Reset match clears the server's board and this
-  tab's unsent one, and opens game 1 with no scores. An API match keeps
-  its details in the fragment. Clear everything does
-  that for every demo match and sets the network back to `normal`. Both
-  drop the demo server's requests in flight, so a late one can't bring
-  back what they cleared. The panel goes when the API has matches.
+  with `putBoard()` and `fetchBoard()`. Each call answers after 300ms.
 - The strip shows each game's sync while this tab has a board to send.
   A game is unsynced when its points differ from the `synced` board. It
   shows a dot while the board is on its way, a dashed amber edge and

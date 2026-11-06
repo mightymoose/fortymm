@@ -1,6 +1,7 @@
 import { act, cleanup, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { serverBoard, setDemoNetwork, setServerBoard, type Network } from '../../scoring/demoServer'
+import { vi } from 'vitest'
+import { serverBoard, setServerBoard } from '../../scoring/demoServer'
 import { signWithDeviceKey } from '../../signing/deviceKey'
 import { renderRoute, type AppRouter } from '../renderRoute'
 
@@ -133,16 +134,16 @@ export class ScoreGamePage {
     return this.strip.querySelector('.score-strip__note')?.textContent ?? null
   }
 
-  // Switches the demo server's network, as a connection that drops or
-  // comes back, and waits for the sync it starts.
-  async switchNetwork(network: Network): Promise<void> {
-    act(() => setDemoNetwork(network))
-    await this.settle()
+  // Takes the browser offline, as a hall with no signal does.
+  goOffline(): void {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
   }
 
-  // The testing panel's choice of network.
-  network(label: string): HTMLElement {
-    return screen.getByRole('radio', { name: label })
+  // Brings the browser back online, and waits for the sync it starts.
+  async goOnline(): Promise<void> {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
+    act(() => window.dispatchEvent(new Event('online')))
+    await this.settle()
   }
 
   // The score input for `player`.
