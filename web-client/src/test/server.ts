@@ -248,8 +248,8 @@ const PLAYED_EACH_OTHER: Refusal = {
   title: 'These players played each other, so they are two people',
 }
 
-// A player as the players list gives it. No player has a match until games
-// exist. `played_against` defaults to none.
+// A player as the players list gives it, with no matches. `played_against`
+// defaults to none.
 export function listedPlayer(
   player: Pick<AccountPlayer, 'id' | 'display_name' | 'relationship' | 'open_question'> &
     Partial<Pick<AccountPlayer, 'played_against'>>,

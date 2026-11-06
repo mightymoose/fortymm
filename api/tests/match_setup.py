@@ -47,12 +47,14 @@ def in_transaction[T](database: Engine, work: Callable[[Session], T]) -> T:
         return work(session)
 
 
-def add_player(session: Session, id: uuid.UUID | None = None) -> PlayerId:
+def add_player(
+    session: Session, id: uuid.UUID | None = None, *, name: str = "player"
+) -> PlayerId:
     """A player that no account manages, as a record made for an opponent
     is."""
     return session.scalars(
         insert(Player)
-        .values(id=id or uuid.uuid4(), display_name=f"player {uuid.uuid4().hex[:12]}")
+        .values(id=id or uuid.uuid4(), display_name=f"{name} {uuid.uuid4().hex[:12]}")
         .returning(Player.id)
     ).one()
 
@@ -129,6 +131,23 @@ def add_result(session: Session, result: MatchResult) -> None:
         insert(StoredMatchResult).values(
             match_id=result.match, payload=encode_payload(result, ISSUED_AT)
         )
+    )
+
+
+def add_current_result(session: Session, result: MatchResult) -> None:
+    """The result, accepted as its match's current result. Unsigned, because
+    only the payload is stored."""
+    stored = session.scalars(
+        insert(StoredMatchResult)
+        .values(
+            match_id=result.match,
+            payload=encode_payload(result, ISSUED_AT),
+            accepted_at=ISSUED_AT,
+        )
+        .returning(StoredMatchResult.id)
+    ).one()
+    session.execute(
+        update(Match).where(Match.id == result.match).values(current_result_id=stored)
     )
 
 

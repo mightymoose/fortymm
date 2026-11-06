@@ -7,11 +7,22 @@ from collections.abc import Iterator
 import httpx2 as httpx
 import pytest
 from fastapi.testclient import TestClient
-from match_setup import in_transaction, played
-from sqlalchemy import Engine, text
+from match_setup import (
+    add_current_result,
+    add_match,
+    add_player,
+    in_transaction,
+    played,
+)
+from sqlalchemy import Engine, select, text
+from sqlalchemy.orm import Session
 
 from fortymm_api.accounts import PlayerId
 from fortymm_api.main import create_app
+from fortymm_api.matches import MatchId
+from fortymm_api.models import Player
+from fortymm_api.services.matches import MatchDetails
+from fortymm_api.signed_results import Completed, MatchResult
 
 JSON = {"Content-Type": "application/json"}
 
@@ -98,6 +109,52 @@ def test_lists_the_accounts_players(client: TestClient, player: dict[str, str]) 
             }
         ]
     }
+
+
+def test_a_recent_match_has_its_opponents_and_result(
+    client: TestClient, player: dict[str, str], migrated_database: Engine
+) -> None:
+    def setup(session: Session) -> tuple[MatchId, str]:
+        me, sam = PlayerId(uuid.UUID(player["id"])), add_player(session)
+        match = MatchId(uuid.uuid4())
+        add_match(session, match, MatchDetails(3, False, (me, sam)))
+        add_current_result(
+            session,
+            MatchResult(match, 3, False, (me, sam), ((11, 5), (11, 7)), Completed()),
+        )
+        name: str = session.scalars(
+            select(Player.display_name).where(Player.id == sam)
+        ).one()
+        return match, name
+
+    match, sam_name = in_transaction(migrated_database, setup)
+
+    [recent] = client.get("/v1/account/players").json()["data"][0]["recent_matches"]
+
+    assert recent == {
+        "id": str(match),
+        "played_at": recent["played_at"],
+        "opponents": [sam_name],
+        "result": {"won": True, "games": [2, 0]},
+    }
+
+
+def test_a_recent_match_with_no_result_has_no_result_field(
+    client: TestClient, player: dict[str, str], migrated_database: Engine
+) -> None:
+    me = PlayerId(uuid.UUID(player["id"]))
+    in_transaction(
+        migrated_database,
+        lambda session: add_match(
+            session,
+            MatchId(uuid.uuid4()),
+            MatchDetails(3, False, (me, add_player(session))),
+        ),
+    )
+
+    [recent] = client.get("/v1/account/players").json()["data"][0]["recent_matches"]
+
+    assert "result" not in recent
 
 
 def test_an_answer_returns_the_accounts_players(

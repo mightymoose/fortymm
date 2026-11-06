@@ -483,7 +483,7 @@
           "players"
         ],
         "summary": "Account Players",
-        "description": "List the players the account manages, its own player first. A merged\nplayer isn't listed.\n\n`open_question` is true for a player that a sign-in brought to the\naccount, until the account answers \"Is this you?\" for it.\n`match_count` counts the player's matches, and `recent_matches` holds\nits latest ones, newest first.",
+        "description": "List the players the account manages, its own player first. A merged\nplayer isn't listed.\n\n`open_question` is true for a player that a sign-in brought to the\naccount, until the account answers \"Is this you?\" for it.\n`match_count` counts the player's matches, and `recent_matches` holds\nits latest ones, newest first, each with the other side's players and,\nonce it has one, the result from the player's side.",
         "operationId": "account_players",
         "responses": {
           "200": {
@@ -4016,14 +4016,49 @@
             "type": "string",
             "format": "date-time",
             "title": "Played At"
+          },
+          "opponents": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Opponents"
+          },
+          "result": {
+            "$ref": "#/components/schemas/RecentResult",
+            "title": "Result"
           }
         },
         "type": "object",
         "required": [
           "id",
-          "played_at"
+          "played_at",
+          "opponents"
         ],
         "title": "RecentMatch"
+      },
+      "RecentResult": {
+        "properties": {
+          "won": {
+            "type": "boolean",
+            "title": "Won"
+          },
+          "games": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "title": "Games"
+          }
+        },
+        "type": "object",
+        "required": [
+          "won",
+          "games"
+        ],
+        "title": "RecentResult"
       },
       "RegisterKeyRequest": {
         "properties": {

@@ -4,11 +4,12 @@ from uuid import UUID
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from fortymm_api.accounts import PlayerId
 from fortymm_api.auth import RequestAccount
 from fortymm_api.database import DatabaseSession
-from fortymm_api.services import players
+from fortymm_api.services import player_matches, players
 from fortymm_api.services.player_merge import Merged
 from fortymm_api.services.players import Answer, Reply, SameAs
 from fortymm_api.v1.errors import NO_SESSION, UNSUPPORTED_MEDIA_TYPE, Responses, errors
@@ -45,9 +46,24 @@ ANSWER_ERRORS: Responses = {
 }
 
 
+class RecentResult(BaseModel):
+    won: bool
+    # The listed player's games, then the other side's.
+    games: Annotated[list[int], Field(min_length=2, max_length=2)]
+
+
 class RecentMatch(BaseModel):
     id: UUID
     played_at: datetime
+    # The display names of the players on the other side, by name. A player
+    # merged into another shows the survivor's name.
+    opponents: list[str]
+    # From the match's current result, and absent until it has one. A null
+    # would make the schema `anyOf` with null, which the iOS client's
+    # generator drops.
+    result: RecentResult | SkipJsonSchema[None] = Field(
+        default=None, exclude_if=lambda result: result is None
+    )
 
 
 class AccountPlayer(BaseModel):
@@ -115,13 +131,25 @@ def player_models(found: list[players.AccountPlayer]) -> list[AccountPlayer]:
             open_question=player.open_question,
             match_count=player.match_count,
             recent_matches=[
-                RecentMatch(id=match.id, played_at=match.played_at)
-                for match in player.recent_matches
+                recent_match_model(match) for match in player.recent_matches
             ],
             played_against=sorted(player.played_against),
         )
         for player in found
     ]
+
+
+def recent_match_model(match: player_matches.RecentMatch) -> RecentMatch:
+    return RecentMatch(
+        id=match.id,
+        played_at=match.played_at,
+        opponents=list(match.opponents),
+        result=(
+            RecentResult(won=match.result.won, games=list(match.result.games))
+            if match.result
+            else None
+        ),
+    )
 
 
 def outcome_model(outcome: players.Outcome) -> MergedOutcome | SettledOutcome:
@@ -142,7 +170,8 @@ def account_players(
     `open_question` is true for a player that a sign-in brought to the
     account, until the account answers "Is this you?" for it.
     `match_count` counts the player's matches, and `recent_matches` holds
-    its latest ones, newest first.
+    its latest ones, newest first, each with the other side's players and,
+    once it has one, the result from the player's side.
     """
     return AccountPlayersResponse(
         data=player_models(players.account_players(session, account.id))

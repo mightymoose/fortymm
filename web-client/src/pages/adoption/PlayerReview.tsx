@@ -15,6 +15,7 @@ import { Icon } from '../../components/Icon'
 import { QueryBoundary } from '../../components/QueryBoundary'
 import { useToast, type ToastIcon } from '../../components/toastContext'
 import { Wordmark } from '../../components/Wordmark'
+import { MatchPreview } from './MatchPreview'
 import './adoption.css'
 
 type Step = 'recognize' | 'relationship' | 'choose'
@@ -321,12 +322,7 @@ function Questions() {
           <p className="review-playedas">
             <b>{current.display_name}</b> was used before you signed in.
           </p>
-          {/* Results aren't recorded yet, so the preview gives only the
-              count. The games work adds the player's recent matches here,
-              and a way to see them all. */}
-          <section className="review-preview" aria-label="Recent matches">
-            <p className="review-preview__head">{matchCount(current.match_count)}</p>
-          </section>
+          <MatchPreview player={current} />
         </main>
         <div className="review-actions" role="group" aria-label="Your answer">
           {notice}
@@ -527,9 +523,4 @@ function DestButton({
       )}
     </>
   )
-}
-
-function matchCount(count: number): string {
-  if (count === 0) return 'No matches yet'
-  return count === 1 ? '1 match' : `${count} matches`
 }
