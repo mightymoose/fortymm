@@ -58,19 +58,35 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   (`src/pages/players/Players.tsx`). Players so far shows only its title.
   Each loader waits for the session, and sends an account without
   `matches.view` or `players.view` to `/`.
-- Matches lists every match, not only the viewer's, newest first. Filter
+- Matches lists the 50 newest matches, everyone's, from
+  `GET /v1/matches`. When more exist it says "Showing the 50 newest
+  matches." under the list, and the filters act on those 50. Filter
   chips narrow it: the state chips (Live, Waiting for sign-off, Final)
-  widen each other, and Your matches narrows to the viewer's. From 900px
-  it's a table whose game scores wrap, so it fits beside the sidebar.
-  Below 900px each match is a design system match row. Each match links
-  to `_shell/matches/$matchId.tsx`, its page (`browse/SignOff.tsx`): the
-  games, each player's signature, what the viewer can do about the result
-  (a spectator only sees where it stands), and the history.
-- Both pages read sample matches (`browse/sampleMatches.ts`) through
-  `matchesQuery()` and `matchQuery()` (`browse/matchQueries.ts`), because
-  the API doesn't list or read matches yet. Each loader prefetches its
-  query without waiting for it, so a link's preload (hover, focus or
-  touch) loads the data, and the page's own boundary shows the skeleton.
+  widen each other, and Your matches narrows to the viewer's. A match
+  nobody has scored shows as Not started and counts under Live. From
+  900px it's a table whose game scores wrap, so it fits beside the
+  sidebar. Below 900px each match is a design system match row, with
+  only the names until someone scores. With no match at all it says
+  "No matches yet", with a New match link for an account with
+  `matches.create`. When the chips leave none, it says to turn one off.
+  It never shows an empty table.
+- Each match links to `_shell/matches/$matchId.tsx`, its page
+  (`browse/SignOff.tsx`), from `GET /v1/matches/{match_id}`: the games,
+  who retired if anyone did, each player's signature, what the viewer can
+  do about the result (a spectator only sees where it stands), and the
+  history. A final result says both players approved it, that one player
+  reported it (an unrated result the other side never approved), or that
+  an administrator set it, with their reason. The history's lines come
+  from the API's events (`eventText()` in `browse/match.ts`). A signature
+  that replaces the other side's pending one reads "Signed different
+  scores". An id that isn't a uuid, or one the API answers 404 to, shows
+  "No such match". The first sends no request.
+- `matchesQuery()` and `matchQuery()` (`src/api/queries.ts`) turn the
+  API's matches into `MatchRecord` and `MatchDetail` (`browse/match.ts`).
+  The API works out each match's state, and the page only words it. Each
+  loader prefetches its query without waiting for it, so a link's preload
+  (hover, focus or touch) loads the data, and the page's own boundary
+  shows the skeleton.
 - `_shell/matches/new.tsx`: the page `NewMatch`
   (`src/pages/matches/NewMatch.tsx`, with its parts in `newMatch/`),
   which sets up a match. Its loader waits for the session, and sends an
