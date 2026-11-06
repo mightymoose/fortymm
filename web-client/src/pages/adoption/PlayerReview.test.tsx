@@ -562,6 +562,16 @@ describe('Is this you?', () => {
 
       expect(page.matchPreview).toHaveTextContent('1 match today, against Kofi & Sam')
     })
+
+    it('gives the year of a match from another year', async () => {
+      const lastYear = new Date(2025, 11, 20, 18)
+      const minutesAgo = (NOW.getTime() - lastYear.getTime()) / 60_000
+      mockVerifiedAccount([withMatches([played(minutesAgo, ['Sam'])]), dove])
+      const page = await PlayerReviewPage.render()
+
+      expect(page.matchPreview).toHaveTextContent(/^1 match on .*2025, against Sam/)
+      expect(page.previewMatches).toEqual([['Sam', 'No result', expect.stringMatching(/2025 · /)]])
+    })
   })
 
   it('shows an empty match preview, with no way to see all matches', async () => {

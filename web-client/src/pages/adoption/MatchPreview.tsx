@@ -57,6 +57,9 @@ function dayOf(at: Date, now: Date): string {
   const yesterday = new Date(now)
   yesterday.setDate(now.getDate() - 1)
   if (sameDay(at, yesterday)) return 'yesterday'
+  if (at.getFullYear() !== now.getFullYear()) {
+    return at.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+  }
   return at.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
 }
 
