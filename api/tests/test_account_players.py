@@ -7,10 +7,15 @@ from collections.abc import Iterator
 import httpx2 as httpx
 import pytest
 from fastapi.testclient import TestClient
-from match_setup import add_match, add_player, add_result, in_transaction
-from played_matches import played
+from match_setup import (
+    add_current_result,
+    add_match,
+    add_player,
+    in_transaction,
+    played,
+)
 from sqlalchemy import Engine, select, text
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 from fortymm_api.accounts import PlayerId
 from fortymm_api.main import create_app
@@ -113,7 +118,7 @@ def test_a_recent_match_has_its_opponents_and_result(
         me, sam = PlayerId(uuid.UUID(player["id"])), add_player(session)
         match = MatchId(uuid.uuid4())
         add_match(session, match, MatchDetails(3, False, (me, sam)))
-        add_result(
+        add_current_result(
             session,
             MatchResult(match, 3, False, (me, sam), ((11, 5), (11, 7)), Completed()),
         )
@@ -253,8 +258,12 @@ def test_answers_409_for_a_merge_of_two_players_who_played_each_other(
                 ),
                 {"ant": ant},
             )
-    with sessionmaker(migrated_database).begin() as session:
-        played(session, (PlayerId(uuid.UUID(ant)), PlayerId(uuid.UUID(player["id"]))))
+    in_transaction(
+        migrated_database,
+        lambda session: played(
+            session, (PlayerId(uuid.UUID(ant)), PlayerId(uuid.UUID(player["id"])))
+        ),
+    )
 
     listed = client.get("/v1/account/players").json()["data"]
     response = answer(

@@ -16,7 +16,7 @@ The scoring pages, the URL fragment, board sync and the result pages.
   with no games for it (`Match.source` is `api`). A demo match's draft
   with no games is still the empty fragment. So the loader reads the
   match from the fragment and sends no request, which works offline.
-  No route reads a match, so the page has no player's name. A
+  The page reads no match from the API, so it has no player's name. A
   player sees You and Your opponent, and a spectator sees `Player 1` and
   `Player 2`. For an id that isn't a demo match, a fragment that is
   empty, can't be read or names another match throws `notFound()`. So
@@ -190,12 +190,14 @@ The scoring pages, the URL fragment, board sync and the result pages.
   Then `ServerCheck` sends the envelope to `POST
   /v1/matches/{match_id}/approvals`, with the payload's match id, through
   `approvalCheckQuery()`, in its own `QueryBoundary`. Its verdict is
-  `accepted`, or `refused` with the API's title for a 422. Accepted says
+  `accepted`, or `refused` with the API's title for a 404, a 409 or a
+  422. Accepted says
   "FortyMM checked the signatures and the scores". Refused shows "FortyMM
   refused this result" with the title. No network shows the boundary's
   error with Try again, under "Approved on this device". The query is
-  keyed by the envelope, so a reload checks again. Nothing keeps the
-  approved result yet (#195). Edit scores opens the match's game 1 with
-  the page's fragment, unchanged. After an approval, that is the envelope
+  keyed by the envelope, so a reload sends it again, which the API
+  answers as a retry. The API never makes a demo match, so a demo
+  approval gets its 404, "No match has this id", as a refusal. Edit scores opens the match's game 1
+  with the page's fragment, unchanged. After an approval, that is the envelope
   with both signatures. It checks no signature. With no key, it says the
   browser can't sign yet.

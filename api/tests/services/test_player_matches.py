@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from match_setup import add_match, add_player, add_result, in_transaction, merge
+from match_setup import add_current_result, add_match, add_player, in_transaction, merge
 from sqlalchemy import Engine, insert, select
 from sqlalchemy.orm import Session
 
@@ -52,7 +52,7 @@ def scored(
 ) -> MatchId:
     """A best of 3 between `players`, with `games` as its current result."""
     match = made(session, players)
-    add_result(session, MatchResult(match, 3, False, players, games, ending))
+    add_current_result(session, MatchResult(match, 3, False, players, games, ending))
     return match
 
 
@@ -180,9 +180,9 @@ def test_the_other_sides_players_are_in_name_order_whatever_their_case(
     # A side of two fails the team size check at commit, so this rolls back.
     with Session(migrated_database) as session:
         ann, zed, amy = (
-            add_player(session, "ann"),
-            add_player(session, "Zed"),
-            add_player(session, "amy"),
+            add_player(session, name="ann"),
+            add_player(session, name="Zed"),
+            add_player(session, name="amy"),
         )
         match = made(session, (ann, zed))
         side = session.scalars(

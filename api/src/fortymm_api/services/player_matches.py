@@ -150,7 +150,7 @@ def _current_results(
         .join(StoredMatchResult, StoredMatchResult.id == Match.current_result_id)
         .where(Match.id.in_(matches))
     )
-    return {match: decode_payload(payload)[0] for match, payload in rows}
+    return {match: decode_payload(payload).result for match, payload in rows}
 
 
 def _recent_match(

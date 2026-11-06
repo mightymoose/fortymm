@@ -1,22 +1,27 @@
 """The HTTP layer of matches. tests/services/test_matches.py and
-tests/services/test_opponents.py cover the rules."""
+tests/services/test_opponents.py cover the rules. The board and read tests
+insert their match with make()."""
 
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
-from match_setup import add_player, merge
+from match_setup import add_match, add_player, merge
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import sessionmaker
 
 from fortymm_api.accounts import PlayerId
 from fortymm_api.main import create_app
-from fortymm_api.matches import MatchId
+from fortymm_api.matches import BestOf, MatchId
 from fortymm_api.models import Player
+from fortymm_api.services.matches import MatchDetails
+from fortymm_api.signed_results import Completed, MatchResult, encode_payload
 
 JSON = {"Content-Type": "application/json"}
 MATCH = MatchId(uuid.UUID("01970000-0000-7000-8000-0000000000a1"))
+PATH = f"/v1/matches/{MATCH}"
 
 
 @pytest.fixture
@@ -58,6 +63,19 @@ def creator(client: TestClient, migrated_database: Engine) -> None:
             ),
             {"id": account["id"]},
         )
+
+
+@pytest.fixture
+def scorer(client: TestClient, migrated_database: Engine) -> None:
+    """A guest session that holds `matches.score`, through the default role."""
+    with migrated_database.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO role_permissions (role_id, permission_key)"
+                " SELECT id, 'matches.score' FROM roles WHERE is_default"
+            )
+        )
+    client.post("/v1/session", headers=JSON)
 
 
 def create_body(players: list[dict[str, str]], best_of: int = 5) -> dict[str, object]:
@@ -167,3 +185,96 @@ def test_opponents_answer_players_by_name_with_a_session(
     assert searched.status_code == 200
     assert searched.json() == {"data": sorted(players, key=lambda p: p["display_name"])}
     assert recent.json() == {"data": []}
+
+
+def make(database: Engine, players: list[dict[str, str]], best_of: BestOf = 3) -> None:
+    first, second = (PlayerId(uuid.UUID(player["id"])) for player in players)
+    details = MatchDetails(best_of, False, (first, second))
+    with sessionmaker(database).begin() as session:
+        add_match(session, MATCH, details)
+
+
+def board(players: list[dict[str, str]]) -> str:
+    first, second = (PlayerId(uuid.UUID(player["id"])) for player in players)
+    result = MatchResult(
+        match=MATCH,
+        best_of=3,
+        rated=False,
+        players=(first, second),
+        games=((11, 5),),
+        ending=Completed(),
+    )
+    return encode_payload(result, datetime(2026, 11, 4, 12, tzinfo=UTC)).hex()
+
+
+@pytest.mark.usefixtures("scorer")
+def test_a_board_answers_201_with_matches_score(
+    client: TestClient, players: list[dict[str, str]], migrated_database: Engine
+) -> None:
+    make(migrated_database, players)
+
+    response = client.post(
+        f"{PATH}/boards", headers=JSON, json={"board": board(players)}
+    )
+
+    assert response.status_code == 201
+    pushed = response.json()["data"]
+    assert pushed == {"match_id": str(MATCH), "received_at": pushed["received_at"]}
+
+
+@pytest.mark.usefixtures("scorer")
+def test_a_refused_board_answers_in_the_errors_shape(
+    client: TestClient, players: list[dict[str, str]], migrated_database: Engine
+) -> None:
+    make(migrated_database, players)
+
+    response = client.post(f"{PATH}/boards", headers=JSON, json={"board": "00"})
+
+    assert response.status_code == 422
+    title = "The board isn't a FortyMM draft or signed result"
+    assert response.json() == {"errors": [{"status": "422", "title": title}]}
+
+
+@pytest.mark.usefixtures("scorer")
+def test_a_board_with_other_details_answers_409(
+    client: TestClient, players: list[dict[str, str]], migrated_database: Engine
+) -> None:
+    make(migrated_database, players, best_of=5)
+
+    response = client.post(
+        f"{PATH}/boards", headers=JSON, json={"board": board(players)}
+    )
+
+    assert response.status_code == 409
+    title = "The best of differs from the match's"
+    assert response.json() == {"errors": [{"status": "409", "title": title}]}
+
+
+@pytest.mark.usefixtures("scorer")
+def test_a_board_for_an_unknown_match_answers_404(
+    client: TestClient, players: list[dict[str, str]]
+) -> None:
+    response = client.post(
+        f"{PATH}/boards", headers=JSON, json={"board": board(players)}
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "errors": [{"status": "404", "title": "No match has this id"}]
+    }
+
+
+def test_a_board_needs_a_session_holding_matches_score(
+    client: TestClient, players: list[dict[str, str]], migrated_database: Engine
+) -> None:
+    make(migrated_database, players)
+    body = {"board": board(players)}
+
+    signed_out = client.post(f"{PATH}/boards", headers=JSON, json=body)
+    client.post("/v1/session", headers=JSON)
+    without = client.post(f"{PATH}/boards", headers=JSON, json=body)
+
+    assert signed_out.status_code == 401
+    assert without.status_code == 403
+    title = "You don't have permission to do this"
+    assert without.json() == {"errors": [{"status": "403", "title": title}]}

@@ -48,13 +48,14 @@ function signingKeyResponse(answer: 'live' | 'revoked'): components['schemas']['
 
 type ApprovalRequest = components['schemas']['ApprovalRequest']
 
-// The API's 201 to a result whose approvals check out.
+// The API's 201 to a result it recorded.
 function approvalResponse(matchId: string): components['schemas']['ApprovalResponse'] {
   return {
     data: {
       hash: '9c1185a5c5e9fc54612808977ee8f548b2258d31f9c5c8a5bbbf3f0d0f0e0a7b',
       match_id: matchId,
       approvals: [],
+      accepted_at: null,
     },
   }
 }
@@ -137,7 +138,8 @@ export function mockSigningKeys(answers: KeyAnswer[] = [], { hold = false } = {}
 
 // How the mock API answers a result's approvals: they check out, it refuses
 // them with this title (a 422), or no response comes back.
-export type ApprovalAnswer = 'accepted' | { refused: string } | 'unreachable'
+// A refusal answers 422 unless it names another status, such as 409.
+export type ApprovalAnswer = 'accepted' | { refused: string; status?: number } | 'unreachable'
 
 // Records each approval check, by match id and envelope, and answers with
 // `answer`, which a test can change. With `hold`, each answer waits until
@@ -163,9 +165,10 @@ export function mockApprovals(answer: ApprovalAnswer = 'accepted', { hold = fals
         if (mock.answer === 'accepted') {
           return HttpResponse.json(approvalResponse(params.matchId), { status: 201 })
         }
+        const status = mock.answer.status ?? 422
         return HttpResponse.json(
-          { errors: [{ status: '422', title: mock.answer.refused }] },
-          { status: 422 },
+          { errors: [{ status: String(status), title: mock.answer.refused }] },
+          { status },
         )
       },
     ),

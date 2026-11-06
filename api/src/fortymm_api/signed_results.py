@@ -4,8 +4,8 @@ text and the link carry that envelope. api/signed-results/README.md is the
 specification, and tests/test_signed_results.py checks this module against
 every vector in api/signed-results/vectors.json.
 
-The API only verifies. sign() and append_signature() are the clients'
-reference recipe.
+The API verifies results and encodes an administrator's override.
+sign() and append_signature() are the clients' reference recipe.
 
 Every CBOR item in the format is deterministic: the envelope, the payload
 and each signer's protected header. cbor2's canonical=True sorts map keys
@@ -191,31 +191,47 @@ class VerifiedResult:
 
 
 @dataclass(frozen=True)
-class _Signature:
-    protected: bytes
+class Signature:
+    """One COSE_Signature as the envelope carries it, not yet checked: the
+    key with this kid claims to approve the result for the player on this
+    side."""
+
+    protected: bytes = field(repr=False)
     kid: KeyId
+    side: Side
     player: PlayerId
-    signature: bytes
+    signature: bytes = field(repr=False)
+
+
+@dataclass(frozen=True)
+class Payload:
+    """A decoded payload. Nothing here says that anyone signed it."""
+
+    result: MatchResult
+    # The first signer's claim. The server trusts nothing from it (#181).
+    issued_at: datetime
 
 
 @dataclass(frozen=True)
 class UnverifiedEnvelope:
     """A decoded envelope whose signatures aren't checked yet. It gives the
     result out only through verify(), so no caller can act on an unverified
-    result. Its other uses are to name the keys to look up and the match the
-    envelope is for.
+    result by mistake. Its other uses are to name the keys to look up, the
+    match the envelope is for, and the payload bytes, whose hash names the
+    result. A caller that wants the scores unsigned, as a board, decodes the
+    payload itself with decode_payload().
     """
 
-    _payload: bytes = field(repr=False)
+    payload: bytes = field(repr=False)
     _result: MatchResult
     _issued_at: datetime
-    _signatures: tuple[_Signature, ...]
+    signatures: tuple[Signature, ...]
 
     @property
     def kids(self) -> frozenset[KeyId]:
         """The kids of the envelope's signatures. The caller finds their keys
         and passes them to verify()."""
-        return frozenset(s.kid for s in self._signatures)
+        return frozenset(s.kid for s in self.signatures)
 
     @property
     def match(self) -> MatchId:
@@ -223,7 +239,11 @@ class UnverifiedEnvelope:
         sent for another match before it looks up any key."""
         return self._result.match
 
-    def verify(self, keys: Iterable[SigningPublicKey]) -> VerifiedResult:
+    def verify(
+        self,
+        keys: Iterable[SigningPublicKey],
+        verified: Iterable[Signature] = (),
+    ) -> VerifiedResult:
         """Check every signature with the key its kid names, and return the
         result.
 
@@ -232,23 +252,36 @@ class UnverifiedEnvelope:
         wrong key and credit an approval to someone else. A key's state
         (revoked, signed out) is the caller's business, not the format's.
 
-        Raises UnknownKey if any kid has no key, before any signature is
-        checked. Then raises BadSignature for the first signature that fails.
+        `verified` holds signatures of this envelope that the caller already
+        checked over these payload bytes, such as ones it stored. They need
+        no key. So a retry of an envelope still verifies after its key is
+        revoked.
+
+        Raises UnknownKey if any other kid has no key, before any signature
+        is checked. Then raises BadSignature for the first other signature
+        that fails.
         """
         found = {key.kid: key for key in keys}
-        if missing := self.kids - found.keys():
+        trusted = set(verified)
+        unchecked = [s for s in self.signatures if s not in trusted]
+        if missing := {s.kid for s in unchecked} - found.keys():
             raise UnknownKey(frozenset(missing))
-        for s in self._signatures:
+        for s in unchecked:
             if not found[s.kid].verify(
-                s.signature, _sig_structure(s.protected, self._payload)
+                s.signature, _sig_structure(s.protected, self.payload)
             ):
                 raise BadSignature(s.kid)
         return VerifiedResult(
-            hash=ResultHash(hashlib.sha256(self._payload).digest()),
+            hash=result_hash(self.payload),
             result=self._result,
             issued_at=self._issued_at,
-            approvals=frozenset(Approval(s.kid, s.player) for s in self._signatures),
+            approvals=frozenset(Approval(s.kid, s.player) for s in self.signatures),
         )
+
+
+def result_hash(payload: bytes) -> ResultHash:
+    """The SHA-256 of the payload bytes, the result's identity."""
+    return ResultHash(hashlib.sha256(payload).digest())
 
 
 def encode_payload(result: MatchResult, issued_at: datetime) -> bytes:
@@ -302,9 +335,9 @@ def append_signature(
     """
     unverified = decode_envelope(envelope)
     side = _side_of(unverified._result.players, player)
-    signatures = [(s.protected, s.signature) for s in unverified._signatures]
-    signatures.append(_cose_signature(unverified._payload, key, side))
-    return _envelope(unverified._payload, signatures)
+    signatures = [(s.protected, s.signature) for s in unverified.signatures]
+    signatures.append(_cose_signature(unverified.payload, key, side))
+    return _envelope(unverified.payload, signatures)
 
 
 def decode_envelope(envelope: bytes) -> UnverifiedEnvelope:
@@ -326,16 +359,28 @@ def decode_envelope(envelope: bytes) -> UnverifiedEnvelope:
         raise Malformed("the body unprotected header isn't an empty map")
     if not isinstance(payload, bytes):
         raise Malformed("the payload isn't a byte string")
-    result, issued_at = decode_payload(payload)
+    decoded = decode_payload(payload)
     cose_signatures = _array(signatures)
     if not cose_signatures:
         raise Malformed("no signatures")
     return UnverifiedEnvelope(
         payload,
-        result,
-        issued_at,
-        tuple(_decode_signature(s, result.players) for s in cose_signatures),
+        decoded.result,
+        decoded.issued_at,
+        tuple(_decode_signature(s, decoded.result.players) for s in cose_signatures),
     )
+
+
+def decode_payload(payload: bytes) -> Payload:
+    """Parse payload bytes on their own, with no envelope and no signature,
+    as a board carries a draft of the scores. Raises Malformed for anything
+    that isn't this format's payload, by the same rules as decode_envelope().
+    """
+    claims = _exact_keys(_loads_deterministic(payload), required={_IAT, DOMAIN_TAG})
+    iat = _uint(claims[_IAT])
+    if iat > _MAX_IAT:
+        raise Malformed("iat is after 9999-12-31T23:59:59Z")
+    return Payload(_decode_result(claims[DOMAIN_TAG]), datetime.fromtimestamp(iat, UTC))
 
 
 def qr_text(envelope: bytes) -> str:
@@ -392,16 +437,9 @@ def _loads_deterministic(data: bytes) -> object:
     return value
 
 
-def decode_payload(payload: bytes) -> tuple[MatchResult, datetime]:
-    """The result and issue time in a payload that encode_payload() made,
-    such as a stored result's. Raises Malformed as decode_envelope() does."""
-    claims = _exact_keys(_loads_deterministic(payload), required={_IAT, DOMAIN_TAG})
-    iat = _uint(claims[_IAT])
-    if iat > _MAX_IAT:
-        raise Malformed("iat is after 9999-12-31T23:59:59Z")
-    issued_at = datetime.fromtimestamp(iat, UTC)
+def _decode_result(value: object) -> MatchResult:
     r = _exact_keys(
-        claims[DOMAIN_TAG],
+        value,
         required={_MATCH, _BEST_OF, _RATED, _PLAYERS, _GAMES, _ENDING},
         optional={_RETIRED_BY, _REPLACES},
     )
@@ -415,7 +453,7 @@ def decode_payload(payload: bytes) -> tuple[MatchResult, datetime]:
             raise Malformed("ending isn't 0 without retired_by or 1 with it")
     first, second = _array(r[_PLAYERS], 2)
     try:
-        result = MatchResult(
+        return MatchResult(
             match=MatchId(_uuid(r[_MATCH])),
             best_of=_best_of(r[_BEST_OF]),
             rated=_bool(r[_RATED]),
@@ -430,10 +468,9 @@ def decode_payload(payload: bytes) -> tuple[MatchResult, datetime]:
         )
     except ValueError as error:
         raise Malformed(str(error)) from error
-    return result, issued_at
 
 
-def _decode_signature(item: object, players: tuple[PlayerId, PlayerId]) -> _Signature:
+def _decode_signature(item: object, players: tuple[PlayerId, PlayerId]) -> Signature:
     protected, unprotected, signature = _array(item, 3)
     if not isinstance(protected, bytes):
         raise Malformed("a signer's protected header isn't a byte string")
@@ -448,7 +485,7 @@ def _decode_signature(item: object, players: tuple[PlayerId, PlayerId]) -> _Sign
         raise Malformed("a signer's alg isn't ES256")
     kid = KeyId(_bstr(header[_KID], _SHA256_BYTES))
     side = _side(header[_PLAYER])
-    return _Signature(protected, kid, players[side], signature)
+    return Signature(protected, kid, side, players[side], signature)
 
 
 def _exact_keys(

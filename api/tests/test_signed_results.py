@@ -40,10 +40,12 @@ from fortymm_api.signed_results import (
     UnknownKey,
     append_signature,
     decode_envelope,
+    decode_payload,
     encode_payload,
     envelope_from_text,
     link,
     qr_text,
+    result_hash,
     sign,
 )
 from fortymm_api.signing_keys import SigningPrivateKey, SigningPublicKey
@@ -116,6 +118,57 @@ def test_encodes_every_valid_payload(vector: ValidJson) -> None:
     assert (
         hashlib.sha256(bytes.fromhex(vector["payload"])).hexdigest() == vector["hash"]
     )
+
+
+@valid
+def test_decodes_every_valid_payload_on_its_own(vector: ValidJson) -> None:
+    payload = decode_payload(bytes.fromhex(vector["payload"]))
+
+    assert payload.result == result_from_json(vector["result"])
+    assert payload.issued_at == datetime.fromtimestamp(vector["issued_at"], UTC)
+
+
+@valid
+def test_an_envelope_names_its_payload_and_signatures(vector: ValidJson) -> None:
+    unverified = decode_envelope(_envelope(vector))
+
+    assert unverified.payload.hex() == vector["payload"]
+    assert result_hash(unverified.payload).hex() == vector["hash"]
+    assert [
+        (s.kid.hex(), s.side, str(s.player), s.signature.hex())
+        for s in unverified.signatures
+    ] == [
+        (s["kid"], s["side"], s["player"], s["signature"]) for s in vector["signatures"]
+    ]
+
+
+def test_an_envelope_is_not_a_payload() -> None:
+    envelope = sign(RESULT, ISSUED_AT, ANN_KEY, ANN)
+
+    with pytest.raises(Malformed):
+        decode_payload(envelope)
+
+
+def test_a_signature_the_caller_verified_needs_no_key() -> None:
+    envelope = decode_envelope(
+        append_signature(sign(RESULT, ISSUED_AT, ANN_KEY, ANN), BO_KEY, BO)
+    )
+    anns = [s for s in envelope.signatures if s.player == ANN]
+
+    with pytest.raises(UnknownKey):
+        envelope.verify([BO_KEY.public_key])
+    verified = envelope.verify([BO_KEY.public_key], verified=anns)
+
+    assert {a.player for a in verified.approvals} == {ANN, BO}
+
+
+def test_a_signature_from_another_envelope_is_not_trusted() -> None:
+    first = decode_envelope(sign(RESULT, ISSUED_AT, ANN_KEY, ANN))
+    later = replace(RESULT, games=((11, 7), (9, 11), (11, 5)))
+    other = decode_envelope(sign(later, ISSUED_AT, ANN_KEY, ANN))
+
+    with pytest.raises(UnknownKey):
+        other.verify([], verified=first.signatures)
 
 
 @valid
