@@ -606,6 +606,9 @@ export function matchQuery(api: ApiClient, id: string) {
         throw error
       }
     },
+    // A spectator follows the score until the result counts. A hidden tab
+    // doesn't refetch (TanStack's default).
+    refetchInterval: (query) => (query.state.data && query.state.data.status.kind !== 'final' ? 10_000 : false),
   })
 }
 

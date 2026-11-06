@@ -1,8 +1,9 @@
-import { waitFor } from '@testing-library/react'
+import { act, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { components } from '../../api/schema'
 import { MatchesPage } from '../../test/pages/MatchesPage'
 import { grantSession, mockMatchReads } from '../../test/server'
+import { formatTime } from './browse/match'
 
 type MatchDetail = components['schemas']['MatchDetail']
 type MatchEvent = components['schemas']['MatchEvent']
@@ -448,5 +449,87 @@ describe('A match', () => {
 
     expect(page.text('Meera Okafor retired.')).toBeInTheDocument()
     expect(page.text('Not finished')).toBeInTheDocument()
+  })
+
+  describe('refreshes', () => {
+    const at = (ms: number) => `Updated ${formatTime(new Date(ms).toISOString())}`
+    const wait = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms))
+    let first: number
+
+    beforeEach(() => {
+      first = Date.parse('2026-11-05T19:31:51Z')
+      vi.useFakeTimers({ shouldAdvanceTime: true, now: first })
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    })
+
+    async function open(m: MatchDetail) {
+      api = mockMatchReads([m])
+      const page = await MatchesPage.render(`/matches/${m.id}`)
+      await waitFor(() => expect(page.title).toHaveTextContent(name(m)))
+      return page
+    }
+
+    it('reads a live match again after 10 seconds, and shows the new score and when it came', async () => {
+      const playing = match(['Giulia Rossi', 'Youssef Haddad'], { games: [[11, 4]], state: { kind: 'live' } })
+      const page = await open(playing)
+      expect(page.text(at(first))).toBeInTheDocument()
+
+      playing.games = [[11, 4], [3, 2]]
+      await wait(10_000)
+
+      await waitFor(() => expect(page.games()).toEqual(['Game 1 11–4 Giulia Rossi won', 'Game 2 3–2 Live']))
+      expect(api.reads).toHaveLength(2)
+      expect(page.text(at(Date.now()))).toBeInTheDocument()
+      expect(page.text(at(first))).toBeNull()
+    })
+
+    it('reads a final match once and says nothing about when', async () => {
+      const page = await open(approved)
+
+      await wait(30_000)
+
+      expect(api.reads).toEqual([approved.id])
+      expect(page.text(/^Updated /)).toBeNull()
+    })
+
+    it('reads a match awaiting approval again after 10 seconds', async () => {
+      await open(awaiting)
+
+      await wait(10_000)
+
+      await waitFor(() => expect(api.reads).toEqual([awaiting.id, awaiting.id]))
+    })
+
+    it('reads nothing while the tab is hidden, and reads once when it shows again', async () => {
+      await open(live)
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+      act(() => document.dispatchEvent(new Event('visibilitychange', { bubbles: true })))
+
+      await wait(30_000)
+      expect(api.reads).toHaveLength(1)
+
+      visibility.mockReturnValue('visible')
+      act(() => document.dispatchEvent(new Event('visibilitychange', { bubbles: true })))
+
+      await waitFor(() => expect(api.reads).toHaveLength(2))
+      await wait(1_000)
+      expect(api.reads).toHaveLength(2)
+    })
+
+    it('keeps the last score and its time when a read fails', async () => {
+      const page = await open(live)
+      api.fails = true
+
+      await wait(30_000)
+
+      expect(api.reads.length).toBeGreaterThan(1)
+      expect(page.games()).toEqual(['Game 1 4–11 Youssef Haddad won', 'Game 2 9–8 Live'])
+      expect(page.text(at(first))).toBeInTheDocument()
+      expect(page.alert).toBeNull()
+    })
   })
 })

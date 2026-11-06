@@ -59,7 +59,7 @@ function SignOffSkeleton() {
 
 function LoadedSignOff({ id }: { id: string }) {
   const { api } = useRouteContext({ from: '__root__' })
-  const { data: match } = useSuspenseQuery(matchQuery(api, id))
+  const { data: match, dataUpdatedAt } = useSuspenseQuery(matchQuery(api, id))
   if (!match)
     return (
       <>
@@ -67,7 +67,7 @@ function LoadedSignOff({ id }: { id: string }) {
         <EmptyState title="This match isn’t here">The link may be wrong. Find the match on the Matches page.</EmptyState>
       </>
     )
-  return <DetailSignOff match={match} />
+  return <DetailSignOff match={match} updatedAt={dataUpdatedAt} />
 }
 
 type Action = { label: string; kind: 'primary' | 'secondary' | 'ghost' }
@@ -231,7 +231,7 @@ function History({ match }: { match: MatchDetail }) {
 
 // Each game reads as a line on the left; the right shows each player's
 // signature and what's left before the result counts.
-function DetailSignOff({ match }: { match: MatchDetail }) {
+function DetailSignOff({ match, updatedAt }: { match: MatchDetail; updatedAt: number }) {
   const s = situation(match)
   const { won, winner } = score(match)
   const lastInPlay = lastGameInPlay(match)
@@ -253,6 +253,9 @@ function DetailSignOff({ match }: { match: MatchDetail }) {
             </span>
             <span className={winner === 1 ? 'match-strong' : undefined}>{match.players[1].name}</span>
           </p>
+          {match.status.kind !== 'final' && (
+            <p className="match-muted">Updated {formatTime(new Date(updatedAt).toISOString())}</p>
+          )}
           {match.games.length ? (
             <ol className="fm-list fm-list--divided">
               {match.games.map((game, index) => {
