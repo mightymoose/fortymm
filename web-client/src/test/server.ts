@@ -257,7 +257,7 @@ export function listedPlayer(
   return { played_against: [], ...player, match_count: 0, recent_matches: [] }
 }
 
-// The self player that a session request gives an account with none.
+// The self player that an answer gives an account it leaves with none.
 export const STAND_IN = listedPlayer({
   id: '6d5c4b3a-2f1e-4d0c-8b9a-7f6e5d4c3b2a',
   display_name: 'calm crane 765',
@@ -269,9 +269,9 @@ export const STAND_IN = listedPlayer({
 // answers "Is this you?" as the API does. Returns the answers it received,
 // and answerInAnotherTab(), which answers without the page knowing. One of
 // `players` is the account's self player, and they are in the order the API
-// made them. A session request when the account has none makes STAND_IN its
-// self player, as the API does. So a merge keeps the first of the two, and it refuses two
-// players who played each other. `failAnswers` makes every answer fail with
+// made them. So a merge keeps the first of the two, and it refuses two
+// players who played each other. An answer that leaves the account no self
+// player makes STAND_IN its self player, as the API does. `failAnswers` makes every answer fail with
 // a 500. playersChange() replaces the players, as a match recorded
 // meanwhile can.
 export function mockVerifiedAccount(
@@ -281,16 +281,13 @@ export function mockVerifiedAccount(
   let current = players
   const answers: ({ playerId: string } & AnswerRequest)[] = []
   const self = () => {
-    let found = current.find((player) => player.relationship === 'self')
-    if (!found) {
-      found = STAND_IN
-      current = [...current, found]
-    }
+    const found = current.find((player) => player.relationship === 'self')
+    if (!found) throw new Error('The account has no self player')
     return { id: found.id, display_name: found.display_name }
   }
 
-  // The older player survives, takes the relationship and the question of
-  // `into`, and plays as both.
+  // The older player survives, takes the relationship of `into`, and plays
+  // as both.
   function merge(player: AccountPlayer, into: AccountPlayer): AnswerMeta | Refusal {
     if (player.played_against.includes(into.id)) return PLAYED_EACH_OTHER
     const [survivor, merged] =
@@ -304,7 +301,7 @@ export function mockVerifiedAccount(
         {
           ...found,
           relationship: into.relationship,
-          open_question: into.open_question,
+          open_question: false,
           played_against: [...new Set([...played_against, ...merged.played_against])],
         },
       ]
@@ -313,10 +310,13 @@ export function mockVerifiedAccount(
   }
 
   // The API's answer: the outcome, or the status it refuses with.
-  function answer(
-    playerId: string,
-    request: AnswerRequest,
-  ): AnswerMeta | Refusal | 404 | 409 | 422 {
+  function answer(playerId: string, request: AnswerRequest): AnswerMeta | Refusal | 404 | 409 | 422 {
+    const found = settle(playerId, request)
+    if (!current.some((player) => player.relationship === 'self')) current = [...current, STAND_IN]
+    return found
+  }
+
+  function settle(playerId: string, request: AnswerRequest): AnswerMeta | Refusal | 404 | 409 | 422 {
     if (request.answer === 'same_as' && request.player_id === playerId) return 422
     const answered = current.find((player) => player.id === playerId)
     if (!answered) return 404
@@ -338,7 +338,9 @@ export function mockVerifiedAccount(
     const own = current.find((player) => player.relationship === 'self' && player !== answered)
     switch (request.answer) {
       case 'yes':
-        if (own) return merge(answered, own)
+        if (own && !own.open_question) return merge(answered, own)
+        // An own player whose question is open steps down, and keeps it.
+        current = current.map((player) => (player === own ? { ...player, relationship: 'managed' } : player))
         close('self')
         return { outcome: 'self' }
       case 'no':
