@@ -107,7 +107,8 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   `GET /v1/account/players` in a `QueryBoundary`, with a skeleton of the
   question and the action bar, and an error that also links to Home. A
   guest goes to `/` before it asks for players. It asks "Is this you?"
-  about one open question at a time, the account's `self` player last.
+  about one open question at a time. The account's `self` player with an
+  open question comes last, and stays last once it becomes `managed`.
   While its question is open, a "Yes" to another player makes that one
   the account's own and merges nothing. Under the question, a match preview
   (`MatchPreview.tsx`) sums up the player's matches, as in "3 matches
@@ -119,7 +120,8 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   the account's `self` player gets no "Yes, this is me", and the page says
   that it played that player. While the `self` player's question is
   open, "Yes" on another player says "<player> becomes your player. We'll
-  ask about <own player> next." instead. When the question is about the
+  ask about <own player> next." instead, or "last" while more than one other
+  question waits. When the question is about the
   `self` player itself, the page says it stays your player. "Someone else
   played" asks "Do you
   manage this player?". There "Remove from my account" answers `not_mine`,
@@ -141,7 +143,8 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   An answer puts the API's list in the players query, and the list's
   `self` player in the session's account, so the topbar and New match show
   it with no session request. Every answer does, `already_answered` too,
-  and so does the refetch after another tab answered first. The
+  and so does the refetch after another tab answered first or a refused
+  merge. The
   confirmation comes from `meta`, such as "brave badger 214 merged into
   excited egret 387, your player." A merge into a `managed` player drops
   ", your player". The merged player can be the reviewed one or the other
