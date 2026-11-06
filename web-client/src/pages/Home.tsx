@@ -5,6 +5,7 @@ import { can, Permission } from '../api/permissions'
 import { sessionQuery } from '../api/queries'
 import { Icon, type IconName } from '../components/Icon'
 import { AfterSignIn } from './adoption/AfterSignIn'
+import { DashboardOption, OptionSwitcher } from './dashboard/DashboardOptions'
 import { useNarrowLayout } from './useNarrowLayout'
 
 type Stage = 'ready' | 'building' | 'next' | 'later'
@@ -53,7 +54,7 @@ export function Home() {
   const { api } = useRouteContext({ from: '__root__' })
   const { data: account } = useSuspenseQuery(sessionQuery(api))
   const narrow = useNarrowLayout()
-  const { signed_in: signedIn } = useSearch({ from: '/_authenticated/_shell/' })
+  const { signed_in: signedIn, variant, sample } = useSearch({ from: '/_authenticated/_shell/' })
 
   useEffect(() => {
     if (fromReview) title.current?.focus()
@@ -62,7 +63,20 @@ export function Home() {
   return (
     <div className="home">
       {signedIn && <AfterSignIn />}
-      {!narrow && can(account, Permission.matchesCreate) && (
+      <OptionSwitcher variant={variant} sample={sample} />
+      {variant ? (
+        <DashboardOption variant={variant} sample={sample} />
+      ) : (
+        <CurrentHome titleRef={title} canCreate={!narrow && can(account, Permission.matchesCreate)} />
+      )}
+    </div>
+  )
+}
+
+function CurrentHome({ titleRef, canCreate }: { titleRef: Ref<HTMLHeadingElement>; canCreate: boolean }) {
+  return (
+    <>
+      {canCreate && (
         <div>
           <Link to="/matches/new" className="fm-btn fm-btn--primary">
             <Icon name="plus" />
@@ -70,8 +84,8 @@ export function Home() {
           </Link>
         </div>
       )}
-      <Roadmap titleRef={title} />
-    </div>
+      <Roadmap titleRef={titleRef} />
+    </>
   )
 }
 

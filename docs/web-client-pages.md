@@ -53,6 +53,10 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
 - Home (`src/pages/Home.tsx`) shows a New match link to `/matches/new` for an
   account with `matches.create`, above the roadmap. Below 900px the link
   is in the tab bar instead. The sidebar doesn't list it.
+  Above it, a prototype switcher (`src/pages/dashboard/`) opens three
+  dashboard options in its place with `?variant=a|b|c`, from the account's
+  players or, with `&sample=busy|new|guest`, from made-up ones. It exists
+  to pick one option and is removed when the chosen one is built.
 - `_shell/matches/index.tsx` and `_shell/players/index.tsx`: the pages
   `Matches` (`src/pages/matches/Matches.tsx`) and `Players`
   (`src/pages/players/Players.tsx`), which so far show only their title.
