@@ -38,3 +38,4 @@
 .match-signer__icon{color:var(--fg-3)}
 .match-signer__icon--check{color:var(--success)}
 .match-signer__icon--alert{color:var(--conflict)}
+.match-players{display:flex;flex-direction:column;gap:2px;white-space:nowrap}
