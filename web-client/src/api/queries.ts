@@ -172,12 +172,25 @@ export function accountPlayersQuery(api: ApiClient) {
   })
 }
 
+// Gives the session's account the self player of `players`, the account's
+// players as the API just listed them, for the topbar's avatar and New
+// match. Refetching the session would start it again, and needs the network.
+export function takeSelfPlayer(api: ApiClient, queryClient: QueryClient, players: readonly AccountPlayer[]) {
+  const self = players.find((player) => player.relationship === 'self')
+  if (!self) return
+  queryClient.setQueryData(sessionQuery(api).queryKey, (account) =>
+    account && account.player.id !== self.id
+      ? { ...account, player: { id: self.id, display_name: self.display_name } }
+      : account,
+  )
+}
+
 // Answers "Is this you?" for one player. The API returns what the answer did
 // and the account's players after it, so the players query takes them as
-// they are. When the answer changes the account's self player, the session's
-// account takes it too, for the topbar's avatar. Refetching the session would
-// start it again. A players request already in flight read the list from
-// before the answer, so the answer cancels it first.
+// they are, and the session's account takes their self player. Any answer,
+// even one another tab got to first, can change it. A players request
+// already in flight read the list from before the answer, so the answer
+// cancels it first.
 export function answerQuestionMutation(api: ApiClient, queryClient: QueryClient) {
   return {
     onMutate: () => queryClient.cancelQueries({ queryKey: accountPlayersQuery(api).queryKey }),
@@ -191,21 +204,9 @@ export function answerQuestionMutation(api: ApiClient, queryClient: QueryClient)
       )
       return { players: data.data, meta: data.meta }
     },
-    onSuccess: ({ players, meta }: { players: AccountPlayer[]; meta: AnswerMeta }) => {
+    onSuccess: ({ players }: { players: AccountPlayer[] }) => {
       queryClient.setQueryData(accountPlayersQuery(api).queryKey, players)
-      const self = players.find((player) => player.relationship === 'self')
-      // The answer took the account's own player away, so the next session
-      // gives it a new one. Not awaited, so the answer doesn't wait for it.
-      if (!self) {
-        void queryClient.invalidateQueries({ queryKey: sessionQuery(api).queryKey })
-        return
-      }
-      const selfChanged =
-        meta.outcome === 'self' || (meta.outcome === 'merged' && meta.survivor === self.id)
-      if (!selfChanged) return
-      queryClient.setQueryData(sessionQuery(api).queryKey, (account) =>
-        account && { ...account, player: { id: self.id, display_name: self.display_name } },
-      )
+      takeSelfPlayer(api, queryClient, players)
     },
   }
 }

@@ -5,6 +5,7 @@ import {
   accountPlayersQuery,
   answerQuestionMutation,
   sessionQuery,
+  takeSelfPlayer,
   type AccountPlayer,
   type AnswerMeta,
   type Reply,
@@ -173,7 +174,11 @@ function Questions() {
   // the next one would send a second answer.
   const sending = useRef(false)
 
-  const queue = players.filter((player) => player.open_question)
+  // The account's own player comes last: while its question is open, a
+  // "Yes" to another player makes that one the account's own instead.
+  const queue = players
+    .filter((player) => player.open_question)
+    .toSorted((a, b) => Number(a.relationship === 'self') - Number(b.relationship === 'self'))
   const current = queue.at(0)
   const step = current && state.step?.playerId === current.id ? state.step.step : 'recognize'
   const failed = current && state.failed?.playerId === current.id ? state.failed.reply : null
@@ -181,12 +186,14 @@ function Questions() {
   const shown = new Set([...state.shown, ...queue.map((player) => player.id)])
   if (shown.size > state.shown.size) dispatch({ type: 'queued', shown })
   const total = shown.size
-  // The account's own player, unless the question is about it.
+  // The account's own player, unless the question is about it. One whose
+  // own question is open isn't confirmed yet, so a "Yes" merges nothing.
   const own = players.find((found) => found.relationship === 'self' && found.id !== current?.id)
+  const confirmed = own !== undefined && !own.open_question ? own : undefined
   const isOwn = current?.relationship === 'self'
   // Two players who played each other are two people, so the API refuses
   // to merge them.
-  const playedOwn = own !== undefined && current?.played_against.includes(own.id) === true
+  const playedOwn = confirmed !== undefined && current?.played_against.includes(confirmed.id) === true
   // The players that "I manage this player" can merge the player into.
   const targets = players.filter(
     (found) =>
@@ -251,6 +258,7 @@ function Questions() {
     await queryClient.refetchQueries({ queryKey })
     const now = queryClient.getQueryData(queryKey)
     if (!now) return false
+    takeSelfPlayer(api, queryClient, now)
     if (error.status === 404 && now.some((found) => found.id === player.id && found.open_question)) {
       if (reply.answer !== 'same_as' || now.some((found) => found.id === reply.player_id)) return false
       const gone = players.find((found) => found.id === reply.player_id)?.display_name ?? 'That player'
@@ -324,16 +332,22 @@ function Questions() {
         </main>
         <div className="review-actions" role="group" aria-label="Your answer">
           {notice}
-          {own && playedOwn && (
+          {confirmed && playedOwn && (
             <p className="review-outcome">
-              <b>{current.display_name}</b> played <b>{own.display_name}</b>, your player, so
+              <b>{current.display_name}</b> played <b>{confirmed.display_name}</b>, your player, so
               it isn’t you.
             </p>
           )}
-          {own && !playedOwn && (
+          {confirmed && !playedOwn && (
             <p className="review-outcome">
-              <b>{current.display_name}</b> and <b>{own.display_name}</b> will become
+              <b>{current.display_name}</b> and <b>{confirmed.display_name}</b> will become
               one player, your player.
+            </p>
+          )}
+          {own && !confirmed && (
+            <p className="review-outcome">
+              <b>{current.display_name}</b> becomes your player. We’ll ask about{' '}
+              <b>{own.display_name}</b> next.
             </p>
           )}
           {isOwn && (
