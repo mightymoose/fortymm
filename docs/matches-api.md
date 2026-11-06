@@ -10,8 +10,9 @@ with a match from start to finish. `models.py` holds the tables, and
 `tests/test_schema.py` checks each rule below that the database enforces.
 `services/matches.py` holds the rules of making a match, its lock and its
 boards, `services/opponents.py` those of picking an opponent,
-`services/match_results.py` those of its results, and
-`v1/matches.py` the routes, under `/v1/matches`.
+`services/match_results.py` those of its results,
+`services/match_reads.py` those of reading them, and `v1/matches.py` the
+routes, under `/v1/matches`.
 
 - `match_settings` holds a match's rules: `team_size`, `best_of` and
   `rated`. A match is best of 1, 3, 5 or 7. `team_size` is 1, because
@@ -112,9 +113,36 @@ boards, `services/opponents.py` those of picking an opponent,
   `match_submissions`, refused or not, with its body, the session's
   account, the network as the guest limit keys it (`client_network()`)
   and its outcome. `log_submission()` and `log_refusal()` write them.
-- No route reads a match yet. The reads come with the pages that need
-  them, because `/v1` can't drop a field once a release uses it. The
-  tests read the rows through `result_chain()`, `current_result()`,
+- `GET /v1/matches` and `GET /v1/matches/{match_id}` read matches, through
+  `list_matches()` and `get_match()` in `services/match_reads.py`. Both
+  need `matches.view`. The list gives every match, newest first by
+  `created_at`, then id, at most 50 (`MATCH_PAGE_SIZE`), with
+  `meta.has_more`. It loads them in a fixed number of queries. The detail
+  adds `history`, and an unknown id answers 404 (`MatchNotFound`). The
+  route is declared after `opponents`, so that still routes.
+- A match shows its sides' players as they survive `merged_into`, and
+  `viewer_side`, the side of the session account's `self` player. No
+  rating fields: ratings don't exist yet.
+- `state` is a union on `kind`, which `match_state()` derives from the
+  head, the result it replaces and the newest board. No head:
+  `not_started`, or `live` with the board's games. An accepted head:
+  `final`, with `accepted_at`, the sides that approved it (one for an
+  unrated result one side reported, none for an override) and
+  `override_reason`. A pending head has one side's approvals:
+  `disputed`, with `their_games`, when it replaces the other side's
+  pending result, otherwise `awaiting`. That covers a first result, a side
+  signing again and a correction of a final match. `signed_at` is the
+  head's first submission. A board after a result is ignored. `games` and
+  `retired_by` come from the head, or the board while live.
+- `history` is oldest first: `created`, then each accepted submission's
+  events. A board gives `board`. Each approval a result submission wrote
+  gives `signed` if it was the result's first submission, else
+  `approved`, with its side. An override gives `override`. Refused
+  submissions and retries that wrote nothing give none. `by` is the
+  acting account's `self` player, through `adopted_into` and
+  `merged_into`, or the approval's player for a signature. It is null for
+  an account with no `self` player.
+- The tests read the rows through `result_chain()`, `current_result()`,
   `approvals()` and `newest_board()` in `tests/match_setup.py`.
 - `GET /v1/matches/opponents` gives the players a new match can pick, as
   `id` and `display_name`. It needs a session. With no `search`, or one
