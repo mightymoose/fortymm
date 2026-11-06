@@ -43,4 +43,16 @@ describe('score', () => {
     expect(won).toEqual([1, 0])
     expect(current).toEqual([4, 2])
   })
+
+  it('counts the last game of a live match as won once it reached a final score', () => {
+    const { won, current } = score(record({ games: [[11, 4], [11, 9]], status: { kind: 'live' } }))
+    expect(won).toEqual([2, 0])
+    expect(current).toBeNull()
+  })
+
+  it('counts an unfinished last game of a live match as in play after a won game', () => {
+    const { won, current } = score(record({ games: [[11, 4], [6, 4]], status: { kind: 'live' } }))
+    expect(won).toEqual([1, 0])
+    expect(current).toEqual([6, 4])
+  })
 })

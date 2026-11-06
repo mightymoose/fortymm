@@ -94,6 +94,21 @@ export class MatchesPage {
       .map((item) => item.lastElementChild?.lastElementChild?.textContent ?? '')
   }
 
+  // What a match row below 900px says of each side's games won and points
+  // in the game in play, side 0 first.
+  rowScores(name: string): string[] {
+    return Array.from(screen.getByRole('article', { name }).querySelectorAll('[aria-label]')).map(
+      (element) => element.getAttribute('aria-label') ?? '',
+    )
+  }
+
+  // Each game on a match's page, as "Game 1 11–4 Who won".
+  games(): string[] {
+    return within(screen.getByRole('region', { name: 'Games' }))
+      .getAllByRole('listitem')
+      .map((item) => Array.from(item.children, (part) => part.textContent).join(' '))
+  }
+
   // Each history line without its time, as "Who did what".
   history(): string[] {
     return within(screen.getByRole('region', { name: 'History' }))

@@ -19,7 +19,7 @@ const ROW_STATE = {
 } as const satisfies Record<Status['kind'], 'upcoming' | 'live' | 'final'>
 
 // One `.fm-match` row: status, when and the format, then each player with
-// games won (boxed) and, while live, the points in the game in play. A match
+// games won (boxed) and the points in the game in play. A match
 // nobody has scored shows only the names.
 export function ScoreRow({ match }: { match: MatchRecord }) {
   const { current, won, winner } = score(match)
@@ -38,7 +38,7 @@ export function ScoreRow({ match }: { match: MatchRecord }) {
           <span></span>
           <span></span>
           <span>Games</span>
-          {state === 'live' && <span>Points</span>}
+          {current && <span>Points</span>}
         </div>
       )}
       {([0, 1] as const).map((side: Side) => {
@@ -58,9 +58,9 @@ export function ScoreRow({ match }: { match: MatchRecord }) {
                 </span>
               </>
             )}
-            {state === 'live' && (
-              <span className="fm-match__pts" aria-label={`${current?.[side] ?? 0} points in this game`}>
-                {current?.[side] ?? 0}
+            {current && (
+              <span className="fm-match__pts" aria-label={`${current[side]} points in this game`}>
+                {current[side]}
               </span>
             )}
           </div>

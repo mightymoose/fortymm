@@ -11,6 +11,7 @@ import {
   formatDay,
   formatLabel,
   formatTime,
+  lastGameInPlay,
   other,
   score,
   vsLabel,
@@ -233,7 +234,7 @@ function History({ match }: { match: MatchDetail }) {
 function DetailSignOff({ match }: { match: MatchDetail }) {
   const s = situation(match)
   const { won, winner } = score(match)
-  const live = match.status.kind === 'live'
+  const lastInPlay = lastGameInPlay(match)
   return (
     <div className="match-page">
       <div className="match-page__head">
@@ -255,7 +256,7 @@ function DetailSignOff({ match }: { match: MatchDetail }) {
           {match.games.length ? (
             <ol className="fm-list fm-list--divided">
               {match.games.map((game, index) => {
-                const inPlay = live && index === match.games.length - 1
+                const inPlay = lastInPlay && index === match.games.length - 1
                 const gameWinner: Side | null = !inPlay && finished(game) ? (game[0] > game[1] ? 0 : 1) : null
                 return (
                   <li key={index} className="match-game">

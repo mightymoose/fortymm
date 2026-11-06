@@ -53,13 +53,20 @@ export const finished = (game: GameScore) => checkGame([game[0], game[1]]).kind 
 export const wonOf = (games: readonly GameScore[], side: Side) =>
   games.filter((game) => finished(game) && game[side] > game[other(side)]).length
 
-// The games each side has won, the game in play (live only), and the winner
-// once the match is final: the side that didn't retire, or else the side
-// with more games.
+// A board holds the finished games and the one being played, so a live
+// match's last game is in play until it reaches a final score.
+export function lastGameInPlay(match: MatchRecord): boolean {
+  const last = match.games[match.games.length - 1]
+  return match.status.kind === 'live' && last !== undefined && !finished(last)
+}
+
+// The games each side has won, the game in play, and the winner once the
+// match is final: the side that didn't retire, or else the side with more
+// games.
 export function score(match: MatchRecord) {
-  const live = match.status.kind === 'live' && match.games.length > 0
-  const done = live ? match.games.slice(0, -1) : match.games
-  const current = live ? match.games[match.games.length - 1] : null
+  const inPlay = lastGameInPlay(match)
+  const done = inPlay ? match.games.slice(0, -1) : match.games
+  const current = inPlay ? match.games[match.games.length - 1] : null
   const won = [wonOf(done, 0), wonOf(done, 1)] as const
   let winner: Side | null = null
   if (match.status.kind === 'final') {

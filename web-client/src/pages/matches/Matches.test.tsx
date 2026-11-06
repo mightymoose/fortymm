@@ -49,6 +49,14 @@ const live = match(['Giulia Rossi', 'Youssef Haddad'], {
   games: [[4, 11], [9, 8]],
   state: { kind: 'live' },
 })
+const betweenGames = match(['Giulia Rossi', 'Youssef Haddad'], {
+  games: [[11, 4], [11, 9]],
+  state: { kind: 'live' },
+})
+const midGame = match(['Giulia Rossi', 'Youssef Haddad'], {
+  games: [[11, 4], [6, 4]],
+  state: { kind: 'live' },
+})
 const notStarted = match([ALEX, 'Wei Chen'], { you: 0 })
 const awaiting = match(['Meera Okafor', ALEX], {
   you: 1,
@@ -231,6 +239,30 @@ describe('Matches', () => {
     expect(page.text('Showing the 50 newest matches.')).toBeNull()
   })
 
+  it('counts the last game of a live match as won once it reached a final score', async () => {
+    layout(true)
+    api = mockMatchReads([betweenGames])
+    const page = await MatchesPage.render()
+
+    await waitFor(() => expect(page.matchNames()).toEqual([name(betweenGames)]))
+    expect(page.rowScores(name(betweenGames))).toEqual(['2 games won', '0 games won'])
+    expect(page.text('Points')).toBeNull()
+  })
+
+  it('shows the points of the game in play of a live match', async () => {
+    layout(true)
+    api = mockMatchReads([midGame])
+    const page = await MatchesPage.render()
+
+    await waitFor(() => expect(page.matchNames()).toEqual([name(midGame)]))
+    expect(page.rowScores(name(midGame))).toEqual([
+      '1 games won',
+      '6 points in this game',
+      '0 games won',
+      '4 points in this game',
+    ])
+  })
+
   it('shows a table from 900px', async () => {
     layout(false)
     const page = await MatchesPage.render()
@@ -390,6 +422,24 @@ describe('A match', () => {
       'Camille Dubois started keeping score',
       'Sam Referee set the result, 3–1',
     ])
+  })
+
+  it('says who won the last game of a live match once it reached a final score', async () => {
+    api = mockMatchReads([betweenGames])
+    const page = await MatchesPage.render(`/matches/${betweenGames.id}`)
+    await waitFor(() => expect(page.title).toHaveTextContent(name(betweenGames)))
+
+    expect(page.games()).toEqual(['Game 1 11–4 Giulia Rossi won', 'Game 2 11–9 Giulia Rossi won'])
+    expect(page.text('2–0')).toBeInTheDocument()
+  })
+
+  it('shows the unfinished last game of a live match as in play', async () => {
+    api = mockMatchReads([midGame])
+    const page = await MatchesPage.render(`/matches/${midGame.id}`)
+    await waitFor(() => expect(page.title).toHaveTextContent(name(midGame)))
+
+    expect(page.games()).toEqual(['Game 1 11–4 Giulia Rossi won', 'Game 2 6–4 Live'])
+    expect(page.text('1–0')).toBeInTheDocument()
   })
 
   it('says who retired, and that their last game didn’t finish', async () => {
