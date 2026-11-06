@@ -1,6 +1,6 @@
-"""Matches: making one, picking its opponent, their boards, and the results
-their players' devices signed. No route reads a match yet. The services hold
-the rules. A refused write answers in the `errors` shape without raising, so
+"""Matches: making one, picking its opponent, their boards, the results
+their players' devices signed, and reading them. The services hold the
+rules. A refused write answers in the `errors` shape without raising, so
 the request still commits the submission that logs it."""
 
 from datetime import datetime
@@ -16,7 +16,7 @@ from fortymm_api.auth import RequestAccount, require_permission
 from fortymm_api.database import DatabaseSession
 from fortymm_api.matches import MatchId
 from fortymm_api.permissions import Permission
-from fortymm_api.services import match_results, matches, opponents
+from fortymm_api.services import match_reads, match_results, matches, opponents
 from fortymm_api.services.matches import (
     Authority,
     Difference,
@@ -26,6 +26,7 @@ from fortymm_api.services.matches import (
     Sender,
 )
 from fortymm_api.services.sessions import client_network
+from fortymm_api.signed_results import GamePoints
 from fortymm_api.v1.errors import (
     FORBIDDEN,
     NO_SESSION,
@@ -41,6 +42,7 @@ router = APIRouter(prefix="/matches", tags=["matches"])
 
 MatchCreator = Annotated[CurrentAccount, require_permission(Permission.MATCHES_CREATE)]
 MatchScorer = Annotated[CurrentAccount, require_permission(Permission.MATCHES_SCORE)]
+MatchViewer = Annotated[CurrentAccount, require_permission(Permission.MATCHES_VIEW)]
 
 type RefusalAnswers = dict[Refusal, tuple[int, str]]
 
@@ -233,6 +235,166 @@ class OpponentsResponse(BaseModel):
     data: list[Opponent]
 
 
+# Each game's points, side 0's then side 1's, in the order played.
+Games = list[Annotated[list[int], Field(min_length=2, max_length=2)]]
+Side = Literal[0, 1]
+
+
+class MatchPlayer(BaseModel):
+    # The player that survives any merge.
+    id: PlayerId
+    display_name: str
+
+
+class MatchSide(BaseModel):
+    side: Side
+    players: list[MatchPlayer]
+
+
+class NotStartedState(BaseModel):
+    kind: Literal["not_started"]
+
+
+class LiveState(BaseModel):
+    # The games are the newest board's.
+    kind: Literal["live"]
+
+
+class AwaitingState(BaseModel):
+    # One side signed the result, which waits on the other side.
+    kind: Literal["awaiting"]
+    signed_by: Side
+    # When the result first arrived.
+    signed_at: datetime
+
+
+class DisputedState(BaseModel):
+    # One side signed other scores than the other side's pending result.
+    kind: Literal["disputed"]
+    signed_by: Side
+    signed_at: datetime
+    # The other side's scores, which these replace.
+    their_games: Games
+
+
+class FinalState(BaseModel):
+    kind: Literal["final"]
+    accepted_at: datetime
+    # The sides that approved the result, sorted. One for an unrated result
+    # only one side approved, none for an override.
+    approved_by: list[Side]
+    # Why an administrator set the result, null if none did.
+    override_reason: str | None
+
+
+MatchState = Annotated[
+    NotStartedState | LiveState | AwaitingState | DisputedState | FinalState,
+    Field(discriminator="kind"),
+]
+
+
+class MatchSummary(BaseModel):
+    id: UUID
+    best_of: Literal[1, 3, 5, 7]
+    rated: bool
+    # When the match was made.
+    started_at: datetime
+    # Side 0, then side 1.
+    sides: list[MatchSide]
+    # The side of the session account's own player, null if it doesn't play.
+    viewer_side: Side | None
+    # The games the state is about: the board's while live, otherwise the
+    # newest result's.
+    games: Games
+    # The side that retired in that result, null if it completed or there is
+    # no result.
+    retired_by: Side | None
+    state: MatchState
+
+
+class MatchEvent(BaseModel):
+    at: datetime
+    kind: Literal["created", "board", "signed", "approved", "override"]
+    # The display name of who acted, null for an account with no player.
+    by: str | None
+    # The side a signature was for.
+    side: Side | None
+    # The scores it carried, null for `created`.
+    games: Games | None
+
+
+class MatchDetail(MatchSummary):
+    # Oldest first.
+    history: list[MatchEvent]
+
+
+class MatchesMeta(BaseModel):
+    # More matches exist than the list holds.
+    has_more: bool
+
+
+class MatchesResponse(BaseModel):
+    data: list[MatchSummary]
+    meta: MatchesMeta
+
+
+class MatchDetailResponse(BaseModel):
+    data: MatchDetail
+
+
+def games_model(games: tuple[GamePoints, ...]) -> Games:
+    return [list(points) for points in games]
+
+
+def state_model(state: match_reads.MatchState) -> MatchState:
+    match state:
+        case match_reads.NotStarted():
+            return NotStartedState(kind=state.kind)
+        case match_reads.Live():
+            return LiveState(kind=state.kind)
+        case match_reads.Awaiting(signed_by, signed_at):
+            return AwaitingState(
+                kind=state.kind, signed_by=signed_by, signed_at=signed_at
+            )
+        case match_reads.Disputed(signed_by, signed_at, their_games):
+            return DisputedState(
+                kind=state.kind,
+                signed_by=signed_by,
+                signed_at=signed_at,
+                their_games=games_model(their_games),
+            )
+        case match_reads.Final(accepted_at, approved_by, override_reason):
+            return FinalState(
+                kind=state.kind,
+                accepted_at=accepted_at,
+                approved_by=list(approved_by),
+                override_reason=override_reason,
+            )
+
+
+def summary_model(view: match_reads.MatchView) -> MatchSummary:
+    return MatchSummary(
+        id=view.id,
+        best_of=view.best_of,
+        rated=view.rated,
+        started_at=view.started_at,
+        sides=[
+            MatchSide(
+                side=side.side,
+                players=[
+                    MatchPlayer(id=player.id, display_name=player.display_name)
+                    for player in side.players
+                ],
+            )
+            for side in view.sides
+        ],
+        viewer_side=view.viewer_side,
+        games=games_model(view.games),
+        retired_by=view.retired_by,
+        state=state_model(view.state),
+    )
+
+
 CREATE_ERRORS: Responses = {
     201: {"model": MatchResponse, "description": "The match was made"},
     **NO_SESSION,
@@ -287,6 +449,40 @@ def match_opponents(
         data=[
             Opponent(id=player.id, display_name=player.display_name) for player in found
         ]
+    )
+
+
+@router.get("", responses={**NO_SESSION, **FORBIDDEN})
+def list_matches(session: DatabaseSession, account: MatchViewer) -> MatchesResponse:
+    """Every match, newest first, at most 50. `meta.has_more` says that more
+    exist. Needs `matches.view`."""
+    page = match_reads.list_matches(session, account.id)
+    return MatchesResponse(
+        data=[summary_model(view) for view in page.matches],
+        meta=MatchesMeta(has_more=page.has_more),
+    )
+
+
+@router.get("/{match_id}", responses={**NO_SESSION, **FORBIDDEN, **NO_MATCH})
+def get_match(
+    session: DatabaseSession, account: MatchViewer, match_id: UUID
+) -> MatchDetailResponse:
+    """The match, with its history. Needs `matches.view`."""
+    found = match_reads.get_match(session, MatchId(match_id), account.id)
+    return MatchDetailResponse(
+        data=MatchDetail(
+            **dict(summary_model(found.match)),
+            history=[
+                MatchEvent(
+                    at=event.at,
+                    kind=event.kind,
+                    by=event.by,
+                    side=event.side,
+                    games=None if event.games is None else games_model(event.games),
+                )
+                for event in found.history
+            ],
+        )
     )
 
 
