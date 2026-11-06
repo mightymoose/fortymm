@@ -192,7 +192,11 @@ def test_a_merge_says_which_player_survived(
         "survivor": ant,
         "merged": player["id"],
     }
-    assert [listed["id"] for listed in response.json()["data"]] == [ant]
+    assert [
+        listed["id"]
+        for listed in response.json()["data"]
+        if listed["relationship"] == "managed"
+    ] == [ant]
 
 
 @pytest.mark.parametrize(

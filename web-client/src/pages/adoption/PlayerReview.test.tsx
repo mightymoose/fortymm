@@ -1,17 +1,19 @@
-import { act, fireEvent, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { sessionQuery } from '../../api/queries'
+import { accountPlayersQuery, sessionQuery } from '../../api/queries'
 import type { components } from '../../api/schema'
 import { HomePage } from '../../test/pages/HomePage'
 import { PlayerReviewPage, type ReviewAction } from '../../test/pages/PlayerReviewPage'
 import {
   API_BASE_URL,
   failPlayersOnce,
+  failSession,
   holdPlayers,
   listedPlayer,
   mockVerifiedAccount,
   server,
+  STAND_IN,
 } from '../../test/server'
 
 const egret = listedPlayer({
@@ -20,6 +22,9 @@ const egret = listedPlayer({
   relationship: 'managed',
   open_question: true,
 })
+// The egret as the account's own player, as a sign-in with a new email
+// leaves the guest's player that played.
+const egretOwn = { ...egret, relationship: 'self' as const }
 const badger = listedPlayer({
   id: '2a9b8c7d-6e5f-4a3b-8c1d-0e9f8a7b6c54',
   display_name: 'brave badger 214',
@@ -222,6 +227,161 @@ describe('Is this you?', () => {
     expect(home.avatar(egret.display_name)).toHaveTextContent('EE')
     expect(home.avatar(dove.display_name)).toBeNull()
   })
+
+  it('says the account’s own player stays its player, and "Yes" keeps it', async () => {
+    const api = mockVerifiedAccount([ant, egretOwn])
+    const page = await PlayerReviewPage.render()
+
+    expect(page.answers).toHaveTextContent(`${egret.display_name} stays your player.`)
+    expect(page.answers).not.toHaveTextContent('will become one player')
+
+    await page.click('Yes, this is me')
+
+    expect(api.answers).toEqual([{ playerId: egret.id, answer: 'yes' }])
+    expect(page.toasts).toEqual([`${egret.display_name} is your player now.`])
+    expect(new HomePage(page.router).avatar(egret.display_name)).toHaveTextContent('EE')
+  })
+
+  it('asks about the account’s own player last, and "Yes" on another makes that one its player', async () => {
+    const api = mockVerifiedAccount([egretOwn, badger])
+    const page = await PlayerReviewPage.render()
+
+    expect(page.text).toContain(`${badger.display_name} was used before you signed in.`)
+    expect(page.answers).toHaveTextContent(
+      `${badger.display_name} becomes your player. We’ll ask about ${egret.display_name} next.`,
+    )
+    expect(page.answers).not.toHaveTextContent('will become one player')
+
+    await page.click('Yes, this is me')
+
+    expect(page.notice).toBe(`${badger.display_name} is your player now.`)
+    expect(page.text).toContain(`${egret.display_name} was used before you signed in.`)
+    expect(page.answers).toHaveTextContent(
+      `${egret.display_name} and ${badger.display_name} will become one player, your player.`,
+    )
+
+    await page.click('Someone else played')
+    await page.click('I manage this player')
+
+    expect(api.answers).toEqual([
+      { playerId: badger.id, answer: 'yes' },
+      { playerId: egret.id, answer: 'no' },
+    ])
+    expect(page.toasts).toEqual([`${egret.display_name} added to players you manage.`])
+    const home = new HomePage(page.router)
+    expect(home.avatar(badger.display_name)).toHaveTextContent('BB')
+    expect(home.avatar(egret.display_name)).toBeNull()
+  })
+
+  it('asks about the account’s own player last, as it said, once another player became its own', async () => {
+    const antOwn = { ...ant, relationship: 'self' as const, open_question: true }
+    // In the API's order once badger is the account's own: the ant's name
+    // comes before the egret's.
+    mockVerifiedAccount([badger, antOwn, egret])
+    const page = await PlayerReviewPage.render()
+
+    expect(page.answers).toHaveTextContent(
+      `${badger.display_name} becomes your player. We’ll ask about ${ant.display_name} last.`,
+    )
+    await page.click('Yes, this is me')
+    expect(page.text).toContain(`${egret.display_name} was used before you signed in.`)
+    await page.click('Yes, this is me')
+
+    expect(page.text).toContain(`${ant.display_name} was used before you signed in.`)
+  })
+
+  it('takes the account’s own player from the players a refused merge refetches', async () => {
+    const [egretPlayedBadger, badgerPlayedEgret] = playedEachOther(egret, badger)
+    // The badger is older than the dove, so another tab's "Yes" for it
+    // merges the dove into it.
+    const api = mockVerifiedAccount([egretPlayedBadger, badgerPlayedEgret, dove])
+    const page = await PlayerReviewPage.render()
+    api.answerInAnotherTab(badger.id, { answer: 'yes' })
+    await page.click('Yes, this is me')
+
+    await act(() => page.router.navigate({ to: '/' }))
+
+    const home = new HomePage(page.router)
+    expect(home.avatar(badger.display_name)).toHaveTextContent('BB')
+    expect(home.avatar(dove.display_name)).toBeNull()
+  })
+
+  it('keeps the account’s own player when another is one it manages, and "Yes" merges nothing', async () => {
+    const api = mockVerifiedAccount([egretOwn, badger])
+    const page = await PlayerReviewPage.render()
+    await page.click('Someone else played')
+    await page.click('I manage this player')
+
+    expect(page.answers).toHaveTextContent(`${egret.display_name} stays your player.`)
+    await page.click('Yes, this is me')
+
+    expect(api.answers).toEqual([
+      { playerId: badger.id, answer: 'no' },
+      { playerId: egret.id, answer: 'yes' },
+    ])
+    expect(page.toasts).toEqual([`${egret.display_name} is your player now.`])
+    expect(new HomePage(page.router).avatar(egret.display_name)).toHaveTextContent('EE')
+  })
+
+  it('shows the account’s new player in the topbar once its own player is one it manages, with no signal', async () => {
+    mockVerifiedAccount([egretOwn])
+    const page = await PlayerReviewPage.render()
+    await page.click('Someone else played')
+    failSession()
+
+    await page.click('I manage this player')
+
+    const home = new HomePage(page.router)
+    expect(home.avatar(STAND_IN.display_name)).toHaveTextContent('CC')
+    expect(home.avatar(egret.display_name)).toBeNull()
+  })
+
+  it('shows the account’s new player when the app loads again with no signal', async () => {
+    mockVerifiedAccount([egretOwn])
+    const page = await PlayerReviewPage.render()
+    await page.click('Someone else played')
+    await page.click('I manage this player')
+
+    cleanup()
+    failSession()
+    const home = await HomePage.render()
+
+    expect(home.avatar(STAND_IN.display_name)).toHaveTextContent('CC')
+    expect(home.avatar(egret.display_name)).toBeNull()
+  })
+
+  it('shows the account’s new player when the players refetch after another tab said No to its own player', async () => {
+    const api = mockVerifiedAccount([egretOwn])
+    const page = await PlayerReviewPage.render()
+    api.answerInAnotherTab(egret.id, { answer: 'no' })
+
+    const { api: client, queryClient } = page.router.options.context
+    await act(() => queryClient.refetchQueries({ queryKey: accountPlayersQuery(client).queryKey }))
+
+    await vi.waitFor(() => expect(page.href).toBe('/'))
+    const home = new HomePage(page.router)
+    expect(home.avatar(STAND_IN.display_name)).toHaveTextContent('CC')
+    expect(home.avatar(egret.display_name)).toBeNull()
+  })
+
+  it.each<[string, ReviewAction[]]>([
+    ['"Yes" comes back already answered', ['Yes, this is me']],
+    ['Remove from my account gets a 409', ['Someone else played', 'Remove from my account']],
+  ])(
+    'shows the account’s new player in the topbar when another tab said No to its own player and %s',
+    async (_, actions) => {
+      const api = mockVerifiedAccount([egretOwn])
+      const page = await PlayerReviewPage.render()
+      api.answerInAnotherTab(egret.id, { answer: 'no' })
+
+      for (const action of actions) await page.click(action)
+
+      expect(page.toasts).toEqual([`${egret.display_name} was already answered in another tab.`])
+      const home = new HomePage(page.router)
+      expect(home.avatar(STAND_IN.display_name)).toHaveTextContent('CC')
+      expect(home.avatar(egret.display_name)).toBeNull()
+    },
+  )
 
   it('asks whether the visitor manages the player, and goes back', async () => {
     const api = mockVerifiedAccount([egret, dove])

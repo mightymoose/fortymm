@@ -90,6 +90,15 @@ question. A player has played once it's in a match, with a result or
 not (`services/player_matches.py`), counting the players merged into it.
 `services/players.py` holds the rules, and `v1/players.py` the routes.
 
+A `self` row with an open question is the account's own player for now.
+It is the guest's player that played, kept by `VerifyInPlace` so the
+account plays as it until the person answers. It is provisional: when
+another player is confirmed as the person, it becomes `managed`, and its
+question stays open. Two things confirm another player: a `yes` for it,
+and an unplayed guest's `self` player that `AdoptGuest` brings (see
+Sign-in). Every answer leaves the account a `self` player, so it never
+plays as a player it said isn't the person.
+
 - `GET /v1/account/players` lists the account's players, its `self`
   player first, then by display name. Each has `relationship`,
   `open_question`, `match_count`, `recent_matches` and `played_against`,
@@ -107,13 +116,19 @@ not (`services/player_matches.py`), counting the players merged into it.
 - `POST /v1/account/players/{player_id}/answer` takes `{"answer": "yes"}`,
   `"no"`, `"not_mine"`, or `"same_as"` with a `player_id`. It returns the
   same list after the answer as `data`, and what the answer did as `meta`.
-  `yes` makes the row `self`. If the account already has a `self` player,
-  `yes` merges the two players instead (see below). `no` keeps it
-  `managed`. `not_mine` deletes the `player_managers` row. The player
-  stays, with no manager. `same_as` merges it with the player that
+  `yes` makes the row `self`. If the account already has another `self`
+  player with a closed question, `yes` merges the two players instead (see
+  below). One with an open question becomes `managed`, with no merge. `no`
+  makes the row `managed`. `not_mine` deletes the `player_managers` row.
+  The player stays, with no manager. `same_as` merges it with the player that
   `player_id` names. That player must be a `managed` player of the account
   with a closed question. A merge would close an open question with no
-  answer.
+  answer. An answer that leaves the account no `self` player, such as `no`
+  for its own player, makes one in the same transaction, with
+  `ensure_self_player()` in `services/sessions.py`, which `POST
+  /v1/session` uses too. So `data` lists it. The review asks about the own
+  player last, so in the app that happens only once no other question is
+  open.
 - `meta.outcome` is `self`, `managed`, `removed`, `merged` or
   `already_answered`. A `merged` outcome also has `survivor`, the id of the
   player that survived, and `merged`, the id of the other. `services/players.py` decides it, as
@@ -129,10 +144,12 @@ not (`services/player_matches.py`), counting the players merged into it.
   `player_id` is missing with `same_as` or comes with another answer. That
   422 is FastAPI's own `detail` body. A `same_as` that names the answered
   player gets a 422 in the `errors` shape.
-- Both routes call `lock_account_for_write()`. The answer also locks every
-  `player_managers` row of the account `FOR UPDATE`. So two answers from
-  two tabs take turns, and the second `yes` merges with the first one's
-  player.
+- Both routes call `lock_account_for_write()`, and the answer holds the
+  account row `FOR UPDATE`, because it may add a `self` player and a row
+  lock can't see a row that another answer adds. The answer also locks
+  every `player_managers` row of the account `FOR UPDATE`. So two answers
+  from two tabs take turns, and the second `yes` merges with the first
+  one's player.
 - `merge_players()` in `services/player_merge.py` merges a player into
   another player the account manages: the `self` player for `yes`, a
   `managed` player for `same_as`. The original player survives. It is the
@@ -140,7 +157,9 @@ not (`services/player_matches.py`), counting the players merged into it.
   display name. Its row takes the relationship of the player it merged
   into, so a `yes` keeps the account's `self` player. The other player gets
   `merged_into` set to the survivor and gives up its display name. Its row
-  stays, as `managed` (`STAYS_ON_PLAYER_MERGE`). The merge also points
+  stays, as `managed` (`STAYS_ON_PLAYER_MERGE`). Both rows lose their
+  question. Nothing merges into a `self` player with an open question,
+  because it steps down instead. The merge also points
   every player already merged into the merged player at the survivor. So
   `merged_into` always names a player that isn't merged.
 - Two players who played each other are two people, so they never merge.
@@ -246,12 +265,17 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
 - `hand_over_players()` asks "Is this you?" only about a player that has
   played. `has_activity()` in `services/adoption.py` decides it: a player
   in any match, with a result or not, has played. Such a player's
-  row becomes `managed`, with `adopted_from` set to the guest account (see
-  Is this you?). A player that hasn't played asks nothing. `VerifyInPlace`
+  row gets `adopted_from` set to the guest account (see Is this you?).
+  `AdoptGuest` makes it `managed`. `VerifyInPlace` keeps its relationship,
+  so the account keeps playing as its `self` player until the person
+  answers. A player that hasn't played asks nothing. `VerifyInPlace`
   keeps it as it is, so the guest keeps its player and name. `AdoptGuest`
   merges the guest's `self` player into the target account's `self`
   player, as "Yes" does, so the older player survives. If the target
-  account has no `self` player, the guest's becomes it. If the two `self`
+  account has no `self` player, the guest's becomes it. If the target's
+  `self` player has an open question, the guest's becomes the `self`
+  player, and the target's one becomes `managed` with its question still
+  open. If the two `self`
   players played each other, the guest's stays `managed` with
   `adopted_from` set, an open question, so the sign-in never fails. A
   `managed` player moves as `managed`. It locks the target account row and its

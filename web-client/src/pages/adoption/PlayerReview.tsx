@@ -34,9 +34,12 @@ function replyKey(reply: Reply): ReplyKey {
 // What this page has done since it opened. The step and the failed answer
 // belong to one player, so the next player starts at `recognize` with no
 // error, whatever ended the last one. `shown` holds every player this visit
-// has queued, so the count holds when another tab answers one.
+// has queued, so the count holds when another tab answers one. `last` is the
+// account's own player with an open question, which the visit asks about
+// last, even once a "Yes" to another player makes it `managed`.
 type Review = {
   shown: ReadonlySet<string>
+  last: string | null
   notice: Notice | null
   step: { playerId: string; step: Step } | null
   failed: { playerId: string; reply: ReplyKey } | null
@@ -44,7 +47,7 @@ type Review = {
 
 type ReviewEvent =
   | { type: 'go'; playerId: string; step: Step }
-  | { type: 'queued'; shown: ReadonlySet<string> }
+  | { type: 'queued'; shown: ReadonlySet<string>; last: string | null }
   | { type: 'save' }
   | { type: 'saved'; notice: Notice }
   | { type: 'failed'; playerId: string; reply: ReplyKey }
@@ -54,7 +57,7 @@ function review(state: Review, event: ReviewEvent): Review {
     case 'go':
       return { ...state, step: { playerId: event.playerId, step: event.step }, failed: null }
     case 'queued':
-      return { ...state, shown: event.shown }
+      return { ...state, shown: event.shown, last: event.last }
     case 'save':
       return { ...state, notice: null, failed: null }
     case 'saved':
@@ -64,11 +67,7 @@ function review(state: Review, event: ReviewEvent): Review {
   }
 }
 
-const start: Review = { shown: new Set(), notice: null, step: null, failed: null }
-
-function selfPlayer(players: readonly AccountPlayer[]): AccountPlayer | undefined {
-  return players.find((found) => found.relationship === 'self')
-}
+const start: Review = { shown: new Set(), last: null, notice: null, step: null, failed: null }
 
 function alreadyAnswered(player: AccountPlayer): Notice {
   return { text: `${player.display_name} was already answered in another tab.`, icon: 'info' }
@@ -177,18 +176,28 @@ function Questions() {
   // the next one would send a second answer.
   const sending = useRef(false)
 
-  const queue = players.filter((player) => player.open_question)
+  // The account's own player comes last: while its question is open, a
+  // "Yes" to another player makes that one the account's own instead.
+  const last =
+    state.last ?? players.find((player) => player.open_question && player.relationship === 'self')?.id ?? null
+  const queue = players
+    .filter((player) => player.open_question)
+    .toSorted((a, b) => Number(a.id === last) - Number(b.id === last))
   const current = queue.at(0)
   const step = current && state.step?.playerId === current.id ? state.step.step : 'recognize'
   const failed = current && state.failed?.playerId === current.id ? state.failed.reply : null
   const saving = answer.isPending ? replyKey(answer.variables.reply) : null
   const shown = new Set([...state.shown, ...queue.map((player) => player.id)])
-  if (shown.size > state.shown.size) dispatch({ type: 'queued', shown })
+  if (shown.size > state.shown.size || last !== state.last) dispatch({ type: 'queued', shown, last })
   const total = shown.size
-  const own = selfPlayer(players)
+  // The account's own player, unless the question is about it. One whose
+  // own question is open isn't confirmed yet, so a "Yes" merges nothing.
+  const own = players.find((found) => found.relationship === 'self' && found.id !== current?.id)
+  const confirmed = own !== undefined && !own.open_question ? own : undefined
+  const isOwn = current?.relationship === 'self'
   // Two players who played each other are two people, so the API refuses
   // to merge them.
-  const playedOwn = own !== undefined && current?.played_against.includes(own.id) === true
+  const playedOwn = confirmed !== undefined && current?.played_against.includes(confirmed.id) === true
   // The players that "I manage this player" can merge the player into.
   const targets = players.filter(
     (found) =>
@@ -326,16 +335,27 @@ function Questions() {
         </main>
         <div className="review-actions" role="group" aria-label="Your answer">
           {notice}
-          {own && playedOwn && (
+          {confirmed && playedOwn && (
             <p className="review-outcome">
-              <b>{current.display_name}</b> played <b>{own.display_name}</b>, your player, so
+              <b>{current.display_name}</b> played <b>{confirmed.display_name}</b>, your player, so
               it isn’t you.
             </p>
           )}
-          {own && !playedOwn && (
+          {confirmed && !playedOwn && (
             <p className="review-outcome">
-              <b>{current.display_name}</b> and <b>{own.display_name}</b> will become
+              <b>{current.display_name}</b> and <b>{confirmed.display_name}</b> will become
               one player, your player.
+            </p>
+          )}
+          {own && !confirmed && (
+            <p className="review-outcome">
+              <b>{current.display_name}</b> becomes your player. We’ll ask about{' '}
+              <b>{own.display_name}</b> {queue.length > 2 ? 'last' : 'next'}.
+            </p>
+          )}
+          {isOwn && (
+            <p className="review-outcome">
+              <b>{current.display_name}</b> stays your player.
             </p>
           )}
           {!playedOwn && answerButton({ answer: 'yes' }, 'primary', 'Yes, this is me')}
