@@ -8,7 +8,6 @@ import { useToast } from '../../components/toastContext'
 import { Wordmark } from '../../components/Wordmark'
 import { matchWinner, otherSide, tally } from '../../scoring/board'
 import { matchOf } from '../../scoring/matches'
-import { qrText } from '../../signing/text'
 import { sessionQuery } from '../../api/queries'
 import { gamesWon, PATH, shown, sidesFor } from '../scoring/sides'
 import '../scoring/scoring.css'
@@ -16,8 +15,8 @@ import '../scoring/scoring.css'
 const ROUTE = '/_authenticated/matches/$matchId/scores/submission'
 
 // Where a player lands after submitting a result. The URL's fragment is
-// the signed result, and the other player confirms it from the QR code or
-// the link, which carry the same bytes.
+// the signed result. The QR code and the link both hold the approval link,
+// so the other player's phone camera opens the approval page.
 export function AwaitingValidation() {
   const { matchId } = useParams({ from: ROUTE })
   const { hash } = useLocation()
@@ -42,7 +41,7 @@ export function AwaitingValidation() {
       </ErrorScreen>
     )
   }
-  const { envelope, result, signers } = fragment
+  const { result, signers } = fragment
   const side = signers[signers.length - 1]
   const other = match.players[otherSide(side)]
   const winner = matchWinner(result.games)
@@ -69,7 +68,8 @@ export function AwaitingValidation() {
         <p className="fm-notice">
           <Icon name="info" />
           <span>
-            <b>{other.name}</b> confirms the result by scanning this code or opening the link.
+            <b>{other.name}</b> confirms the result by scanning this code with their phone’s camera, or
+            by opening the link.
           </span>
         </p>
         <section className="validation-summary" aria-label="Result">
@@ -85,7 +85,7 @@ export function AwaitingValidation() {
           </ol>
         </section>
         <section className="validation-share" aria-label="Signed result">
-          <QrCode text={qrText(envelope)} label="QR code of the signed result" />
+          <QrCode text={url} label="QR code of the approval link" />
           <a className="validation-link num" href={path}>
             {url}
           </a>

@@ -147,12 +147,16 @@ The scoring pages, the URL fragment, board sync and the result pages.
   the page nothing else to read. A fragment that isn't a signed result
   of the match shows "This page has no result to share". The side that
   signed last is the submitter's. It says which player must confirm, and
-  shows the games and the winner. Then it shows the signed result as a
-  QR code (`QrCode` in `src/components/`, the `FMR1:` text at level M)
-  and as a link. The link is same-origin
+  shows the games and the winner. Then it shows the approval link as a
+  QR code (`QrCode` in `src/components/`, at level L) and as a link, and
+  says to scan the code with a phone's camera, which opens the approval
+  page. The link is same-origin
   `/matches/<matchId>/scores/approvals/new#` and the envelope in
   base64url, so it opens in dev and on a Preview. It isn't the format's
-  `https://fortymm.com/r#` link, and the app has no `/r` page. Copy link
+  `https://fortymm.com/r#` link, and the app has no `/r` page. The QR
+  doesn't hold the format's `FMR1:` text, which no phone camera opens.
+  At level L the longest result's link from a Preview keeps each module
+  at 3px or more in the 320px code, so a phone camera reads it. Copy link
   copies it. "Back to the scores" opens game 1 with the same envelope.
   A demo match has a fixed `uuid` for the result, and is unrated.
 - `matches/$matchId/scores/approvals/new.tsx`: the page `AcceptResult`

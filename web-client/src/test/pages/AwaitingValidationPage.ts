@@ -1,9 +1,10 @@
 import { screen, waitFor } from '@testing-library/react'
 import { expect } from 'vitest'
+import { readQrCode } from '../readQrCode'
 import { renderRoute, type AppRouter } from '../renderRoute'
 
 // Page object for the page a player lands on after submitting a result,
-// which shows the signed result's QR code and link.
+// which shows the approval link as a QR code and as a link.
 export class AwaitingValidationPage {
   // Renders the page at `path`, with its fragment, as a reload does.
   static async render(path = '/matches/demo/scores/submission'): Promise<AwaitingValidationPage> {
@@ -46,8 +47,9 @@ export class AwaitingValidationPage {
     return screen.getByRole('region', { name: 'Result' })
   }
 
-  get qrCode(): HTMLElement {
-    return screen.getByRole('img', { name: 'QR code of the signed result' })
+  // What a phone camera reads from the QR code.
+  get qrCodeText(): string | null {
+    return readQrCode(screen.getByRole('img', { name: 'QR code of the approval link' }))
   }
 
   // The link that carries the signed result.

@@ -1,6 +1,7 @@
 import { cleanup } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { sessionResponse } from '../../test/server'
+import { AcceptResultPage } from '../../test/pages/AcceptResultPage'
 import { AwaitingValidationPage } from '../../test/pages/AwaitingValidationPage'
 import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
 import { demoMatch } from '../../scoring/demoMatches'
@@ -32,16 +33,15 @@ describe('AwaitingValidation', () => {
     const page = await submitThreeNil()
 
     expect(page.heading).toHaveTextContent('Waiting for validation')
-    expect(page.text).toContain(`${OPPONENT} confirms the result`)
+    expect(page.text).toContain(`${OPPONENT} confirms the result by scanning this code with their phone’s camera`)
     expect(page.result).toHaveTextContent(`${ME} wins 3–0`)
     expect(page.result).toHaveTextContent('Game 1 11–5')
   })
 
-  it('links to the result in its URL, and shows its QR code', async () => {
+  it('links to the result in its URL', async () => {
     const page = await submitThreeNil()
 
     const link = await page.findLink()
-    expect(page.qrCode).toBeInTheDocument()
     const [path, fragment] = link.getAttribute('href')!.split('#')
     expect(path).toBe('/matches/demo/scores/approvals/new')
     expect(fragment).toBe(page.hash)
@@ -56,6 +56,19 @@ describe('AwaitingValidation', () => {
     })
     const signer = await signWithDeviceKey()
     expect(signatures.map(({ side, kid }) => [side, hex(kid)])).toEqual([[0, hex(signer!.kid)]])
+  })
+
+  it('puts the approval link in its QR code, so a phone camera opens it', async () => {
+    const page = await submitThreeNil()
+
+    const link = await page.findLink()
+    expect(page.qrCodeText).toBe(new URL(link.getAttribute('href')!, window.location.origin).href)
+    expect(page.qrCodeText).toBe(link.textContent)
+    const { pathname, hash } = new URL(page.qrCodeText!)
+    cleanup()
+    const approval = await AcceptResultPage.render(pathname + hash)
+
+    expect(approval.heading).toHaveTextContent('Review match score')
   })
 
   it('shows the same result after a reload, and goes back to its scores', async () => {

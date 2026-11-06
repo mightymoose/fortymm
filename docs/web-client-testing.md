@@ -101,8 +101,9 @@ strip isn't `aria-busy`, so the sync has stopped sending and pulling.
 hears about a game's sync.
 `gameCount` is how many games the strip shows, the match's best of.
 `AwaitingValidationPage` wraps the router after a submit, or renders the
-submission page at a path with its envelope, and finds its link, QR code
-and the link back to the scores.
+submission page at a path with its envelope, and finds its link and the
+link back to the scores. It reads its QR code as a camera would
+(`readQrCode` in `src/test/`).
 `AcceptResultPage` renders a link's path and fragment, approves the
 result or goes to edit the scores, and reads the game scores table, the
 approval status, the check with FortyMM and the URL's fragment.

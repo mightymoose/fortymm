@@ -1,42 +1,30 @@
 import { render, screen } from '@testing-library/react'
-import jsQR from 'jsqr'
 import { describe, expect, it } from 'vitest'
 import vectors from '../../../api/signed-results/vectors.json'
+import { readQrCode } from '../test/readQrCode'
 import { QrCode } from './QrCode'
-import { qrMatrix } from './qrMatrix'
 
-const SCALE = 4
+// The longest result's approval link from the longest Preview origin
+// (`bin/preview-name` keeps a name to 30 characters), for a match with a UUID.
+const fragment = vectors.valid.find((vector) => vector.name === 'longest')!.link.split('#')[1]
+const longest =
+  `https://${'a'.repeat(30)}-fortymm.mightymoose.workers.dev` +
+  `/matches/0b0e5c6e-3c39-4f6e-9a0e-2a2f1d7f5b9c/scores/approvals/new#${fragment}`
 
-// Draws the matrix with its quiet zone into RGBA pixels and reads it back,
-// as a camera would.
-function decode(text: string): string | null {
-  const matrix = qrMatrix(text)
-  const width = (matrix.size + 8) * SCALE
-  const pixels = new Uint8ClampedArray(width * width * 4).fill(255)
-  for (let y = 0; y < width; y++) {
-    for (let x = 0; x < width; x++) {
-      const row = Math.floor(y / SCALE) - 4
-      const col = Math.floor(x / SCALE) - 4
-      const inside = row >= 0 && col >= 0 && row < matrix.size && col < matrix.size
-      if (inside && matrix.dark(row, col)) pixels.fill(0, (y * width + x) * 4, (y * width + x) * 4 + 3)
-    }
-  }
-  return jsQR(pixels, width, width)?.data ?? null
-}
+// The QR's width on a 360px screen, from `.qr-code` in scoring.css.
+const SHOWN_PX = 320
 
 describe('QrCode', () => {
-  it('encodes the text so a reader gets it back', () => {
-    const longest = vectors.valid.find((vector) => vector.name === 'longest')!.qr
-    expect(decode(longest)).toBe(longest)
+  it('encodes the text so a camera reads it back', () => {
+    render(<QrCode text={longest} label="Result QR code" />)
+
+    expect(readQrCode(screen.getByRole('img', { name: 'Result QR code' }))).toBe(longest)
   })
 
-  it('fits the longest result in version 16', () => {
-    const longest = vectors.valid.find((vector) => vector.name === 'longest')!.qr
-    expect(qrMatrix(longest).size).toBeLessThanOrEqual(16 * 4 + 17)
-  })
+  it('draws the longest approval link with modules of at least 3px on a phone', () => {
+    render(<QrCode text={longest} label="Result QR code" />)
 
-  it('is an image with its label', () => {
-    render(<QrCode text="FMR1:ABC" label="Result QR code" />)
-    expect(screen.getByRole('img', { name: 'Result QR code' })).toBeInTheDocument()
+    const extent = Number(screen.getByRole('img', { name: 'Result QR code' }).getAttribute('viewBox')!.split(' ')[2])
+    expect(SHOWN_PX / extent).toBeGreaterThanOrEqual(3)
   })
 })
