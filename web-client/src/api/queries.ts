@@ -3,6 +3,13 @@ import type { ApiClient } from './client'
 import type { components } from './schema'
 import { ApiError, ApiUnreachable, classifyFailure } from './errors'
 import { forgetAccount, saveAccount, savedAccount, type SessionAccount } from './savedSession'
+import type {
+  GameScore,
+  MatchDetail,
+  MatchRecord,
+  MatchStatus,
+  Side,
+} from '../pages/matches/browse/match'
 import { hex } from '../signing/bytes'
 import { registerDeviceKey, takeKey } from '../signing/deviceKey'
 
@@ -513,6 +520,91 @@ export function opponentsQuery(api: ApiClient, search: string) {
         api.GET('/v1/matches/opponents', { params: { query: search ? { search } : {} }, signal }),
       )
       return data.data
+    },
+  })
+}
+
+type MatchSummary = components['schemas']['MatchSummary']
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+const gameScores = (games: number[][]): GameScore[] => games.map(([a, b]) => [a, b])
+
+function parseStatus(state: MatchSummary['state']): MatchStatus {
+  switch (state.kind) {
+    case 'not_started':
+      return { kind: 'new' }
+    case 'live':
+      return { kind: 'live' }
+    case 'awaiting':
+      return { kind: 'awaiting', signedBy: state.signed_by, signedAt: state.signed_at }
+    case 'disputed':
+      return {
+        kind: 'disputed',
+        signedBy: state.signed_by,
+        signedAt: state.signed_at,
+        theirGames: gameScores(state.their_games),
+      }
+    case 'final':
+      return {
+        kind: 'final',
+        acceptedAt: state.accepted_at,
+        approvedBy: state.approved_by,
+        overrideReason: state.override_reason,
+      }
+  }
+}
+
+// A match as the pages show it. Each side shows its first player, because
+// every match is singles so far.
+function parseMatch(match: MatchSummary): MatchRecord {
+  const player = (side: Side) => ({
+    name: match.sides[side].players[0].display_name,
+    you: match.viewer_side === side,
+  })
+  return {
+    id: match.id,
+    bestOf: match.best_of,
+    rated: match.rated,
+    players: [player(0), player(1)],
+    games: gameScores(match.games),
+    retiredBy: match.retired_by,
+    startedAt: match.started_at,
+    status: parseStatus(match.state),
+  }
+}
+
+// The 50 newest matches, everyone's, and whether more exist.
+export function matchesQuery(api: ApiClient) {
+  return queryOptions({
+    queryKey: [...MATCHES_KEY, 'list'],
+    queryFn: async ({ signal }) => {
+      const data = await send('GET /v1/matches', api.GET('/v1/matches', { signal }))
+      return { matches: data.data.map(parseMatch), hasMore: data.meta.has_more }
+    },
+  })
+}
+
+// One match with its history, or null if no match has the id. An id that
+// isn't a uuid can't be one, so it sends nothing.
+export function matchQuery(api: ApiClient, id: string) {
+  return queryOptions({
+    queryKey: [...MATCHES_KEY, 'detail', id],
+    queryFn: async ({ signal }): Promise<MatchDetail | null> => {
+      if (!UUID.test(id)) return null
+      try {
+        const { data } = await send(
+          'GET /v1/matches/{match_id}',
+          api.GET('/v1/matches/{match_id}', { params: { path: { match_id: id } }, signal }),
+        )
+        return {
+          ...parseMatch(data),
+          history: data.history.map((event) => ({ ...event, games: gameScores(event.games ?? []) })),
+        }
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null
+        throw error
+      }
     },
   })
 }
