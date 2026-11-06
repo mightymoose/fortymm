@@ -95,9 +95,10 @@ or an alert shows, because a save hashes the result it corrects first.
 renders `href` again as a reload does. `waitForKey()` waits for this
 browser's signing key before a submit. `settle()` also waits until the
 strip isn't `aria-busy`, so the sync has stopped sending and pulling.
-`switchNetwork()` sets the demo network, `otherDeviceSyncs()` puts
-another device's board on the demo server, `serverBoard` reads it, and
-`slotSync()` reads what a screen reader hears about a game's sync.
+`goOffline()` and `goOnline()` take the browser offline and back.
+`otherDeviceSyncs()` puts another device's board on the demo server,
+`serverBoard` reads it, and `slotSync()` reads what a screen reader
+hears about a game's sync.
 `gameCount` is how many games the strip shows, the match's best of.
 `AwaitingValidationPage` wraps the router after a submit, or renders the
 submission page at a path with its envelope, and finds its link, QR code

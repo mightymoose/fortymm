@@ -199,27 +199,6 @@ describe('NewMatch', () => {
     expect(scores.sides).toEqual(['You', 'Your opponent'])
   })
 
-  it('keeps the match it made when its scores start over', async () => {
-    mockMatches({ recent: [badger] })
-    const page = await NewMatchPage.render()
-    await page.findRecent()
-    await page.pick(badger.display_name)
-    page.lengthOption('3 Short').click()
-    await page.start()
-    await waitFor(() => expect(page.pathname).toMatch(/\/scores\/game\/1\/edit$/))
-    const scores = new ScoreGamePage(page.router)
-    await scores.enter({ You: '11', 'Your opponent': '5' })
-    await scores.save()
-    expect(scores.tally).toBe('1–0')
-
-    await scores.click('Reset match')
-
-    expect(scores.heading).toHaveTextContent('Game 1')
-    expect(scores.gameCount).toBe(3)
-    expect(scores.tally).toBe('0–0')
-    expect(scores.sides).toEqual(['You', 'Your opponent'])
-  })
-
   it('opens nothing when the person leaves before the match is made', async () => {
     mockMatches({ recent: [badger] })
     let answer = () => {}

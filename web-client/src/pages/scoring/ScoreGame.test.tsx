@@ -1,9 +1,11 @@
 import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ApiError } from '../../api/errors'
 import { saveAccount } from '../../api/savedSession'
 import type { GamePoints } from '../../scoring/board'
 import { demoMatch } from '../../scoring/demoMatches'
+import { putBoard } from '../../scoring/demoServer'
 import { draftHash, nowSeconds, resultOf } from '../../scoring/fragment'
 import { apiMatch } from '../../scoring/matches'
 import { PULL_MS } from '../../scoring/sync'
@@ -15,6 +17,13 @@ import { base64url, fromBase64url } from '../../signing/text'
 import { ErrorPage } from '../../test/pages/ErrorPage'
 import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
 import { holdSession, sessionResponse } from '../../test/server'
+
+// A send can fail the way the API's can, while the board still lands on the
+// demo server by default.
+vi.mock('../../scoring/demoServer', async (importOriginal) => {
+  const server = await importOriginal<typeof import('../../scoring/demoServer')>()
+  return { ...server, putBoard: vi.fn(server.putBoard) }
+})
 
 // The pad names the players to a player as You and Your opponent.
 const ME = 'You'
@@ -401,6 +410,8 @@ describe('ScoreGame', () => {
   describe('background sync', () => {
     afterEach(() => {
       vi.useRealTimers()
+      vi.restoreAllMocks()
+      vi.mocked(putBoard).mockReset()
     })
 
     it('syncs a save to the server', async () => {
@@ -414,7 +425,7 @@ describe('ScoreGame', () => {
 
     it('saves at once while offline, and syncs once back online', async () => {
       const page = await ScoreGamePage.render()
-      await page.switchNetwork('offline')
+      page.goOffline()
 
       await saveGame(page, 1, '11', '9')
 
@@ -424,7 +435,7 @@ describe('ScoreGame', () => {
       expect(page.stripNote).toBe('Offline. Saved on this device.')
       expect(ScoreGamePage.serverBoard).toBeNull()
 
-      await page.switchNetwork('normal')
+      await page.goOnline()
 
       expect(ScoreGamePage.serverBoard).toBe(page.hash)
       expect(page.slotSync(1)).toBe('Synced')
@@ -433,8 +444,7 @@ describe('ScoreGame', () => {
     it('tries a failed send again after a backoff', async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true })
       const page = await ScoreGamePage.render()
-      // The pull on the switch gets through, and the send after it doesn't.
-      await page.switchNetwork('flaky')
+      vi.mocked(putBoard).mockRejectedValueOnce(new ApiError('PUT /v1/matches/demo/board', new Response(null, { status: 503 })))
 
       await saveGame(page, 1, '11', '4')
 
@@ -481,14 +491,14 @@ describe('ScoreGame', () => {
 
     it('sends its own unsent board rather than take the server’s', async () => {
       const page = await ScoreGamePage.render()
-      await page.switchNetwork('broken')
+      page.goOffline()
       await saveGame(page, 1, '11', '8')
       const mine = page.hash
       ScoreGamePage.otherDeviceSyncs(draftHash(match, [[2, 11]], null, nowSeconds() + 60))
 
       const shown = new Set<string>()
       const watch = setInterval(() => shown.add(page.hash), 20)
-      await page.switchNetwork('normal')
+      await page.goOnline()
       clearInterval(watch)
 
       expect([...shown]).toEqual([mine])
@@ -518,12 +528,12 @@ describe('ScoreGame', () => {
 
     it('syncs a board saved offline after the scoring page has closed', async () => {
       const page = await ScoreGamePage.render()
-      await page.switchNetwork('offline')
+      page.goOffline()
       await saveGame(page, 1, '11', '5')
       const saved = page.hash
 
       await act(() => page.router.navigate({ to: '/' }))
-      await page.switchNetwork('normal')
+      await page.goOnline()
 
       await waitFor(() => expect(ScoreGamePage.serverBoard).toBe(saved))
     })
@@ -538,45 +548,6 @@ describe('ScoreGame', () => {
 
       await waitFor(() => expect(ScoreGamePage.serverBoard).toBe(page.hash))
       expect(decodeEnvelope(fromBase64url(page.hash)).signatures).toHaveLength(1)
-    })
-
-    it('switches the demo network from the testing panel', async () => {
-      const page = await ScoreGamePage.render()
-
-      await userEvent.click(page.network('Offline'))
-      await saveGame(page, 1, '11', '4')
-
-      expect(page.network('Offline')).toHaveAttribute('aria-checked', 'true')
-      expect(page.slotSync(1)).toBe('Not synced')
-
-      await userEvent.click(page.network('Normal'))
-      await page.settle()
-
-      expect(ScoreGamePage.serverBoard).toBe(page.hash)
-    })
-
-    it('resets the match here and on the server', async () => {
-      const page = await ScoreGamePage.render()
-      await saveGame(page, 1, '11', '2')
-      await saveGame(page, 2, '11', '3')
-
-      await page.click('Reset match')
-
-      expect(page.href).toBe('/matches/demo/scores/game/1/edit')
-      expect([1, 2].map((game) => page.slotScore(game))).toEqual(['–', '–'])
-      expect(ScoreGamePage.serverBoard).toBeNull()
-    })
-
-    it('clears every demo match and sets the network back to normal', async () => {
-      const page = await ScoreGamePage.render()
-      await saveGame(page, 1, '11', '2')
-      await page.switchNetwork('offline')
-
-      await page.click('Clear everything')
-
-      expect(Object.keys(localStorage).filter((key) => key.startsWith('fortymm-demo'))).toEqual([])
-      expect(page.slotScore(1)).toBe('–')
-      expect(page.network('Normal')).toHaveAttribute('aria-checked', 'true')
     })
   })
 })
