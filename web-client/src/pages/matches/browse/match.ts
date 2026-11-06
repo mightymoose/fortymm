@@ -94,8 +94,12 @@ export const formatTime = (iso: string) => timeFormat.format(new Date(iso))
 
 const tally = (games: readonly GameScore[]) => `${wonOf(games, 0)}–${wonOf(games, 1)}`
 
+const sameGames = (a: readonly GameScore[], b: readonly GameScore[]) =>
+  a.length === b.length && a.every((game, index) => game[0] === b[index][0] && game[1] === b[index][1])
+
 // What one history event says its actor did, after their name. A signature
-// that replaces the other side's pending one signed different scores.
+// of other scores than the ones last signed, approved or set signed
+// different scores.
 export function eventText(history: readonly MatchEvent[], index: number): string {
   const event = history[index]
   switch (event.kind) {
@@ -108,7 +112,7 @@ export function eventText(history: readonly MatchEvent[], index: number): string
     }
     case 'signed': {
       const before = history.slice(0, index).findLast((e) => e.kind !== 'created' && e.kind !== 'board')
-      const counters = before?.kind === 'signed' && before.side !== null && before.side !== event.side
+      const counters = before !== undefined && !sameGames(before.games, event.games)
       return `${counters ? 'Signed different scores' : 'Signed the result'}, ${tally(event.games)}`
     }
     case 'approved':

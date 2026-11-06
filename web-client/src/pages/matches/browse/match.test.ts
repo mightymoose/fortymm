@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { score, type MatchRecord, type MatchStatus } from './match'
+import { eventText, score, type GameScore, type MatchEvent, type MatchRecord, type MatchStatus } from './match'
 
 const final: MatchStatus = { kind: 'final', acceptedAt: '2026-11-02T18:39:00Z', approvedBy: [0, 1], overrideReason: null }
 
@@ -54,5 +54,37 @@ describe('score', () => {
     const { won, current } = score(record({ games: [[11, 4], [6, 4]], status: { kind: 'live' } }))
     expect(won).toEqual([1, 0])
     expect(current).toEqual([6, 4])
+  })
+})
+
+describe('eventText', () => {
+  const at = '2026-11-02T18:39:00Z'
+  const created: MatchEvent = { at, kind: 'created', by: 'Wei Chen', side: null, games: [] }
+  const signed = (side: 0 | 1, games: GameScore[]): MatchEvent => ({ at, kind: 'signed', by: null, side, games })
+  const texts = (history: MatchEvent[]) => history.map((_, index) => eventText(history, index))
+  const FIRST: GameScore[] = [[11, 5], [11, 7]]
+  const OTHER: GameScore[] = [[11, 5], [7, 11], [11, 9]]
+
+  it('says both sides signing the same scores together each signed the result', () => {
+    expect(texts([created, signed(0, FIRST), signed(1, FIRST)])).toEqual([
+      'Started the match',
+      'Signed the result, 2–0',
+      'Signed the result, 2–0',
+    ])
+  })
+
+  it('says a side that counters the other side’s scores signed different scores', () => {
+    expect(texts([created, signed(0, FIRST), signed(1, OTHER)])).toEqual([
+      'Started the match',
+      'Signed the result, 2–0',
+      'Signed different scores, 2–1',
+    ])
+  })
+
+  it('says a correction both sides signed together was different scores once', () => {
+    expect(texts([created, signed(0, FIRST), signed(0, OTHER), signed(1, OTHER)]).slice(2)).toEqual([
+      'Signed different scores, 2–1',
+      'Signed the result, 2–1',
+    ])
   })
 })
