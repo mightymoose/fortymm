@@ -88,15 +88,16 @@ The scoring pages, the URL fragment, board sync and the result pages.
   save. The board is a snapshot, the fragment's text, with no outbox of
   changes. `src/scoring/boards.ts` keeps, per match and in memory only,
   the newest board this tab saved that the server hasn't taken
-  (`pending`), and the last one the server took or this tab pulled
+  (`pending`), and the last one the server took from this tab
   (`synced`). A newer save replaces an unsent one, and a reload forgets
   it. Each match sends one board at a time, so a late older copy from
   this tab can't land after a newer one. Across tabs and devices the
-  last write wins.
+  last write wins. The scoring page only sends. It never reads the
+  server's board back, so another device's board never changes this
+  tab's pad.
 - A match's sync is a state machine of `idle`, `sending`,
-  `waitingRetry`, `waitingOnline`, `pulling` and `stopped`, with why the
-  last send got stuck kept beside it. `nextStep()` picks what an idle
-  sync does. While the browser knows it's offline (`navigator.onLine`
+  `waitingRetry`, `waitingOnline` and `stopped`, with why the last send
+  got stuck kept beside it. `nextStep()` picks what an idle sync does. While the browser knows it's offline (`navigator.onLine`
   is false), it sends nothing and waits for `online`. A board that
   can't get through waits, with a backoff of 2, 4, 8, 15 and then 30
   seconds, and goes as soon as the browser fires `online`. A 4xx
@@ -104,19 +105,9 @@ The scoring pages, the URL fragment, board sync and the result pages.
   page, for each match with a board to send, so it still goes after the
   person leaves the scoring page. A sync stops when its last holder lets
   go, and a response that lands after that changes nothing.
-- Only the scoring edit page pulls the server's board, and only while
-  this tab has nothing to send. It pulls when the page opens, after each
-  board the server takes, and every 5 seconds while the page is visible.
-  A pulled board that `readFragment()` can't read, or that doesn't fit
-  the match, is ignored. `adopts()` decides whether the page takes it,
-  with a replace, on the same game or the last one that can open. The
-  page follows the server while its fragment is empty or is the board it
-  last synced. So two tabs on one match converge while idle. A board
-  from a link, such as one that Edit scores opens, gives way only to a
-  board issued later, so opening it never undoes it.
 - `src/scoring/demoServer.ts` stands in for the API's match routes. It
   keeps the latest board per match under `fortymm-demo-server:<matchId>`,
-  with `putBoard()` and `fetchBoard()`. Each call answers after 300ms.
+  with `putBoard()`. Each call answers after 300ms.
 - The strip shows each game's sync while this tab has a board to send.
   A game is unsynced when its points differ from the `synced` board. It
   shows a dot while the board is on its way, a dashed amber edge and

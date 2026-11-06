@@ -1,20 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  acknowledge,
-  adopts,
-  boardsOf,
-  dropBoard,
-  learnBoard,
-  matchesWithPending,
-  saveBoard,
-  unsyncedGames,
-} from './boards'
-import type { Fragment } from './fragment'
-import type { MatchResult } from '../signing/result'
-
-const result = {} as MatchResult
-const at = (issuedAt: number): Fragment => ({ kind: 'draft', issuedAt, result })
-const empty: Fragment = { kind: 'empty' }
+import { acknowledge, boardsOf, dropBoard, matchesWithPending, saveBoard, unsyncedGames } from './boards'
 
 describe('the boards this tab keeps', () => {
   it('keeps only the newest unsent board', () => {
@@ -46,9 +31,8 @@ describe('the boards this tab keeps', () => {
     expect(boardsOf('m3').pending).toBe('b')
 
     dropBoard('m3', 'b')
-    learnBoard('m3', 'c')
 
-    expect(boardsOf('m3')).toEqual({ pending: null, synced: 'c' })
+    expect(boardsOf('m3')).toEqual({ pending: null, synced: null })
   })
 })
 
@@ -68,23 +52,5 @@ describe('unsyncedGames', () => {
       ),
     ).toEqual(new Set([2, 3]))
     expect(unsyncedGames([[11, 3]], [[11, 3]])).toEqual(new Set())
-  })
-})
-
-describe('adopts', () => {
-  it('follows the server while the tab shows nothing or what it last synced', () => {
-    expect(adopts({ text: '', fragment: empty }, { text: 'b', fragment: at(1) }, null)).toBe(true)
-    expect(adopts({ text: 'a', fragment: at(9) }, { text: 'b', fragment: at(1) }, 'a')).toBe(true)
-    expect(adopts({ text: 'a', fragment: at(9) }, { text: '', fragment: empty }, 'a')).toBe(true)
-  })
-
-  it('keeps a board from a link unless the pulled one is newer', () => {
-    expect(adopts({ text: 'a', fragment: at(5) }, { text: 'b', fragment: at(5) }, null)).toBe(false)
-    expect(adopts({ text: 'a', fragment: at(5) }, { text: 'b', fragment: at(6) }, null)).toBe(true)
-    expect(adopts({ text: 'a', fragment: at(5) }, { text: '', fragment: empty }, null)).toBe(false)
-  })
-
-  it('changes nothing for the board already on screen', () => {
-    expect(adopts({ text: 'a', fragment: at(5) }, { text: 'a', fragment: at(5) }, null)).toBe(false)
   })
 })

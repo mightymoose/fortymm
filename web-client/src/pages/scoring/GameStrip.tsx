@@ -36,7 +36,7 @@ export function GameStrip({
   const review = reviewBoard(slots, match.bestOf)
   const decider = review.kind === 'undecided' ? null : review.decidedAtGame
   return (
-    <nav className="score-strip-wrap" aria-label="Games" aria-busy={sync.sending || sync.pulling || undefined}>
+    <nav className="score-strip-wrap" aria-label="Games" aria-busy={sync.sending || undefined}>
       {/* A line that keeps its height, so a note never moves the page. */}
       <div className="score-strip__head">
         <p className="score-strip__label">Games</p>

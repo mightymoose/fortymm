@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { dropRequestsInFlight, fetchBoard, putBoard, serverBoard } from './demoServer'
+import { dropRequestsInFlight, putBoard, serverBoard } from './demoServer'
 
 describe('the demo server', () => {
   it('keeps the latest board per match', async () => {
-    expect(await fetchBoard('d1')).toBeNull()
+    expect(serverBoard('d1')).toBeNull()
 
     await putBoard('d1', 'a')
     await putBoard('d1', 'b')
 
-    expect(await fetchBoard('d1')).toBe('b')
+    expect(serverBoard('d1')).toBe('b')
   })
 
   it('drops a request in flight', async () => {
