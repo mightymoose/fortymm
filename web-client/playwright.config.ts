@@ -16,5 +16,15 @@ export default defineConfig({
     // with `npx playwright show-trace` or https://trace.playwright.dev.
     trace: 'on',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    // The empty Matches page needs a database with no match, so this runs
+    // before every spec that makes one.
+    { name: 'empty', testMatch: 'matches-empty.spec.ts', use: { ...devices['Desktop Chrome'] } },
+    {
+      name: 'chromium',
+      testIgnore: ['**/deployed/**', 'matches-empty.spec.ts'],
+      dependencies: ['empty'],
+      use: { ...devices['Desktop Chrome'] },
+    },
+  ],
 })

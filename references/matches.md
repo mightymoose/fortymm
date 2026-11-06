@@ -266,8 +266,9 @@ replaced or cut off gets a 409.
 
 ## Not built yet
 
-- Reading a match. No route reads one yet. The reads come with the match
-  pages that need them, so spectators can't follow a board yet.
+- Reading a match beyond the 50 newest, and by anyone without
+  `matches.view`. `GET /v1/matches` and `GET /v1/matches/{match_id}` read
+  them for administrators (see `docs/matches-api.md`).
 - The clients sending boards and results to these routes, rather than to
   the demo server (#195).
 - Player short codes for picking an opponent (#187).

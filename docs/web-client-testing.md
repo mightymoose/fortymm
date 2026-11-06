@@ -209,8 +209,8 @@ signs a guest out from the account menu, through its dialog, to
 `/signed-out`. A third signs in again from `/signed-out`, and checks that
 the account keeps its one player.
 
-`e2e/admin.spec.ts` signs in as `mightymoose@fortymm.com`, whom the
-migration makes an administrator. On `/admin` it creates a role with a new
+`e2e/admin.spec.ts` reuses the `empty` project's sign-in as
+`mightymoose@fortymm.com`, whom the migration makes an administrator. On `/admin` it creates a role with a new
 name, because the dev database keeps its roles, then deletes it. Then it
 opens its own account's page from the Accounts tab, and checks that it
 holds Administrator. A second test does the same at 390x844, where the
@@ -218,13 +218,35 @@ sidebar is a tab bar, and checks that the toast sits 24px above the bar
 (#150).
 
 `e2e/new-match.spec.ts` starts a second guest account through the API.
-It signs in as `mightymoose@fortymm.com`, who holds `matches.create`,
+It reuses the `empty` project's sign-in as `mightymoose@fortymm.com`,
+who holds `matches.create`,
 searches for that guest's player on `/matches/new`, makes a best of 3 against it
 and lands on game 1 of the scores, with a strip of 3 games. Then it
 aborts every request under `/api/v1/matches/` and reloads. The scores
 still open, from the fragment, and the page sent no such request.
 
-The suite counts about 29 guest accounts and sign-ins with no session,
+`e2e/matches.spec.ts` reuses the `empty` project's sign-in as
+`mightymoose@fortymm.com` (see below), and starts a guest through the
+API in `beforeAll`. It makes two matches against the guest's player with
+`POST /v1/matches`, and gives the newer one a board of two games with
+`POST /v1/matches/{match_id}/boards`. The page encodes the board with the
+app's `encodePayload()`, which it imports from the dev server. At 390,
+920 and 1280px each test finds both matches on `/matches` by their
+players' names, opens the one with a board, and checks that neither page
+scrolls sideways.
+
+`e2e/matches-empty.spec.ts` checks the empty Matches page at 390 and
+1280px. Only a database with no match shows it, and the other specs make
+matches, so it is the `empty` project in `playwright.config.ts`, which
+the `chromium` project depends on, and it runs first. It saves the
+administrator's cookies to `administratorState` (`e2e/fixtures.ts`), so a
+later spec can sign in without counting toward the guest account limit.
+GitHub CI starts from a fresh database, so there (`CI` set) a match fails
+it. A local run whose `postgres-data` volume kept matches skips it and
+says so. Run `docker compose down -v` in the checkout for a fresh
+database.
+
+The suite counts about 25 guest accounts and sign-ins with no session,
 under the limit of 30 a minute.
 
 The design system page is a copy of the reference's component gallery

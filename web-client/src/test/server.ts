@@ -830,3 +830,65 @@ export function mockMatches({
   )
   return mock
 }
+
+type MatchDetail = components['schemas']['MatchDetail']
+
+// The mock API's reads of `matches`, newest first: the list, with
+// `hasMore`, and each match by id, which answers 404 for an id it doesn't
+// hold. `lists` counts the list requests and `reads` records each id read.
+// While `hold` is set, each answer waits until the test calls release().
+// While `fails` is set, each answers 500.
+export function mockMatchReads(matches: MatchDetail[], { hasMore = false } = {}) {
+  const pending: (() => void)[] = []
+  const mock = {
+    hold: false,
+    fails: false,
+    lists: 0,
+    reads: [] as string[],
+    async release(): Promise<void> {
+      await act(async () => pending.splice(0).forEach((resolve) => resolve()))
+    },
+  }
+  const answer = async (respond: () => Response) => {
+    if (mock.hold) await new Promise<void>((resolve) => pending.push(resolve))
+    if (mock.fails) {
+      return HttpResponse.json({ errors: [{ status: '500', title: 'Failed' }] }, { status: 500 })
+    }
+    return respond()
+  }
+  server.use(
+    http.get(`${API_BASE_URL}/v1/matches`, () => {
+      mock.lists++
+      return answer(() =>
+        HttpResponse.json<components['schemas']['MatchesResponse']>({
+          data: matches.map((m) => ({
+            id: m.id,
+            best_of: m.best_of,
+            rated: m.rated,
+            started_at: m.started_at,
+            sides: m.sides,
+            viewer_side: m.viewer_side,
+            games: m.games,
+            retired_by: m.retired_by,
+            state: m.state,
+          })),
+          meta: { has_more: hasMore },
+        }),
+      )
+    }),
+    http.get<{ matchId: string }>(`${API_BASE_URL}/v1/matches/:matchId`, ({ params }) => {
+      if (params.matchId === 'opponents') return undefined
+      mock.reads.push(params.matchId)
+      const match = matches.find((m) => m.id === params.matchId)
+      return answer(() =>
+        match
+          ? HttpResponse.json<components['schemas']['MatchDetailResponse']>({ data: match })
+          : HttpResponse.json(
+              { errors: [{ status: '404', title: 'No match has this id' }] },
+              { status: 404 },
+            ),
+      )
+    }),
+  )
+  return mock
+}

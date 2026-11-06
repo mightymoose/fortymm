@@ -287,7 +287,7 @@ def stored_details(session: Session, match: Match) -> MatchDetails:
             MatchSettings.id == match.settings_id
         )
     ).one()
-    return MatchDetails(_best_of(best_of), rated, _side_players(session, match.id))
+    return MatchDetails(as_best_of(best_of), rated, _side_players(session, match.id))
 
 
 def push_board(
@@ -308,7 +308,7 @@ def push_board(
         return log_refusal(session, match_id, "board", body, sender, refusal)
 
     try:
-        result = _board_result(body)
+        result = board_result(body)
     except Malformed:
         return refuse(Refusal.MALFORMED)
     if result.match != match_id:
@@ -381,12 +381,12 @@ def result_approvals(
     )
     for result, key, side, player, authority in rows:
         found[result].append(
-            RecordedApproval(key, _side(side), player, _authority(authority))
+            RecordedApproval(key, as_side(side), player, _authority(authority))
         )
     return {id: tuple(approvals) for id, approvals in found.items()}
 
 
-def _board_result(body: bytes) -> MatchResult:
+def board_result(body: bytes) -> MatchResult:
     """The scores a board holds, read from its payload. An envelope's
     signatures stay unchecked."""
     try:
@@ -396,7 +396,7 @@ def _board_result(body: bytes) -> MatchResult:
     return decode_payload(payload).result
 
 
-def _best_of(value: int) -> BestOf:
+def as_best_of(value: int) -> BestOf:
     """match_settings' CHECK allows exactly these."""
     match value:
         case 1:
@@ -410,7 +410,7 @@ def _best_of(value: int) -> BestOf:
     raise ValueError(f"best of {value} isn't a match's format")
 
 
-def _side(value: int) -> Side:
+def as_side(value: int) -> Side:
     return 0 if value == 0 else 1
 
 

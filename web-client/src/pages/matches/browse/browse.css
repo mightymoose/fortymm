@@ -1,0 +1,50 @@
+/* The Matches page (MatchList.tsx) and a match's page (SignOff.tsx).
+   Layout only; every colour, type role and control comes from the kit. */
+.match-groups{display:flex;flex-direction:column;gap:var(--s-6)}
+.match-muted{color:var(--fg-3)}
+.match-block{display:block;margin-top:2px;font-size:var(--text-sm)}
+.match-strong{font-weight:700;color:var(--fg-1)}
+
+.match-row-link{display:block;color:inherit;text-decoration:none;border-radius:var(--r-md)}
+.match-row-link+.match-row-link{border-top:1px solid var(--border-subtle)}
+.match-row-link:hover{background:var(--bg-hover)}
+.match-row-link:focus-visible{outline:none;box-shadow:var(--focus-ring)}
+.match-row-link .fm-match{padding-inline:var(--s-2)}
+
+.match-table td{vertical-align:top}
+.match-table td:nth-child(3){white-space:nowrap}
+/* A long "Waiting for …" wraps rather than squeeze the other columns. */
+.match-table .fm-status{white-space:normal}
+.match-when{white-space:nowrap}
+.match-players{display:flex;flex-direction:column;gap:2px}
+.match-scores{display:flex;flex-wrap:wrap;gap:2px var(--s-3);color:var(--fg-3)}
+
+.match-skel-list{display:flex;flex-direction:column;gap:var(--s-2)}
+.match-skel--tr{height:56px}
+.match-skel--row{height:108px}
+.match-skel--status{width:96px;height:16px}
+.match-skel--title{width:min(100%,420px);height:36px}
+.match-skel--line{width:200px;height:16px}
+.match-skel--game{height:40px}
+.match-skel--card{height:280px}
+
+.match-page{display:flex;flex-direction:column;gap:var(--s-6);max-width:880px}
+.match-page__head{display:flex;flex-direction:column;gap:var(--s-2)}
+.match-page__head>*{margin:0}
+.match-title{margin:0;overflow-wrap:anywhere}
+.match-section{display:flex;flex-direction:column;gap:var(--s-3);min-width:0}
+.match-event{display:grid;grid-template-columns:48px minmax(0,1fr);gap:var(--s-3);color:var(--fg-2)}
+.match-event b{font-weight:600;color:var(--fg-1)}
+.match-columns{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,340px);gap:var(--s-6);align-items:start}
+@media (max-width:720px){.match-columns{grid-template-columns:minmax(0,1fr)}}
+.match-tally{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:var(--s-3);align-items:center;margin:0;font:500 var(--text-lg)/var(--lh-snug) var(--font-ui);color:var(--fg-2)}
+.match-tally>:last-child{text-align:right}
+.match-tally__score{font-size:var(--text-2xl);font-weight:700;color:var(--fg-1)}
+.match-game{display:grid;grid-template-columns:72px 80px minmax(0,1fr);gap:var(--s-3);align-items:center;color:var(--fg-3)}
+.match-game__n{font-size:var(--text-sm)}
+.match-game__score{font-size:20px;color:var(--fg-2)}
+.match-signer{display:grid;grid-template-columns:20px minmax(0,1fr);gap:var(--s-3);align-items:start}
+.match-signer__name{font-weight:600;color:var(--fg-1)}
+.match-signer__icon{color:var(--fg-3)}
+.match-signer__icon--check{color:var(--success)}
+.match-signer__icon--alert{color:var(--conflict)}

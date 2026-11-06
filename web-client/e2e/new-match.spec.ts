@@ -1,29 +1,26 @@
 import { request as newRequest } from '@playwright/test'
 import type { components } from '../src/api/schema.d.ts'
-import { expect, test } from './fixtures.ts'
+import { administratorState, expect, test } from './fixtures.ts'
 import { NewMatchPage } from './pages/NewMatchPage.ts'
 
 type SessionResponse = components['schemas']['SessionResponse']
 
-// The migration makes this email's account an administrator, which may
-// create matches. A sign-in with no session counts toward the guest
-// account limit.
-const administrator = { sub: 'e2e|mightymoose', email: 'mightymoose@fortymm.com' }
+// The administrator, whom the `empty` project signed in, may create
+// matches.
+test.use({ storageState: administratorState })
 
 // Makes a match against the real API with another guest's player, found by
 // search, and opens its scores.
 test('makes a match against a player found by search, and opens its scores', async ({
   page,
   baseURL,
-  signInPage,
 }) => {
-  const other = await newRequest.newContext({ baseURL })
+  const other = await newRequest.newContext({ baseURL, storageState: { cookies: [], origins: [] } })
   const opponent = ((await (
     await other.post('/api/v1/session', { headers: { 'Content-Type': 'application/json' } })
   ).json()) as SessionResponse).data.account.player
   await other.dispose()
 
-  await signInPage.signIn(administrator)
   const newMatch = new NewMatchPage(page)
   await newMatch.goto()
   await expect(newMatch.title).toHaveText('New match')

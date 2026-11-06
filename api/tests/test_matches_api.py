@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
-from match_setup import add_match, add_player, merge
+from match_setup import add_account, add_match, add_player, merge
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import sessionmaker
 
@@ -16,6 +16,7 @@ from fortymm_api.accounts import PlayerId
 from fortymm_api.main import create_app
 from fortymm_api.matches import BestOf, MatchId
 from fortymm_api.models import Player
+from fortymm_api.services.match_results import override_result
 from fortymm_api.services.matches import MatchDetails
 from fortymm_api.signed_results import Completed, MatchResult, encode_payload
 
@@ -278,3 +279,90 @@ def test_a_board_needs_a_session_holding_matches_score(
     assert without.status_code == 403
     title = "You don't have permission to do this"
     assert without.json() == {"errors": [{"status": "403", "title": title}]}
+
+
+def overridden_match(database: Engine, players: list[dict[str, str]]) -> None:
+    """The match, final through an override, so its state carries fields."""
+    first, second = (PlayerId(uuid.UUID(player["id"])) for player in players)
+    with sessionmaker(database).begin() as session:
+        add_match(session, MATCH, MatchDetails(3, True, (first, second)))
+        admin = add_account(session)
+        override_result(
+            session, MATCH, admin, None, ((11, 5), (11, 7)), Completed(), "Card"
+        )
+
+
+@pytest.mark.usefixtures("creator")
+def test_the_list_answers_each_match_with_its_state(
+    client: TestClient, migrated_database: Engine, players: list[dict[str, str]]
+) -> None:
+    overridden_match(migrated_database, players)
+
+    response = client.get("/v1/matches")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["meta"] == {"has_more": False}
+    (match,) = body["data"]
+    accepted_at = match["state"].pop("accepted_at")
+    datetime.fromisoformat(accepted_at)
+    datetime.fromisoformat(match.pop("started_at"))
+    assert match == {
+        "id": str(MATCH),
+        "best_of": 3,
+        "rated": True,
+        "sides": [
+            {"side": 0, "players": [players[0]]},
+            {"side": 1, "players": [players[1]]},
+        ],
+        "viewer_side": None,
+        "games": [[11, 5], [11, 7]],
+        "retired_by": None,
+        "state": {"kind": "final", "approved_by": [], "override_reason": "Card"},
+    }
+
+
+@pytest.mark.usefixtures("creator")
+def test_a_match_answers_with_its_history(
+    client: TestClient, migrated_database: Engine, players: list[dict[str, str]]
+) -> None:
+    overridden_match(migrated_database, players)
+
+    response = client.get(PATH)
+
+    assert response.status_code == 200
+    detail = response.json()["data"]
+    listed = client.get("/v1/matches").json()["data"][0]
+    assert {k: v for k, v in detail.items() if k != "history"} == listed
+    assert [
+        {k: v for k, v in event.items() if k != "at"} for event in detail["history"]
+    ] == [
+        {"kind": "created", "by": None, "side": None, "games": None},
+        {"kind": "override", "by": None, "side": None, "games": [[11, 5], [11, 7]]},
+    ]
+
+
+@pytest.mark.parametrize("path", ["/v1/matches", PATH])
+def test_reading_matches_needs_matches_view(client: TestClient, path: str) -> None:
+    client.post("/v1/session", headers=JSON)
+
+    response = client.get(path)
+
+    assert response.status_code == 403
+
+
+@pytest.mark.usefixtures("creator")
+def test_an_unknown_match_answers_404(client: TestClient) -> None:
+    response = client.get(f"/v1/matches/{uuid.uuid4()}")
+
+    assert response.status_code == 404
+    title = "No match has this id"
+    assert response.json() == {"errors": [{"status": "404", "title": title}]}
+
+
+@pytest.mark.usefixtures("creator")
+def test_opponents_still_routes_beside_a_match(client: TestClient) -> None:
+    response = client.get("/v1/matches/opponents")
+
+    assert response.status_code == 200
+    assert response.json() == {"data": []}

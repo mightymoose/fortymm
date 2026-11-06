@@ -871,6 +871,51 @@
       }
     },
     "/v1/matches": {
+      "get": {
+        "tags": [
+          "matches"
+        ],
+        "summary": "List Matches",
+        "description": "Every match, newest first, at most 50. `meta.has_more` says that more\nexist. Needs `matches.view`.",
+        "operationId": "list_matches",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
       "post": {
         "tags": [
           "matches"
@@ -965,6 +1010,85 @@
             "session": []
           }
         ]
+      }
+    },
+    "/v1/matches/{match_id}": {
+      "get": {
+        "tags": [
+          "matches"
+        ],
+        "summary": "Get Match",
+        "description": "The match, with its history. Needs `matches.view`.",
+        "operationId": "get_match",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Match Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No match has this id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/v1/matches/{match_id}/boards": {
@@ -3523,6 +3647,35 @@
           "representative"
         ]
       },
+      "AwaitingState": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "awaiting",
+            "title": "Kind"
+          },
+          "signed_by": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ],
+            "title": "Signed By"
+          },
+          "signed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Signed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "signed_by",
+          "signed_at"
+        ],
+        "title": "AwaitingState"
+      },
       "BoardRequest": {
         "properties": {
           "board": {
@@ -3586,6 +3739,48 @@
         ],
         "title": "CheckedResult"
       },
+      "DisputedState": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "disputed",
+            "title": "Kind"
+          },
+          "signed_by": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ],
+            "title": "Signed By"
+          },
+          "signed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Signed At"
+          },
+          "their_games": {
+            "items": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array",
+              "maxItems": 2,
+              "minItems": 2
+            },
+            "type": "array",
+            "title": "Their Games"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "signed_by",
+          "signed_at",
+          "their_games"
+        ],
+        "title": "DisputedState"
+      },
       "Error": {
         "properties": {
           "status": {
@@ -3619,6 +3814,46 @@
           "errors"
         ],
         "title": "ErrorsResponse"
+      },
+      "FinalState": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "final",
+            "title": "Kind"
+          },
+          "accepted_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Accepted At"
+          },
+          "approved_by": {
+            "items": {
+              "type": "integer",
+              "enum": [
+                0,
+                1
+              ]
+            },
+            "type": "array",
+            "title": "Approved By"
+          },
+          "override_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Override Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "accepted_at",
+          "approved_by",
+          "override_reason"
+        ],
+        "title": "FinalState"
       },
       "HTTPValidationError": {
         "properties": {
@@ -3667,6 +3902,20 @@
           "revoked"
         ],
         "title": "KeyState"
+      },
+      "LiveState": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "live",
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "LiveState"
       },
       "LogoutData": {
         "properties": {
@@ -3749,6 +3998,219 @@
         ],
         "title": "MatchApproval"
       },
+      "MatchDetail": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "best_of": {
+            "type": "integer",
+            "enum": [
+              1,
+              3,
+              5,
+              7
+            ],
+            "title": "Best Of"
+          },
+          "rated": {
+            "type": "boolean",
+            "title": "Rated"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "sides": {
+            "items": {
+              "$ref": "#/components/schemas/MatchSide"
+            },
+            "type": "array",
+            "title": "Sides"
+          },
+          "viewer_side": {
+            "enum": [
+              0,
+              1
+            ],
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "Viewer Side"
+          },
+          "games": {
+            "items": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array",
+              "maxItems": 2,
+              "minItems": 2
+            },
+            "type": "array",
+            "title": "Games"
+          },
+          "retired_by": {
+            "enum": [
+              0,
+              1
+            ],
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "Retired By"
+          },
+          "state": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NotStartedState"
+              },
+              {
+                "$ref": "#/components/schemas/LiveState"
+              },
+              {
+                "$ref": "#/components/schemas/AwaitingState"
+              },
+              {
+                "$ref": "#/components/schemas/DisputedState"
+              },
+              {
+                "$ref": "#/components/schemas/FinalState"
+              }
+            ],
+            "title": "State",
+            "discriminator": {
+              "propertyName": "kind",
+              "mapping": {
+                "awaiting": "#/components/schemas/AwaitingState",
+                "disputed": "#/components/schemas/DisputedState",
+                "final": "#/components/schemas/FinalState",
+                "live": "#/components/schemas/LiveState",
+                "not_started": "#/components/schemas/NotStartedState"
+              }
+            }
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/MatchEvent"
+            },
+            "type": "array",
+            "title": "History"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "best_of",
+          "rated",
+          "started_at",
+          "sides",
+          "viewer_side",
+          "games",
+          "retired_by",
+          "state",
+          "history"
+        ],
+        "title": "MatchDetail"
+      },
+      "MatchDetailResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/MatchDetail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "MatchDetailResponse"
+      },
+      "MatchEvent": {
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "created",
+              "board",
+              "signed",
+              "approved",
+              "override"
+            ],
+            "title": "Kind"
+          },
+          "by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "By"
+          },
+          "side": {
+            "enum": [
+              0,
+              1
+            ],
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "Side"
+          },
+          "games": {
+            "items": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array",
+              "maxItems": 2,
+              "minItems": 2
+            },
+            "type": [
+              "array",
+              "null"
+            ],
+            "title": "Games"
+          }
+        },
+        "type": "object",
+        "required": [
+          "at",
+          "kind",
+          "by",
+          "side",
+          "games"
+        ],
+        "title": "MatchEvent"
+      },
+      "MatchPlayer": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "display_name"
+        ],
+        "title": "MatchPlayer"
+      },
       "MatchRequest": {
         "properties": {
           "id": {
@@ -3802,6 +4264,176 @@
         ],
         "title": "MatchResponse"
       },
+      "MatchSide": {
+        "properties": {
+          "side": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ],
+            "title": "Side"
+          },
+          "players": {
+            "items": {
+              "$ref": "#/components/schemas/MatchPlayer"
+            },
+            "type": "array",
+            "title": "Players"
+          }
+        },
+        "type": "object",
+        "required": [
+          "side",
+          "players"
+        ],
+        "title": "MatchSide"
+      },
+      "MatchSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "best_of": {
+            "type": "integer",
+            "enum": [
+              1,
+              3,
+              5,
+              7
+            ],
+            "title": "Best Of"
+          },
+          "rated": {
+            "type": "boolean",
+            "title": "Rated"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "sides": {
+            "items": {
+              "$ref": "#/components/schemas/MatchSide"
+            },
+            "type": "array",
+            "title": "Sides"
+          },
+          "viewer_side": {
+            "enum": [
+              0,
+              1
+            ],
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "Viewer Side"
+          },
+          "games": {
+            "items": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array",
+              "maxItems": 2,
+              "minItems": 2
+            },
+            "type": "array",
+            "title": "Games"
+          },
+          "retired_by": {
+            "enum": [
+              0,
+              1
+            ],
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "Retired By"
+          },
+          "state": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NotStartedState"
+              },
+              {
+                "$ref": "#/components/schemas/LiveState"
+              },
+              {
+                "$ref": "#/components/schemas/AwaitingState"
+              },
+              {
+                "$ref": "#/components/schemas/DisputedState"
+              },
+              {
+                "$ref": "#/components/schemas/FinalState"
+              }
+            ],
+            "title": "State",
+            "discriminator": {
+              "propertyName": "kind",
+              "mapping": {
+                "awaiting": "#/components/schemas/AwaitingState",
+                "disputed": "#/components/schemas/DisputedState",
+                "final": "#/components/schemas/FinalState",
+                "live": "#/components/schemas/LiveState",
+                "not_started": "#/components/schemas/NotStartedState"
+              }
+            }
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "best_of",
+          "rated",
+          "started_at",
+          "sides",
+          "viewer_side",
+          "games",
+          "retired_by",
+          "state"
+        ],
+        "title": "MatchSummary"
+      },
+      "MatchesMeta": {
+        "properties": {
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "type": "object",
+        "required": [
+          "has_more"
+        ],
+        "title": "MatchesMeta"
+      },
+      "MatchesResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/MatchSummary"
+            },
+            "type": "array",
+            "title": "Data"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/MatchesMeta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "title": "MatchesResponse"
+      },
       "MergedOutcome": {
         "properties": {
           "outcome": {
@@ -3848,6 +4480,20 @@
           "key"
         ],
         "title": "NewPermissionRequest"
+      },
+      "NotStartedState": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "not_started",
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "NotStartedState"
       },
       "Opponent": {
         "properties": {

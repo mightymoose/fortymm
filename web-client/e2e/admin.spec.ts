@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto'
-import { expect, test } from './fixtures.ts'
+import { administratorState, expect, test } from './fixtures.ts'
 
-// The migration makes this email's account an administrator. A sign-in
-// with no session counts toward the guest account limit.
-const administrator = { sub: 'e2e|mightymoose', email: 'mightymoose@fortymm.com' }
+// The migration makes this email's account an administrator. The `empty`
+// project signed it in.
+const administrator = { email: 'mightymoose@fortymm.com' }
+test.use({ storageState: administratorState })
 
-test('an administrator creates a role, deletes it, then opens their account', async ({ adminPage, signInPage }) => {
-  await signInPage.signIn(administrator)
+test('an administrator creates a role, deletes it, then opens their account', async ({ adminPage }) => {
   await adminPage.goto()
   await expect(adminPage.title).toBeVisible()
   await expect(adminPage.row('Administrator')).toBeVisible()
@@ -30,8 +30,7 @@ test.describe('on a phone', () => {
   // `.fm-toast-region` in kit.css, which the tab bar's top edge replaces.
   const KIT_TOAST_BOTTOM_PX = 24
 
-  test('a toast sits above the tab bar', async ({ adminPage, signInPage }) => {
-    await signInPage.signIn(administrator)
+  test('a toast sits above the tab bar', async ({ adminPage }) => {
     await adminPage.goto()
     const name = `Umpire ${randomUUID().slice(0, 8)}`
     await adminPage.createRole(name, ['admin.view'])

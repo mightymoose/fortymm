@@ -370,7 +370,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Matches
+         * @description Every match, newest first, at most 50. `meta.has_more` says that more
+         *     exist. Needs `matches.view`.
+         */
+        get: operations["list_matches"];
         put?: never;
         /**
          * Create Match
@@ -384,6 +389,26 @@ export interface paths {
          *     match.
          */
         post: operations["create_match"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/matches/{match_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Match
+         * @description The match, with its history. Needs `matches.view`.
+         */
+        get: operations["get_match"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1157,6 +1182,24 @@ export interface components {
         };
         /** @enum {string} */
         Authority: "self" | "representative";
+        /** AwaitingState */
+        AwaitingState: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "awaiting";
+            /**
+             * Signed By
+             * @enum {integer}
+             */
+            signed_by: 0 | 1;
+            /**
+             * Signed At
+             * Format: date-time
+             */
+            signed_at: string;
+        };
         /** BoardRequest */
         BoardRequest: {
             /** Board */
@@ -1183,6 +1226,26 @@ export interface components {
              */
             accepted_at: string | null;
         };
+        /** DisputedState */
+        DisputedState: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "disputed";
+            /**
+             * Signed By
+             * @enum {integer}
+             */
+            signed_by: 0 | 1;
+            /**
+             * Signed At
+             * Format: date-time
+             */
+            signed_at: string;
+            /** Their Games */
+            their_games: number[][];
+        };
         /** Error */
         Error: {
             /** Status */
@@ -1194,6 +1257,23 @@ export interface components {
         ErrorsResponse: {
             /** Errors */
             errors: components["schemas"]["Error"][];
+        };
+        /** FinalState */
+        FinalState: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "final";
+            /**
+             * Accepted At
+             * Format: date-time
+             */
+            accepted_at: string;
+            /** Approved By */
+            approved_by: (0 | 1)[];
+            /** Override Reason */
+            override_reason: string | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1217,6 +1297,14 @@ export interface components {
          * @enum {string}
          */
         KeyState: "live" | "signed_out" | "revoked";
+        /** LiveState */
+        LiveState: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "live";
+        };
         /** LogoutData */
         LogoutData: {
             /** Logout Url */
@@ -1252,6 +1340,80 @@ export interface components {
             side: number;
             authority: components["schemas"]["Authority"];
         };
+        /** MatchDetail */
+        MatchDetail: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Best Of
+             * @enum {integer}
+             */
+            best_of: 1 | 3 | 5 | 7;
+            /** Rated */
+            rated: boolean;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Sides */
+            sides: components["schemas"]["MatchSide"][];
+            /**
+             * Viewer Side
+             * @enum {integer|null}
+             */
+            viewer_side: 0 | 1 | null;
+            /** Games */
+            games: number[][];
+            /**
+             * Retired By
+             * @enum {integer|null}
+             */
+            retired_by: 0 | 1 | null;
+            /** State */
+            state: components["schemas"]["NotStartedState"] | components["schemas"]["LiveState"] | components["schemas"]["AwaitingState"] | components["schemas"]["DisputedState"] | components["schemas"]["FinalState"];
+            /** History */
+            history: components["schemas"]["MatchEvent"][];
+        };
+        /** MatchDetailResponse */
+        MatchDetailResponse: {
+            data: components["schemas"]["MatchDetail"];
+        };
+        /** MatchEvent */
+        MatchEvent: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "created" | "board" | "signed" | "approved" | "override";
+            /** By */
+            by: string | null;
+            /**
+             * Side
+             * @enum {integer|null}
+             */
+            side: 0 | 1 | null;
+            /** Games */
+            games: number[][] | null;
+        };
+        /** MatchPlayer */
+        MatchPlayer: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Display Name */
+            display_name: string;
+        };
         /** MatchRequest */
         MatchRequest: {
             /**
@@ -1272,6 +1434,63 @@ export interface components {
         /** MatchResponse */
         MatchResponse: {
             data: components["schemas"]["MadeMatch"];
+        };
+        /** MatchSide */
+        MatchSide: {
+            /**
+             * Side
+             * @enum {integer}
+             */
+            side: 0 | 1;
+            /** Players */
+            players: components["schemas"]["MatchPlayer"][];
+        };
+        /** MatchSummary */
+        MatchSummary: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Best Of
+             * @enum {integer}
+             */
+            best_of: 1 | 3 | 5 | 7;
+            /** Rated */
+            rated: boolean;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Sides */
+            sides: components["schemas"]["MatchSide"][];
+            /**
+             * Viewer Side
+             * @enum {integer|null}
+             */
+            viewer_side: 0 | 1 | null;
+            /** Games */
+            games: number[][];
+            /**
+             * Retired By
+             * @enum {integer|null}
+             */
+            retired_by: 0 | 1 | null;
+            /** State */
+            state: components["schemas"]["NotStartedState"] | components["schemas"]["LiveState"] | components["schemas"]["AwaitingState"] | components["schemas"]["DisputedState"] | components["schemas"]["FinalState"];
+        };
+        /** MatchesMeta */
+        MatchesMeta: {
+            /** Has More */
+            has_more: boolean;
+        };
+        /** MatchesResponse */
+        MatchesResponse: {
+            /** Data */
+            data: components["schemas"]["MatchSummary"][];
+            meta: components["schemas"]["MatchesMeta"];
         };
         /** MergedOutcome */
         MergedOutcome: {
@@ -1300,6 +1519,14 @@ export interface components {
              * @default
              */
             description: string;
+        };
+        /** NotStartedState */
+        NotStartedState: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "not_started";
         };
         /** Opponent */
         Opponent: {
@@ -2091,6 +2318,44 @@ export interface operations {
             };
         };
     };
+    list_matches: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchesResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+        };
+    };
     create_match: {
         parameters: {
             query?: never;
@@ -2159,6 +2424,64 @@ export interface operations {
                 };
             };
             /** @description The body is invalid. If a player doesn't exist, merged into another player, or plays both sides, the body is in the `errors` shape instead */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_match: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                match_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchDetailResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description No match has this id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
