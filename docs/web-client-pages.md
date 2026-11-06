@@ -143,8 +143,9 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   An answer puts the API's list in the players query, and the list's
   `self` player in the session's account, so the topbar and New match show
   it with no session request. Every answer does, `already_answered` too,
-  and so does the refetch after another tab answered first or a refused
-  merge. The
+  and so does every fetch of the players, such as the refetch after
+  another tab answered first. It also saves the account, so an offline
+  load shows that player. The
   confirmation comes from `meta`, such as "brave badger 214 merged into
   excited egret 387, your player." A merge into a `managed` player drops
   ", your player". The merged player can be the reviewed one or the other

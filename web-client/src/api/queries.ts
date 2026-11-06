@@ -161,12 +161,14 @@ export type AnswerMeta = components['schemas']['AnswerResponse']['meta']
 
 // The players the account manages, each with whether it still waits for the
 // "Is this you?" answer. A guest account never has a question, so pages ask
-// only for a verified account.
+// only for a verified account. Each fetch gives the session the list's self
+// player, which another tab's answer can change.
 export function accountPlayersQuery(api: ApiClient) {
   return queryOptions({
     queryKey: ['v1', 'account', 'players'],
-    queryFn: async ({ signal }) => {
+    queryFn: async ({ signal, client }) => {
       const data = await send('GET /v1/account/players', api.GET('/v1/account/players', { signal }))
+      takeSelfPlayer(api, client, data.data)
       return data.data
     },
   })
@@ -174,15 +176,15 @@ export function accountPlayersQuery(api: ApiClient) {
 
 // Gives the session's account the self player of `players`, the account's
 // players as the API just listed them, for the topbar's avatar and New
-// match. Refetching the session would start it again, and needs the network.
-export function takeSelfPlayer(api: ApiClient, queryClient: QueryClient, players: readonly AccountPlayer[]) {
+// match. It saves the account too, so an offline load shows that player.
+// Refetching the session would start it again, and needs the network.
+function takeSelfPlayer(api: ApiClient, queryClient: QueryClient, players: readonly AccountPlayer[]) {
   const self = players.find((player) => player.relationship === 'self')
-  if (!self) return
-  queryClient.setQueryData(sessionQuery(api).queryKey, (account) =>
-    account && account.player.id !== self.id
-      ? { ...account, player: { id: self.id, display_name: self.display_name } }
-      : account,
-  )
+  const account = queryClient.getQueryData(sessionQuery(api).queryKey)
+  if (!self || !account || account.player.id === self.id) return
+  const taken = { ...account, player: { id: self.id, display_name: self.display_name } }
+  queryClient.setQueryData(sessionQuery(api).queryKey, taken)
+  saveAccount(taken)
 }
 
 // Answers "Is this you?" for one player. The API returns what the answer did

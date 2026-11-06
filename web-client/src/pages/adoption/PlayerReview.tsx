@@ -5,7 +5,6 @@ import {
   accountPlayersQuery,
   answerQuestionMutation,
   sessionQuery,
-  takeSelfPlayer,
   type AccountPlayer,
   type AnswerMeta,
   type Reply,
@@ -245,10 +244,7 @@ function Questions() {
     if (!(error instanceof ApiError && error.status === 409 && reply.answer !== 'not_mine')) {
       return false
     }
-    const { queryKey } = accountPlayersQuery(api)
-    await queryClient.refetchQueries({ queryKey })
-    const now = queryClient.getQueryData(queryKey)
-    if (now) takeSelfPlayer(api, queryClient, now)
+    await queryClient.refetchQueries({ queryKey: accountPlayersQuery(api).queryKey })
     dispatch({ type: 'saved', notice: { text: error.title ?? SAVE_ERROR, icon: 'info' } })
     return true
   }
@@ -266,7 +262,6 @@ function Questions() {
     await queryClient.refetchQueries({ queryKey })
     const now = queryClient.getQueryData(queryKey)
     if (!now) return false
-    takeSelfPlayer(api, queryClient, now)
     if (error.status === 404 && now.some((found) => found.id === player.id && found.open_question)) {
       if (reply.answer !== 'same_as' || now.some((found) => found.id === reply.player_id)) return false
       const gone = players.find((found) => found.id === reply.player_id)?.display_name ?? 'That player'
