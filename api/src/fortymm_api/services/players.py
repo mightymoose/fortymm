@@ -1,12 +1,18 @@
 """The account's players, and its answers to "Is this you?".
 
 A question is open while the account's player_managers row for the player
-has `adopted_from` set. Sign-in sets it, through hand_over_players(). The
-row may be `self` or `managed` while the question is open.
+has `adopted_from` set. Sign-in sets it, through hand_over_players().
+
+A `self` row with an open question is the account's own player for now: the
+guest's player that played, kept so the account plays as it. It stays the
+account's own player until the person answers, or until another player is
+confirmed as the person. Then it becomes `managed`, and its question stays
+open. Every answer leaves the account a self player.
 
 A merged player is hidden: the account no longer plays as it or manages it.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
@@ -16,19 +22,20 @@ from sqlalchemy.orm import Session
 
 from fortymm_api.accounts import AccountId, PlayerId
 from fortymm_api.models import Player, PlayerManager
+from fortymm_api.services.display_names import random_display_name
 from fortymm_api.services.player_matches import RecentMatch, played_matches
 from fortymm_api.services.player_merge import Merged, merge_players, opponents
-from fortymm_api.services.sessions import lock_account_for_write
+from fortymm_api.services.sessions import ensure_self_player, lock_account_for_write
 
 type Relationship = Literal["self", "managed"]
 
 
 class Answer(StrEnum):
-    # The row becomes 'self'. If the account has another self player, the
-    # two players merge, and the survivor's row becomes 'self'.
+    # The row becomes 'self'. If the account has another self player with
+    # no open question, the two players merge, and the survivor's row
+    # becomes 'self'. One with an open question becomes 'managed' instead.
     YES = "yes"
-    # The row becomes 'managed'. If it was the self player, the account has
-    # none until its next session makes one.
+    # The row becomes 'managed'.
     NO = "no"
     # The row goes. The player stays, with no manager.
     NOT_MINE = "not_mine"
@@ -97,7 +104,12 @@ def account_players(session: Session, account: AccountId) -> list[AccountPlayer]
 
 
 def answer_question(
-    session: Session, account: AccountId, player: PlayerId, answer: Reply
+    session: Session,
+    account: AccountId,
+    player: PlayerId,
+    answer: Reply,
+    *,
+    new_display_name: Callable[[], str] = random_display_name,
 ) -> Answered:
     """Answer "Is this you?" for one player. Returns what the answer did, and
     the account's players after it.
@@ -110,8 +122,13 @@ def answer_question(
     `same_as` names a managed player of the account whose question is
     closed. A player with an open question is refused, because the merge
     would close its question with no answer.
+
+    An answer that leaves the account no self player, such as "No" on its
+    own player, gives it a new one with a name from `new_display_name`.
     """
-    lock_account_for_write(session, account)
+    # FOR UPDATE, because the answer may add a self player, and a row lock
+    # can't see a row that another answer adds meanwhile.
+    lock_account_for_write(session, account, exclusive=True)
     if isinstance(answer, SameAs) and answer.player == player:
         raise SameAsItself
     # FOR UPDATE on every row of the account, so answers from two tabs take
@@ -147,16 +164,25 @@ def answer_question(
         case SameAs(target_player):
             outcome = merge_players(session, account, player, target_player)
         case Answer.YES:
-            self_player = next(
-                (id for id, other in rows.items() if other.relationship == "self"),
+            own = next(
+                (
+                    other
+                    for id, other in rows.items()
+                    if other.relationship == "self" and id != player
+                ),
                 None,
             )
-            if self_player is None or self_player == player:
+            if own is not None and own.adopted_from is None:
+                outcome = merge_players(session, account, player, own.player_id)
+            else:
+                if own is not None:
+                    # The self index isn't deferrable, so the own player
+                    # steps down before this one steps up.
+                    own.relationship = "managed"
+                    session.flush()
                 row.relationship = "self"
                 row.adopted_from = None
                 outcome = Settled("self")
-            else:
-                outcome = merge_players(session, account, player, self_player)
         case Answer.NO:
             row.relationship = "managed"
             row.adopted_from = None
@@ -165,6 +191,7 @@ def answer_question(
             session.delete(row)
             outcome = Settled("removed")
     session.flush()
+    ensure_self_player(session, account, new_display_name)
     return Answered(outcome, _players(session, account))
 
 

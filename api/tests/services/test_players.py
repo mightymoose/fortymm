@@ -159,6 +159,12 @@ def listed(
     )
 
 
+def without_own(players: list[AccountPlayer]) -> list[AccountPlayer]:
+    """The listed players but the account's own one, which an answer makes
+    when it leaves the account none."""
+    return [player for player in players if player.relationship != "self"]
+
+
 def answer(database: Engine, question: Question, value: Reply) -> Answered:
     return in_transaction(
         database,
@@ -286,10 +292,10 @@ def test_no_makes_the_player_one_the_account_manages(
 
     found = answer(migrated_database, question, Answer.NO)
 
-    assert found == Answered(
-        Settled("managed"),
-        [listed(question.player, EGRET, "managed", open_question=False)],
-    )
+    assert found.outcome == Settled("managed")
+    assert without_own(found.players) == [
+        listed(question.player, EGRET, "managed", open_question=False)
+    ]
     assert manager_rows(migrated_database, question.player) == [
         (question.account, "managed", None)
     ]
@@ -303,7 +309,8 @@ def test_not_mine_takes_the_player_off_the_account_and_keeps_it(
 
     found = answer(migrated_database, question, Answer.NOT_MINE)
 
-    assert found == Answered(Settled("removed"), [])
+    assert found.outcome == Settled("removed")
+    assert without_own(found.players) == []
     assert manager_rows(migrated_database, question.player) == []
     assert exists(migrated_database, "players", question.player)
     assert exists(migrated_database, "accounts", question.adopted_from)
@@ -442,7 +449,7 @@ def test_yes_on_another_player_makes_it_the_accounts_own_and_keeps_the_own_quest
     assert started_player(migrated_database, own, "calm crane 765") == badger
 
 
-def test_an_unplayed_guest_becomes_the_accounts_own_player_in_place_of_one_with_an_open_question(
+def test_an_unplayed_guest_takes_over_from_an_own_player_with_an_open_question(
     migrated_database: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     own = verified_in_place(migrated_database)
@@ -700,9 +707,9 @@ def test_same_as_merges_with_a_managed_player_into_the_oldest(
     found = answer(migrated_database, question, SameAs(ant))
 
     assert found.outcome == Merged(survivor, merged)
-    assert [(player.id, player.open_question) for player in found.players] == [
-        (survivor, False)
-    ]
+    assert [
+        (player.id, player.open_question) for player in without_own(found.players)
+    ] == [(survivor, False)]
     assert merged_into(migrated_database, merged) == survivor
     assert merged_into(migrated_database, survivor) is None
     assert manager_rows(migrated_database, survivor) == [
@@ -711,7 +718,7 @@ def test_same_as_merges_with_a_managed_player_into_the_oldest(
     assert manager_rows(migrated_database, merged) == [
         (question.account, "managed", None)
     ]
-    assert self_players(migrated_database, question.account) == []
+    assert len(self_players(migrated_database, question.account)) == 1
 
 
 def test_same_as_keeps_the_accounts_self_player(migrated_database: Engine) -> None:

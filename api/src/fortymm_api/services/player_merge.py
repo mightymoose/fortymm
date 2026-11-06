@@ -38,20 +38,17 @@ def merge_players(
     PlayedEachOther, before it writes anything, if they played each other.
 
     The caller holds the account's player_managers rows FOR UPDATE. The
-    survivor's row takes the relationship and the `adopted_from` that
-    `into`'s row had. So a merge into the self player keeps the account's
-    self player, and it never closes an open question on `into` that no one
-    answered. The account's row for the merged player stays, as `managed`
-    with no question (STAYS_ON_PLAYER_MERGE).
+    survivor's row takes the relationship that `into`'s row had, so a merge
+    into the self player keeps the account's self player. The account's row
+    for the merged player stays, as `managed` (STAYS_ON_PLAYER_MERGE).
     """
-    target = session.execute(
-        select(PlayerManager.relationship, PlayerManager.adopted_from).where(
+    relationship = session.scalar(
+        select(PlayerManager.relationship).where(
             PlayerManager.account_id == account, PlayerManager.player_id == into
         )
-    ).one_or_none()
-    if target is None:
+    )
+    if relationship is None:
         raise ValueError(f"Account {account} doesn't manage player {into}")
-    relationship, adopted_from = target
     # FOR UPDATE on both players, so two merges of one player take turns.
     survivor, merged = session.scalars(
         select(Player.id)
@@ -79,16 +76,13 @@ def merge_players(
     )
     # Each statement runs alone, because the self indexes aren't deferrable:
     # the old self row stops being 'self' before the survivor's row starts.
-    for found, becomes, asked_by in (
-        (merged, "managed", None),
-        (survivor, relationship, adopted_from),
-    ):
+    for found, becomes in ((merged, "managed"), (survivor, relationship)):
         session.execute(
             update(PlayerManager)
             .where(
                 PlayerManager.account_id == account, PlayerManager.player_id == found
             )
-            .values(relationship=becomes, adopted_from=asked_by)
+            .values(relationship=becomes, adopted_from=None)
         )
     return Merged(survivor, merged)
 

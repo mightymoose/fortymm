@@ -211,9 +211,7 @@ def start_session(
             .where(Account.id == found.account.id)
             .values(last_seen_at=func.now())
         )
-        player = _self_player(session, found.account.id)
-        if player is None:
-            player = _create_self_player(session, found.account.id, new_display_name)
+        player = ensure_self_player(session, found.account.id, new_display_name)
         return StartedSession(
             found.row.id,
             found.account,
@@ -296,6 +294,16 @@ def end_session(session: Session, token: str | None) -> None:
         session.execute(
             delete(AuthSession).where(AuthSession.token_hash == hash_token(token))
         )
+
+
+def ensure_self_player(
+    session: Session, account_id: AccountId, new_display_name: Callable[[], str]
+) -> SelfPlayer:
+    """The account's self player. An account with none gets one, with a name
+    from `new_display_name`. The caller holds the account row FOR UPDATE, so
+    no other write makes one meanwhile."""
+    found = _self_player(session, account_id)
+    return found or _create_self_player(session, account_id, new_display_name)
 
 
 def _self_player(session: Session, account_id: AccountId) -> SelfPlayer | None:

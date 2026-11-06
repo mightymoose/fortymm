@@ -35,9 +35,12 @@ def hand_over_players(session: Session, guest: AccountId, into: AccountId) -> No
     A player that hasn't played asks nothing. Verify in place keeps it as it
     is, so the guest keeps its player and name. Adoption merges a self
     player into the self player of `into`, as "Yes" would, or makes it the
-    self player of `into` if it has none. A managed one stays managed. If
-    the two self players played each other, they can't merge, so the
-    guest's one asks "Is this you?" as a player that has played does.
+    self player of `into` if it has none. If the self player of `into` has
+    an open question, the guest's one is the person, so it becomes the self
+    player of `into`, and the other one becomes `managed` with its question
+    still open. A managed one stays managed. If the two self players played
+    each other, they can't merge, so the guest's one asks "Is this you?" as
+    a player that has played does.
     """
     # start_session() and another adoption can give `into` a self player
     # meanwhile, and a row lock can't see a row that moves in. Both lock
@@ -45,12 +48,21 @@ def hand_over_players(session: Session, guest: AccountId, into: AccountId) -> No
     session.execute(select(Account.id).where(Account.id == into).with_for_update())
     # merge_players() needs the rows of `into` held FOR UPDATE.
     held = session.execute(
-        select(PlayerManager.player_id, PlayerManager.relationship)
+        select(
+            PlayerManager.player_id,
+            PlayerManager.relationship,
+            PlayerManager.adopted_from.is_not(None),
+        )
         .where(PlayerManager.account_id == into)
         .with_for_update()
     ).all()
-    self_player = next(
-        (player for player, relationship in held if relationship == "self"), None
+    self_player, provisional = next(
+        (
+            (player, asked)
+            for player, relationship, asked in held
+            if relationship == "self"
+        ),
+        (None, False),
     )
     rows = session.execute(
         select(PlayerManager.player_id, PlayerManager.relationship)
@@ -72,6 +84,18 @@ def hand_over_players(session: Session, guest: AccountId, into: AccountId) -> No
                 )
         elif guest == into:
             continue
+        elif relationship == "self" and provisional:
+            # The self index isn't deferrable, so the own player of `into`
+            # steps down before the guest's one moves in.
+            session.execute(
+                update(PlayerManager)
+                .where(
+                    PlayerManager.account_id == into,
+                    PlayerManager.player_id == self_player,
+                )
+                .values(relationship="managed")
+            )
+            session.execute(row.values(account_id=into))
         elif relationship == "self" and self_player is not None:
             # The self index isn't deferrable, so the row moves as managed
             # before the merge picks the survivor's relationship.

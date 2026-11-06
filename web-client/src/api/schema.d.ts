@@ -261,14 +261,16 @@ export interface paths {
          *     players after the answer, and `meta.outcome` says what the answer did.
          *
          *     `yes` makes it the account's own player, with outcome `self`. If the
-         *     account already has another one, the two players merge, with outcome
-         *     `merged`. `no` makes it a player the account manages, with outcome
-         *     `managed`. If it was the account's own player, the account has none
-         *     until the next `POST /v1/session` makes one.
-         *     `not_mine` takes it off the account, with outcome `removed`. The player
-         *     stays, with no manager. `same_as` merges it with the `managed` player
+         *     account already has another one with no open question, the two players
+         *     merge, with outcome `merged`. One with an open question becomes a
+         *     `managed` player instead, and its question stays open. `no` makes it a
+         *     player the account manages, with outcome `managed`. `not_mine` takes
+         *     it off the account, with outcome `removed`. The player stays, with no
+         *     manager. `same_as` merges it with the `managed` player
          *     that `player_id` names, with outcome `merged`. That player's question
-         *     must be closed, because the merge would close it with no answer.
+         *     must be closed, because the merge would close it with no answer. An
+         *     answer that leaves the account no own player gives it a new one, and
+         *     `data` lists it.
          *     Two players who played each other never merge, so `yes` or `same_as`
          *     for two such players answers 409.
          *
