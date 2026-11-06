@@ -804,70 +804,6 @@
         }
       }
     },
-    "/v1/matches/{match_id}/approvals": {
-      "post": {
-        "tags": [
-          "matches"
-        ],
-        "summary": "Create Match Approval",
-        "description": "Check a result that the match's players signed, and accept it.\n\nIt needs no session: the signatures are the authority. Today it checks\nthe envelope's format, the match, every signature and that the scores\nare a legal ending, and stores nothing.",
-        "operationId": "create_match_approval",
-        "parameters": [
-          {
-            "name": "match_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Match Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ApprovalRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApprovalResponse"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "The request's Content-Type isn't application/json",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorsResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "The body is invalid. If the envelope isn't a signed result, is for another match, cites a key that isn't registered or was revoked, has a signature that doesn't verify, or its scores aren't a legal ending, the body is in the `errors` shape instead",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/v1/matches/opponents": {
       "get": {
         "tags": [
@@ -1029,6 +965,224 @@
             "session": []
           }
         ]
+      }
+    },
+    "/v1/matches/{match_id}/boards": {
+      "post": {
+        "tags": [
+          "matches"
+        ],
+        "summary": "Push Match Board",
+        "description": "Keep the scorer's board, so spectators can follow the match.\n\nNeeds `matches.score`. The newest board wins, and nothing about it is\nchecked but its format: its signatures, if any, and its scores settle\nnothing. A board for a match that doesn't exist answers 404 and writes\nnothing. Every other push is logged, refused or not.",
+        "operationId": "push_match_board",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Match Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BoardRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoardResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No match has this id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The match has other players, best of or rated status, and the title says which. Or the match is final",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is invalid. If the board isn't a draft payload or an envelope of the format, or is for another match, the body is in the `errors` shape instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/matches/{match_id}/approvals": {
+      "post": {
+        "tags": [
+          "matches"
+        ],
+        "summary": "Create Match Approval",
+        "description": "Record a result that the match's players signed, with its approvals.\n\nNeeds `matches.score`, which turns the feature on. The signatures, not\nthe session, are the authority: each one's account must play as or\nmanage the player it signs for, whoever uploads it. A rated result\ncounts once both sides approve it, and an unrated one once either side\ndoes. A correction of a final match needs both sides. A result for a\nmatch that doesn't exist answers 404 and writes nothing. An exact retry\nanswers the result again, whatever its keys' state. Every other upload\nis logged, refused or not.",
+        "operationId": "create_match_approval",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Match Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No match has this id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The match has other players, best of or rated status, and the title says which. Or another result replaced this one, the result doesn't replace the match's newest result, or a merge made both sides one player",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is invalid. If the envelope isn't a signed result, is for another match, cites a key that isn't registered or was revoked, has a signature that doesn't verify, its scores aren't a legal ending, or a signature's account may not approve for its player, the body is in the `errors` shape instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/v1/admin/permissions": {
@@ -2258,6 +2412,115 @@
           }
         }
       }
+    },
+    "/v1/admin/matches/{match_id}/override": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Override Match Result",
+        "description": "Impose a result on the match, with a reason. Needs `matches.override`.\n\nThe server encodes the scores as a result that replaces the match's\nnewest one and counts at once, with no approvals. The match is final\nwith it. A device still holding a result it replaced gets a 409, and\nplayers can still correct it the normal way.",
+        "operationId": "override_match_result",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Match Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OverrideRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverrideResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No match has this id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A merge made both sides of the match one player",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is invalid. If the reason is blank or the scores aren't a legal ending to the match, the body is in the `errors` shape instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3253,6 +3516,39 @@
         ],
         "title": "ApprovalResponse"
       },
+      "Authority": {
+        "type": "string",
+        "enum": [
+          "self",
+          "representative"
+        ]
+      },
+      "BoardRequest": {
+        "properties": {
+          "board": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{2})*$",
+            "title": "Board"
+          }
+        },
+        "type": "object",
+        "required": [
+          "board"
+        ],
+        "title": "BoardRequest"
+      },
+      "BoardResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/PushedBoard"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "BoardResponse"
+      },
       "CheckedResult": {
         "properties": {
           "hash": {
@@ -3271,13 +3567,22 @@
             },
             "type": "array",
             "title": "Approvals"
+          },
+          "accepted_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Accepted At"
           }
         },
         "type": "object",
         "required": [
           "hash",
           "match_id",
-          "approvals"
+          "approvals",
+          "accepted_at"
         ],
         "title": "CheckedResult"
       },
@@ -3426,12 +3731,21 @@
             "type": "string",
             "format": "uuid",
             "title": "Player Id"
+          },
+          "side": {
+            "type": "integer",
+            "title": "Side"
+          },
+          "authority": {
+            "$ref": "#/components/schemas/Authority"
           }
         },
         "type": "object",
         "required": [
           "key_id",
-          "player_id"
+          "player_id",
+          "side",
+          "authority"
         ],
         "title": "MatchApproval"
       },
@@ -3570,6 +3884,95 @@
         ],
         "title": "OpponentsResponse"
       },
+      "OverriddenResult": {
+        "properties": {
+          "hash": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{2})*$",
+            "title": "Hash"
+          },
+          "match_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Match Id"
+          },
+          "accepted_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Accepted At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "hash",
+          "match_id",
+          "accepted_at"
+        ],
+        "title": "OverriddenResult"
+      },
+      "OverrideRequest": {
+        "properties": {
+          "games": {
+            "items": {
+              "items": {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              "type": "array",
+              "maxItems": 2,
+              "minItems": 2
+            },
+            "type": "array",
+            "maxItems": 7,
+            "title": "Games"
+          },
+          "ending": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "retired"
+            ],
+            "title": "Ending"
+          },
+          "retired_by": {
+            "enum": [
+              0,
+              1
+            ],
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "Retired By"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "games",
+          "ending",
+          "reason"
+        ],
+        "title": "OverrideRequest"
+      },
+      "OverrideResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/OverriddenResult"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "OverrideResponse"
+      },
       "PermissionRequest": {
         "properties": {
           "description": {
@@ -3581,6 +3984,26 @@
         },
         "type": "object",
         "title": "PermissionRequest"
+      },
+      "PushedBoard": {
+        "properties": {
+          "match_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Match Id"
+          },
+          "received_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Received At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "match_id",
+          "received_at"
+        ],
+        "title": "PushedBoard"
       },
       "RecentMatch": {
         "properties": {

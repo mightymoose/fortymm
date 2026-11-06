@@ -2,18 +2,37 @@
 match counts once it has a result, rated or not, because anyone may create a
 match naming any two players."""
 
+import json
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
+from uuid import UUID
 
 import pytest
-from played_matches import played
-from sqlalchemy import Engine, insert, select, update
-from sqlalchemy.orm import Session, sessionmaker
+from locks import overlap, wait_behind
+from match_setup import (
+    add_account,
+    add_player,
+    in_transaction,
+    merge,
+    played,
+    sender,
+)
+from signed_result_vectors import ANN, BO, KEYS, VECTORS_PATH, VectorsJson
+from sqlalchemy import Engine, select
+from sqlalchemy.orm import Session
 
 from fortymm_api.accounts import AccountId, PlayerId
-from fortymm_api.models import Account, Player, PlayerManager
+from fortymm_api.matches import MatchId
+from fortymm_api.models import Player, PlayerManager
 from fortymm_api.services.adoption import adopt_guest
-from fortymm_api.services.player_merge import Merged, PlayedEachOther
+from fortymm_api.services.match_results import (
+    Recorded,
+    SidesAreOnePlayer,
+    override_result,
+    record_result,
+)
+from fortymm_api.services.matches import Refusal, Refused, sides_are_one_player
+from fortymm_api.services.player_merge import Merged, PlayedEachOther, merge_players
 from fortymm_api.services.players import (
     Answer,
     Answered,
@@ -22,46 +41,13 @@ from fortymm_api.services.players import (
     account_players,
     answer_question,
 )
+from fortymm_api.signed_results import Completed
 
-ANN = PlayerId(uuid.uuid4())
-BO = PlayerId(uuid.uuid4())
+VECTORS: VectorsJson = json.loads(VECTORS_PATH.read_text())
+COMPLETED = next(v for v in VECTORS["valid"] if v["name"] == "completed-best-of-3")
+# The vector's match: a rated best of 3 between ANN and BO, signed by both.
+VECTOR_MATCH = MatchId(UUID(COMPLETED["result"]["match"]))
 CY = PlayerId(uuid.uuid4())
-
-
-def in_transaction[T](database: Engine, work: Callable[[Session], T]) -> T:
-    with sessionmaker(database).begin() as session:
-        return work(session)
-
-
-def add_player(session: Session, id: PlayerId) -> None:
-    """A player that no account manages."""
-    session.execute(
-        insert(Player).values(id=id, display_name=f"player {uuid.uuid4().hex[:12]}")
-    )
-
-
-def add_account(
-    session: Session,
-    plays_as: PlayerId | None = None,
-    manages: Iterable[PlayerId] = (),
-) -> AccountId:
-    """A guest account whose self player is `plays_as`, which manages
-    `manages`."""
-    account = session.scalars(insert(Account).returning(Account.id)).one()
-    rows = [(plays_as, "self")] if plays_as else []
-    rows += [(player, "managed") for player in manages]
-    for player, relationship in rows:
-        session.add(
-            PlayerManager(
-                player_id=player, account_id=account, relationship=relationship
-            )
-        )
-    session.flush()
-    return account
-
-
-def merge(session: Session, player: PlayerId, into: PlayerId) -> None:
-    session.execute(update(Player).where(Player.id == player).values(merged_into=into))
 
 
 def asked_about(session: Session, account: AccountId, player: PlayerId) -> None:
@@ -79,11 +65,11 @@ def asked_about(session: Session, account: AccountId, player: PlayerId) -> None:
 
 
 def ann_asked_about_bo(session: Session) -> AccountId:
-    """Ann's account plays as ANN. A sign-in asks it "Is this you?" about
-    BO."""
+    """Ann's account plays as ANN and holds both vector keys. A sign-in asks
+    it "Is this you?" about BO."""
     add_player(session, ANN)
     add_player(session, BO)
-    ann = add_account(session, plays_as=ANN)
+    ann = add_account(session, plays_as=ANN, keys=[KEYS["ann"], KEYS["bo"]])
     asked_about(session, ann, BO)
     return ann
 
@@ -203,19 +189,163 @@ def test_a_player_already_merged_into_one_counts_as_that_player(
         answer(migrated_database, ann, Answer.YES)
 
 
-def test_a_match_with_no_result_doesnt_block_the_merge(
+def test_a_match_with_no_result_doesnt_block_the_merge_but_its_result_is_refused(
     migrated_database: Engine,
 ) -> None:
     def setup(session: Session) -> AccountId:
         ann = ann_asked_about_bo(session)
-        played(session, (ANN, BO), with_result=False)
+        played(session, (ANN, BO), with_result=False, match=VECTOR_MATCH)
         return ann
 
     ann = in_transaction(migrated_database, setup)
 
     answered = answer(migrated_database, ann, Answer.YES)
+    recorded = in_transaction(
+        migrated_database,
+        lambda session: record_result(
+            session, VECTOR_MATCH, bytes.fromhex(COMPLETED["envelope"]), sender()
+        ),
+    )
 
     assert isinstance(answered.outcome, Merged)
+    assert recorded == Refused(Refusal.SAME_PLAYER)
+
+
+def test_a_result_recorded_during_the_merge_blocks_it(
+    migrated_database: Engine,
+) -> None:
+    def setup(session: Session) -> AccountId:
+        add_player(session, ANN)
+        add_player(session, BO)
+        ann = add_account(session, plays_as=ANN, keys=[KEYS["ann"]])
+        add_account(session, plays_as=BO, keys=[KEYS["bo"]])
+        asked_about(session, ann, BO)
+        played(session, (ANN, BO), with_result=False, match=VECTOR_MATCH)
+        return ann
+
+    ann = in_transaction(migrated_database, setup)
+
+    recorded, waiting = wait_behind(
+        migrated_database,
+        lambda session: record_result(
+            session, VECTOR_MATCH, bytes.fromhex(COMPLETED["envelope"]), sender()
+        ),
+        lambda session: answer_question(session, ann, BO, Answer.YES),
+    )
+
+    assert isinstance(recorded, Recorded)
+    with pytest.raises(PlayedEachOther):
+        waiting.result()
+
+
+def test_a_merge_during_a_result_refuses_the_result(
+    migrated_database: Engine,
+) -> None:
+    def setup(session: Session) -> AccountId:
+        ann = ann_asked_about_bo(session)
+        played(session, (ANN, BO), with_result=False, match=VECTOR_MATCH)
+        return ann
+
+    ann = in_transaction(migrated_database, setup)
+
+    _, waiting = wait_behind(
+        migrated_database,
+        lambda session: answer_question(session, ann, BO, Answer.YES),
+        lambda session: record_result(
+            session, VECTOR_MATCH, bytes.fromhex(COMPLETED["envelope"]), sender()
+        ),
+    )
+
+    assert waiting.result() == Refused(Refusal.SAME_PLAYER)
+
+
+def override(session: Session) -> Recorded:
+    return override_result(
+        session,
+        VECTOR_MATCH,
+        add_account(session),
+        None,
+        ((11, 1), (11, 2)),
+        Completed(),
+        "The umpire's sheet",
+    )
+
+
+def test_an_override_during_the_merge_blocks_it(migrated_database: Engine) -> None:
+    def setup(session: Session) -> AccountId:
+        ann = ann_asked_about_bo(session)
+        played(session, (ANN, BO), with_result=False, match=VECTOR_MATCH)
+        return ann
+
+    ann = in_transaction(migrated_database, setup)
+
+    imposed, waiting = wait_behind(
+        migrated_database,
+        override,
+        lambda session: answer_question(session, ann, BO, Answer.YES),
+    )
+
+    assert isinstance(imposed, Recorded)
+    with pytest.raises(PlayedEachOther):
+        waiting.result()
+
+
+def test_a_merge_during_an_override_refuses_the_override(
+    migrated_database: Engine,
+) -> None:
+    def setup(session: Session) -> AccountId:
+        ann = ann_asked_about_bo(session)
+        played(session, (ANN, BO), with_result=False, match=VECTOR_MATCH)
+        return ann
+
+    ann = in_transaction(migrated_database, setup)
+
+    _, waiting = wait_behind(
+        migrated_database,
+        lambda session: answer_question(session, ann, BO, Answer.YES),
+        override,
+    )
+
+    with pytest.raises(SidesAreOnePlayer):
+        waiting.result()
+
+
+def test_a_result_and_a_merge_of_its_side_players_survivor_take_turns(
+    migrated_database: Engine,
+) -> None:
+    """A side player already merged into Ann, while Ann merges with Cy. The
+    merge locks Ann and Cy, then the players merged into them. A result
+    holds the side players, then its approval's foreign key takes Ann FOR
+    KEY SHARE. Unless both lock in one order, each waits for the other."""
+
+    def setup(session: Session) -> AccountId:
+        add_player(session, ANN)
+        add_player(session, BO)
+        add_player(session, CY)
+        old = add_player(session)
+        ann = add_account(session, plays_as=ANN, manages=[CY])
+        played(session, (old, BO), with_result=False, match=VECTOR_MATCH)
+        merge(session, old, ANN)
+        return ann
+
+    ann = in_transaction(migrated_database, setup)
+
+    def hold(session: Session, let_merge_wait: Callable[[], None]) -> bool:
+        one_player = sides_are_one_player(session, VECTOR_MATCH)
+        let_merge_wait()
+        session.execute(
+            select(Player.id)
+            .where(Player.id == ANN)
+            .with_for_update(read=True, key_share=True)
+        )
+        return one_player
+
+    one_player, merging = overlap(
+        migrated_database, hold, lambda session: merge_players(session, ann, CY, ANN)
+    )
+
+    assert one_player is False
+    assert isinstance(merging.result(), Merged)
 
 
 def test_adoption_asks_instead_of_merging_two_players_who_played_each_other(
