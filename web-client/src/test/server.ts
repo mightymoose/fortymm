@@ -271,9 +271,9 @@ export const STAND_IN = listedPlayer({
 // `players` is the account's self player, and they are in the order the API
 // made them. So a merge keeps the first of the two, and it refuses two
 // players who played each other. An answer that leaves the account no self
-// player makes STAND_IN its self player, as the API does. `failAnswers` makes every answer fail with
-// a 500. playersChange() replaces the players, as a match recorded
-// meanwhile can.
+// player makes STAND_IN its self player, as the API does. `failAnswers`
+// makes every answer fail with a 500. playersChange() replaces the players,
+// as a match recorded meanwhile can.
 export function mockVerifiedAccount(
   players: AccountPlayer[],
   { failAnswers = false }: { failAnswers?: boolean } = {},
