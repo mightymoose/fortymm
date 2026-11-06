@@ -1,21 +1,27 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
+import { useRouteContext } from '@tanstack/react-router'
 import { useState } from 'react'
+import { matchQuery } from '../../../api/queries'
 import { EmptyState } from '../../../components/EmptyState'
 import { Icon } from '../../../components/Icon'
 import { QueryBoundary } from '../../../components/QueryBoundary'
-import { matchQuery } from './matchQueries'
-import { MatchStatus, RatingChange } from './MatchStatus'
 import {
+  eventText,
+  finished,
   formatDay,
   formatLabel,
   formatTime,
+  other,
   score,
   vsLabel,
+  wonOf,
   yourSide,
   type GameScore,
+  type MatchDetail,
   type MatchRecord,
   type Side,
-} from './sampleMatches'
+} from './match'
+import { MatchStatus } from './MatchStatus'
 
 // A match's page, in its own boundary: the games, each player's signature,
 // and what the viewer can do about the result.
@@ -51,7 +57,8 @@ function SignOffSkeleton() {
 }
 
 function LoadedSignOff({ id }: { id: string }) {
-  const { data: match } = useSuspenseQuery(matchQuery(id))
+  const { api } = useRouteContext({ from: '__root__' })
+  const { data: match } = useSuspenseQuery(matchQuery(api, id))
   if (!match)
     return (
       <>
@@ -70,14 +77,8 @@ type Situation = {
   actions: readonly Action[]
 }
 
-const other = (side: Side): Side => (side === 0 ? 1 : 0)
-
 const gamesText = (games: readonly GameScore[], first: Side) =>
   games.map((game) => `${game[first]}–${game[other(first)]}`).join(', ')
-
-function wonOf(games: readonly GameScore[], side: Side) {
-  return games.filter((game) => game[side] > game[side === 0 ? 1 : 0]).length
-}
 
 // What the match asks of the viewer now: a player of the match is asked to
 // sign, anyone else is told where it stands.
@@ -86,6 +87,7 @@ function situation(match: MatchRecord): Situation {
   const mine = yourSide(match)
   const name = (side: Side) => match.players[side].name
   switch (status.kind) {
+    case 'new':
     case 'live':
       return {
         notice: { icon: 'info', text: 'Anyone can keep score. Only the players sign the result.' },
@@ -149,12 +151,18 @@ function situation(match: MatchRecord): Situation {
         ],
       }
     }
-    case 'final':
+    case 'final': {
+      const day = formatDay(status.acceptedAt)
+      let text = `Both players approved this result on ${day}.`
+      if (status.overrideReason !== null)
+        text = `An administrator set this result on ${day}. They wrote: “${status.overrideReason}”`
+      else if (status.approvedBy.length === 1) text = `${name(status.approvedBy[0])} reported this result on ${day}.`
       return {
-        notice: { icon: 'check', text: `Both players approved this result on ${formatDay(status.approvedAt)}.` },
+        notice: { icon: 'check', text },
         alert: null,
         actions: [{ label: 'Share result', kind: 'secondary' }],
       }
+    }
   }
 }
 
@@ -202,24 +210,27 @@ function SituationNotes({ s }: { s: Situation }) {
   )
 }
 
-function History({ match }: { match: MatchRecord }) {
+function History({ match }: { match: MatchDetail }) {
   return (
     <ol className="fm-list fm-list--divided">
-      {match.history.map((event) => (
-        <li key={event.at + event.what} className="match-event">
-          <span className="num match-muted">{formatTime(event.at)}</span>
-          <span>
-            <b>{event.who}</b> {event.what.charAt(0).toLowerCase() + event.what.slice(1)}
-          </span>
-        </li>
-      ))}
+      {match.history.map((event, index) => {
+        const text = eventText(match.history, index)
+        return (
+          <li key={index} className="match-event">
+            <span className="num match-muted">{formatTime(event.at)}</span>
+            <span>
+              <b>{event.by ?? 'Someone'}</b> {text.charAt(0).toLowerCase() + text.slice(1)}
+            </span>
+          </li>
+        )
+      })}
     </ol>
   )
 }
 
 // Each game reads as a line on the left; the right shows each player's
 // signature and what's left before the result counts.
-function DetailSignOff({ match }: { match: MatchRecord }) {
+function DetailSignOff({ match }: { match: MatchDetail }) {
   const s = situation(match)
   const { won, winner } = score(match)
   const live = match.status.kind === 'live'
@@ -241,24 +252,35 @@ function DetailSignOff({ match }: { match: MatchRecord }) {
             </span>
             <span className={winner === 1 ? 'match-strong' : undefined}>{match.players[1].name}</span>
           </p>
-          <ol className="fm-list fm-list--divided">
-            {match.games.map((game, index) => {
-              const inPlay = live && index === match.games.length - 1
-              const gameWinner: Side = game[0] > game[1] ? 0 : 1
-              return (
-                <li key={index} className="match-game">
-                  <span className="match-game__n">Game {index + 1}</span>
-                  <span className="num match-game__score">
-                    <span className={!inPlay && gameWinner === 0 ? 'match-strong' : undefined}>{game[0]}</span>–
-                    <span className={!inPlay && gameWinner === 1 ? 'match-strong' : undefined}>{game[1]}</span>
-                  </span>
-                  <span className="match-muted">
-                    {inPlay ? <span className="live-marker">Live</span> : `${match.players[gameWinner].name} won`}
-                  </span>
-                </li>
-              )
-            })}
-          </ol>
+          {match.games.length ? (
+            <ol className="fm-list fm-list--divided">
+              {match.games.map((game, index) => {
+                const inPlay = live && index === match.games.length - 1
+                const gameWinner: Side | null = !inPlay && finished(game) ? (game[0] > game[1] ? 0 : 1) : null
+                return (
+                  <li key={index} className="match-game">
+                    <span className="match-game__n">Game {index + 1}</span>
+                    <span className="num match-game__score">
+                      <span className={gameWinner === 0 ? 'match-strong' : undefined}>{game[0]}</span>–
+                      <span className={gameWinner === 1 ? 'match-strong' : undefined}>{game[1]}</span>
+                    </span>
+                    <span className="match-muted">
+                      {inPlay ? (
+                        <span className="live-marker">Live</span>
+                      ) : gameWinner === null ? (
+                        'Not finished'
+                      ) : (
+                        `${match.players[gameWinner].name} won`
+                      )}
+                    </span>
+                  </li>
+                )
+              })}
+            </ol>
+          ) : (
+            <p className="match-muted">No scores yet.</p>
+          )}
+          {match.retiredBy !== null && <p className="match-muted">{match.players[match.retiredBy].name} retired.</p>}
         </section>
         <aside className="fm-card" aria-label="Sign-off">
           <div className="fm-card__head">
@@ -277,7 +299,7 @@ function DetailSignOff({ match }: { match: MatchRecord }) {
           <Actions actions={s.actions} className="fm-card__foot" />
         </aside>
       </div>
-      <section className="match-section">
+      <section className="match-section" aria-label="History">
         <h2 className="fm-section-title">History</h2>
         <History match={match} />
       </section>
@@ -285,26 +307,38 @@ function DetailSignOff({ match }: { match: MatchRecord }) {
   )
 }
 
-function SignatureState({ match, side }: { match: MatchRecord; side: Side }) {
+function signature(match: MatchRecord, side: Side): { icon: 'check' | 'clock' | 'alert'; text: string } {
   const { status } = match
+  switch (status.kind) {
+    case 'new':
+    case 'live':
+      return { icon: 'clock', text: 'Signs when the match ends' }
+    case 'awaiting':
+      return status.signedBy === side
+        ? { icon: 'check', text: `Signed at ${formatTime(status.signedAt)}` }
+        : { icon: 'clock', text: 'Not signed yet' }
+    case 'disputed':
+      return { icon: 'alert', text: status.signedBy === side ? 'Signed one set of scores' : 'Signed different scores' }
+    case 'final':
+      if (status.overrideReason !== null) return { icon: 'check', text: 'Set by an administrator' }
+      return status.approvedBy.includes(side)
+        ? { icon: 'check', text: 'Approved' }
+        : { icon: 'clock', text: 'Hasn’t approved' }
+  }
+}
+
+function SignatureState({ match, side }: { match: MatchRecord; side: Side }) {
   const player = match.players[side]
-  const name = player.you ? `${player.name} (you)` : player.name
-  let state: { icon: 'check' | 'clock' | 'alert'; text: string }
-  if (status.kind === 'final') state = { icon: 'check', text: `Approved` }
-  else if (status.kind === 'live') state = { icon: 'clock', text: 'Signs when the match ends' }
-  else if (status.kind === 'awaiting')
-    state = status.signedBy === side ? { icon: 'check', text: `Signed at ${formatTime(status.signedAt)}` } : { icon: 'clock', text: 'Not signed yet' }
-  else state = { icon: 'alert', text: status.signedBy === side ? 'Signed one set of scores' : 'Signed different scores' }
+  const state = signature(match, side)
   return (
     <>
       <span className={`match-signer__icon match-signer__icon--${state.icon}`}>
         <Icon name={state.icon} />
       </span>
       <span>
-        <b className="match-signer__name">{name}</b>
+        <b className="match-signer__name">{player.you ? `${player.name} (you)` : player.name}</b>
         <span className="match-muted match-block">{state.text}</span>
       </span>
-      {status.kind === 'final' && <RatingChange match={match} side={side} />}
     </>
   )
 }

@@ -1,10 +1,12 @@
 import { Icon } from '../../../components/Icon'
-import { yourSide, type MatchRecord, type Side } from './sampleMatches'
+import { other, type MatchRecord } from './match'
 
 // The match's one status signal, as the design system's match row draws it.
 export function MatchStatus({ match }: { match: MatchRecord }) {
   const { status } = match
   switch (status.kind) {
+    case 'new':
+      return <span className="fm-status">Not started</span>
     case 'live':
       return <span className="live-marker">Live</span>
     case 'disputed':
@@ -15,7 +17,7 @@ export function MatchStatus({ match }: { match: MatchRecord }) {
         </span>
       )
     case 'awaiting': {
-      const waitingOn = match.players[status.signedBy === 0 ? 1 : 0]
+      const waitingOn = match.players[other(status.signedBy)]
       return (
         <span className="fm-status">
           <Icon name="clock" />
@@ -26,18 +28,4 @@ export function MatchStatus({ match }: { match: MatchRecord }) {
     case 'final':
       return <span className="fm-status">Final</span>
   }
-}
-
-// A side's rating change from a final rated match, signed with its arrow.
-// Without `side`, the viewer's.
-export function RatingChange({ match, side }: { match: MatchRecord; side?: Side }) {
-  if (match.status.kind !== 'final' || match.status.rating === null) return null
-  const which = side ?? yourSide(match)
-  if (which === null) return null
-  const delta = match.status.rating[which]
-  return delta >= 0 ? (
-    <span className="rating-up">▲ +{delta}</span>
-  ) : (
-    <span className="rating-down">▼ −{Math.abs(delta)}</span>
-  )
 }

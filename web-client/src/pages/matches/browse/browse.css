@@ -43,9 +43,8 @@
 .match-game{display:grid;grid-template-columns:72px 80px minmax(0,1fr);gap:var(--s-3);align-items:center;color:var(--fg-3)}
 .match-game__n{font-size:var(--text-sm)}
 .match-game__score{font-size:20px;color:var(--fg-2)}
-.match-signer{display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:var(--s-3);align-items:start}
+.match-signer{display:grid;grid-template-columns:20px minmax(0,1fr);gap:var(--s-3);align-items:start}
 .match-signer__name{font-weight:600;color:var(--fg-1)}
 .match-signer__icon{color:var(--fg-3)}
 .match-signer__icon--check{color:var(--success)}
 .match-signer__icon--alert{color:var(--conflict)}
-.match-sample{margin-bottom:var(--s-6)}

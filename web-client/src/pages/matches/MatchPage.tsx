@@ -1,6 +1,5 @@
 import { Link, useParams } from '@tanstack/react-router'
 import { MatchSignOff } from './browse/SignOff'
-import { SampleNotice } from './browse/SampleNotice'
 import './browse/browse.css'
 
 // One match's page.
@@ -11,7 +10,6 @@ export function MatchPage() {
       <nav className="fm-crumbs" aria-label="Breadcrumb">
         <Link to="/matches">Matches</Link>
       </nav>
-      <SampleNotice />
       <MatchSignOff id={matchId} />
     </>
   )

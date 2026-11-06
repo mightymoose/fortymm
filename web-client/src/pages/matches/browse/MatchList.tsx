@@ -1,32 +1,42 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
+import { Link, useRouteContext } from '@tanstack/react-router'
 import { useState, type ReactNode } from 'react'
+import { can, Permission } from '../../../api/permissions'
+import { matchesQuery, sessionQuery } from '../../../api/queries'
 import { EmptyState } from '../../../components/EmptyState'
+import { Icon } from '../../../components/Icon'
 import { QueryBoundary } from '../../../components/QueryBoundary'
 import { useNarrowLayout } from '../../useNarrowLayout'
-import { matchesQuery } from './matchQueries'
+import { formatDay, formatLabel, formatTime, score, vsLabel, yourSide, type MatchRecord } from './match'
 import { MatchStatus } from './MatchStatus'
 import { ScoreRow } from './ScoreRow'
-import { formatDay, formatLabel, formatTime, score, vsLabel, yourSide, type MatchRecord } from './sampleMatches'
 
 const FILTERS = [
-  { key: 'live', label: 'Live', test: (m: MatchRecord) => m.status.kind === 'live' },
-  {
-    key: 'signing',
-    label: 'Waiting for sign-off',
-    test: (m: MatchRecord) => m.status.kind === 'awaiting' || m.status.kind === 'disputed',
-  },
-  { key: 'final', label: 'Final', test: (m: MatchRecord) => m.status.kind === 'final' },
-  { key: 'yours', label: 'Your matches', test: (m: MatchRecord) => yourSide(m) !== null },
+  { key: 'live', label: 'Live' },
+  { key: 'signing', label: 'Waiting for sign-off' },
+  { key: 'final', label: 'Final' },
+  { key: 'yours', label: 'Your matches' },
 ] as const
 type FilterKey = (typeof FILTERS)[number]['key']
+
+// The state chip each match state counts under. A match nobody has scored
+// yet counts as live: both are still being played, with nothing signed.
+const STATE_CHIP = {
+  new: 'live',
+  live: 'live',
+  awaiting: 'signing',
+  disputed: 'signing',
+  final: 'final',
+} as const satisfies Record<MatchRecord['status']['kind'], FilterKey>
 
 // A match passes when it's in any state whose chip is on (or no state chip
 // is on), and is the viewer's if "Your matches" is on.
 function passes(match: MatchRecord, on: readonly FilterKey[]) {
-  const states = FILTERS.filter((f) => f.key !== 'yours' && on.includes(f.key))
-  const yours = FILTERS[3]
-  return (!states.length || states.some((f) => f.test(match))) && (!on.includes('yours') || yours.test(match))
+  const states = on.filter((key) => key !== 'yours')
+  return (
+    (!states.length || states.includes(STATE_CHIP[match.status.kind])) &&
+    (!on.includes('yours') || yourSide(match) !== null)
+  )
 }
 
 // Every match, newest first, narrowed by filter chips. The chips don't
@@ -78,12 +88,48 @@ function MatchListSkeleton() {
 }
 
 function LoadedMatches({ on }: { on: readonly FilterKey[] }) {
-  const { data: matches } = useSuspenseQuery(matchesQuery())
+  const { api } = useRouteContext({ from: '__root__' })
+  const { data: account } = useSuspenseQuery(sessionQuery(api))
+  const {
+    data: { matches, hasMore },
+  } = useSuspenseQuery(matchesQuery(api))
   const narrow = useNarrowLayout()
-  if (!matches.length) return <EmptyState title="No matches yet">Matches show here once someone starts one.</EmptyState>
+  if (!matches.length) {
+    const creates = can(account, Permission.matchesCreate)
+    return (
+      <EmptyState
+        title="No matches yet"
+        action={
+          creates && (
+            <Link to="/matches/new" className="fm-btn fm-btn--primary">
+              <Icon name="plus" />
+              New match
+            </Link>
+          )
+        }
+      >
+        {creates ? 'Start one with New match, and it shows here.' : 'Matches show here once someone starts one.'}
+      </EmptyState>
+    )
+  }
   const shown = matches.filter((match) => passes(match, on))
-  if (!shown.length) return <EmptyState title="No matches here">Turn off a filter to see more matches.</EmptyState>
-  return narrow ? <MatchRows matches={shown} /> : <MatchTable matches={shown} />
+  return (
+    <>
+      {!shown.length ? (
+        <EmptyState title="No matches here">Turn off a filter to see more matches.</EmptyState>
+      ) : narrow ? (
+        <MatchRows matches={shown} />
+      ) : (
+        <MatchTable matches={shown} />
+      )}
+      {hasMore && (
+        <p className="fm-notice">
+          <Icon name="info" />
+          <span>Showing the 50 newest matches.</span>
+        </p>
+      )}
+    </>
+  )
 }
 
 function MatchLink({ match, className, children }: { match: MatchRecord; className?: string; children: ReactNode }) {

@@ -47,6 +47,14 @@ export class MatchesPage {
     return screen.getByRole('link', { name })
   }
 
+  link(name: string): HTMLElement {
+    return screen.getByRole('link', { name })
+  }
+
+  button(name: string): HTMLElement | null {
+    return screen.queryByRole('button', { name })
+  }
+
   // A link of the sidebar, or of the tab bar below 900px.
   navLink(name: string): HTMLElement {
     return within(screen.getByRole('navigation', { name: 'Main' })).getByRole('link', { name })
@@ -76,5 +84,20 @@ export class MatchesPage {
 
   text(name: string | RegExp): HTMLElement | null {
     return screen.queryByText(name)
+  }
+
+  // What the sign-off card says of each side's signature, side 0 first.
+  signatures(): string[] {
+    const card = screen.getByRole('complementary', { name: 'Sign-off' })
+    return within(within(card).getAllByRole('list')[0])
+      .getAllByRole('listitem')
+      .map((item) => item.lastElementChild?.lastElementChild?.textContent ?? '')
+  }
+
+  // Each history line without its time, as "Who did what".
+  history(): string[] {
+    return within(screen.getByRole('region', { name: 'History' }))
+      .getAllByRole('listitem')
+      .map((item) => item.lastElementChild?.textContent ?? '')
   }
 }
