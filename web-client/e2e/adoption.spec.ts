@@ -20,7 +20,6 @@ test('a guest’s first sign-in keeps its player and asks nothing (VerifyInPlace
   // With a question open, the app would replace the URL with /review-players.
   await expect(page).toHaveURL(new URL('/', baseURL).href)
   await expect(homePage.avatar(guest.player.display_name)).toBeVisible()
-  await expect(homePage.reminder).toBeHidden()
   expect(await signInPage.account()).toMatchObject({
     id: guest.id,
     kind: 'verified',
@@ -46,7 +45,6 @@ test('a guest that signs in to an account plays as the account’s player (Adopt
 
   await expect(page).toHaveURL(new URL('/', baseURL).href)
   await expect(homePage.avatar(anns.player.display_name)).toBeVisible()
-  await expect(homePage.reminder).toBeHidden()
   expect((await signInPage.players()).map((player) => player.id)).toEqual([anns.player.id])
   expect((await signInPage.account()).player).toEqual(anns.player)
   expect(guest.player.id).not.toBe(anns.player.id)

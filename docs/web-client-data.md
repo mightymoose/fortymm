@@ -37,7 +37,7 @@ also shows the time from `Retry-After` (`RetryTime`). Its Try again resets the b
 fetches again. A caller can add more actions, such as a link to Home. One
 boundary wraps one loading component, and the component's file exports
 them together. The skeleton may be `null` only when the component usually
-renders nothing, such as Home's reminder. The root route's error page stays
+renders nothing, such as `AfterSignIn` on Home. The root route's error page stays
 as the safety net for what no boundary catches.
 
 `sessionQuery` sends `POST /v1/session` and returns the account, with its

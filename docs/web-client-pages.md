@@ -50,8 +50,7 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   with `role="alert"`. Its link starts another sign-in, back to the page,
   or to its `returnTo` prop. It reads Try again, or Sign in for `used`,
   where nothing failed.
-- Home (`src/pages/Home.tsx`) shows `AdoptionReview`
-  (`src/pages/adoption/`), then a New match link to `/matches/new` for an
+- Home (`src/pages/Home.tsx`) shows a New match link to `/matches/new` for an
   account with `matches.create`, above the roadmap. Below 900px the link
   is in the tab bar instead. The sidebar doesn't list it.
 - `_shell/matches/index.tsx` and `_shell/players/index.tsx`: the pages
@@ -94,14 +93,14 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   (`src/pages/useSignInHref.ts`). Each is a full page load of
   `/api/v1/auth/login` with the current path and query as `return_to`,
   because the API answers with a 302.
-- `AdoptionReview`: for a verified account, it
-  reads `GET /v1/account/players` in its own `QueryBoundary`, with no
-  skeleton and the inline error (see API client). A guest asks for no
-  players. With open questions, it shows a
-  reminder with a "Review players" link to `/review-players`. If the URL
-  has `signed_in=1`, the router replaces it with `/review-players` when a
-  question is open, or with `/` without the param when none is. So a
-  reload shows only the reminder.
+- `AfterSignIn` (`src/pages/adoption/`): Home shows it only when the URL
+  has `signed_in=1`. For a verified account, it reads
+  `GET /v1/account/players` in its own `QueryBoundary`, with no skeleton
+  and the inline error (see API client). It replaces the URL with
+  `/review-players` when a question is open, or with `/` without the param
+  when none is. So a reload doesn't open the review again. A guest asks
+  for no players and keeps the param, because after a slow sign-in the
+  session shows the saved guest account until the verified one comes.
 - `review-players.tsx`: the page `PlayerReview`
   (`src/pages/adoption/PlayerReview.tsx`), with the wordmark and no
   `AppShell`. The wordmark always shows. The question and its answers read
@@ -119,7 +118,7 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   account manages another player with a closed question. Then it asks
   "Which player?", with one button per such player that isn't in its
   `played_against`, which answers `same_as`. Its "Keep as a separate player" answers `no`, and its Back
-  goes back. "Review later" goes to `/` with no answer. A reducer holds the page's
+  goes back. The question has no way out but an answer. A reducer holds the page's
   state: every player it has queued this visit, the last confirmation,
   and the step and failed answer of the player on screen. The counter
   "Player N of M" counts the queued players, so it holds when another tab
@@ -152,9 +151,8 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   says that the player isn't one of the account's players any more. With no
   open question, or for a guest, the page goes to `/` at once. For a verified account, each time the page goes to `/`, it sets
   `fromReview` in the router's history state (typed in `src/router.tsx`).
-  That covers Review later, the last answer and a visit with no open
-  question. Home then focuses the reminder's link while questions remain,
-  or else its title, so focus doesn't fall to the document.
+  That covers the last answer and a visit with no open question. Home then
+  focuses its title, so focus doesn't fall to the document.
 - `_shell/admin/`: the admin pages (`src/pages/admin/`), for an account
   with `admin.view`. `route.tsx` has no component. Its loader reads the
   session and sends any other account to `/`.

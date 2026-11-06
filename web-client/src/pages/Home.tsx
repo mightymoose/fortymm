@@ -1,10 +1,10 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
-import { Link, useRouteContext, useRouterState } from '@tanstack/react-router'
+import { Link, useRouteContext, useRouterState, useSearch } from '@tanstack/react-router'
 import { useEffect, useRef, type Ref } from 'react'
 import { can, Permission } from '../api/permissions'
 import { sessionQuery } from '../api/queries'
 import { Icon, type IconName } from '../components/Icon'
-import { AdoptionReview } from './adoption/AdoptionReview'
+import { AfterSignIn } from './adoption/AfterSignIn'
 import { useNarrowLayout } from './useNarrowLayout'
 
 type Stage = 'ready' | 'building' | 'next' | 'later'
@@ -44,24 +44,24 @@ const parts: readonly { title: string; body: string; icon: IconName; stage: Stag
   },
 ]
 
-// The "Is this you?" reminder over the roadmap. Below 900px the New match
-// link is in the tab bar instead (AppShell). Back from the review, focus
-// goes to the reminder's link while questions remain, or else to the title.
+// Below 900px the New match link is in the tab bar instead (AppShell). Back
+// from the review, focus goes to the title, so it doesn't fall to the
+// document.
 export function Home() {
-  const reviewLink = useRef<HTMLAnchorElement>(null)
   const title = useRef<HTMLHeadingElement>(null)
   const fromReview = useRouterState({ select: (state) => state.location.state.fromReview })
   const { api } = useRouteContext({ from: '__root__' })
   const { data: account } = useSuspenseQuery(sessionQuery(api))
   const narrow = useNarrowLayout()
+  const { signed_in: signedIn } = useSearch({ from: '/_authenticated/_shell/' })
 
   useEffect(() => {
-    if (fromReview) (reviewLink.current ?? title.current)?.focus()
+    if (fromReview) title.current?.focus()
   }, [fromReview])
 
   return (
     <div className="home">
-      <AdoptionReview linkRef={reviewLink} />
+      {signedIn && <AfterSignIn />}
       {!narrow && can(account, Permission.matchesCreate) && (
         <div>
           <Link to="/matches/new" className="fm-btn fm-btn--primary">

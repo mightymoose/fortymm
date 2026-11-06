@@ -1,19 +1,18 @@
-import { fireEvent, screen, within } from '@testing-library/react'
+import { act, fireEvent, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderRoute, type AppRouter } from '../renderRoute'
 
 export type ReviewAction =
   | 'Yes, this is me'
   | 'Someone else played'
-  | 'Review later'
   | 'I manage this player'
   | 'Remove from my account'
   | 'Keep as a separate player'
   | 'Back'
 
-// Page object for "Is this you?": the review page that asks about one player
-// at a time, and the reminder on Home that links to it. Mock the account with
-// mockVerifiedAccount() from ../server first.
+// Page object for "Is this you?", the review page that asks about one player
+// at a time. Mock the account with mockVerifiedAccount() from ../server
+// first.
 export class PlayerReviewPage {
   // `/?signed_in=1` is Home right after a sign-in.
   static async render(
@@ -84,6 +83,13 @@ export class PlayerReviewPage {
     return within(this.answers).getByRole('button', { name: displayName })
   }
 
+  // The names of the buttons under the question.
+  get actions(): string[] {
+    return within(this.answers)
+      .getAllByRole('button')
+      .map((button) => button.textContent ?? '')
+  }
+
   // The names of the players that "Which player?" offers.
   get targets(): string[] {
     return within(this.answers)
@@ -124,15 +130,6 @@ export class PlayerReviewPage {
     await userEvent.click(within(alert).getByRole('button', { name: 'Try again' }))
   }
 
-  // The reminder's title on Home, such as "2 players to review", or null.
-  get reminderTitle(): string | null {
-    return document.querySelector('.fm-alert__title')?.textContent ?? null
-  }
-
-  get reviewLink(): HTMLElement {
-    return screen.getByRole('link', { name: /^Review players?$/ })
-  }
-
   // Clicks `name` and waits for its request and the navigation.
   async click(name: ReviewAction): Promise<void> {
     await userEvent.click(this.button(name))
@@ -162,8 +159,10 @@ export class PlayerReviewPage {
     await this.settle()
   }
 
-  async review(): Promise<void> {
-    await userEvent.click(this.reviewLink)
+  // Leaves for Home and opens the review again, as a second visit does.
+  async reopen(): Promise<void> {
+    await act(() => this.router.navigate({ to: '/' }))
+    await act(() => this.router.navigate({ to: '/review-players' }))
     await this.findQuestion()
     await this.settle()
   }

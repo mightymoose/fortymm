@@ -1,5 +1,5 @@
 import { useMutation, useSuspenseQuery } from '@tanstack/react-query'
-import { Link, Navigate, useNavigate, useRouteContext } from '@tanstack/react-router'
+import { Link, Navigate, useRouteContext } from '@tanstack/react-router'
 import { useEffect, useId, useReducer, useRef, type ReactNode } from 'react'
 import {
   accountPlayersQuery,
@@ -160,7 +160,6 @@ function ReviewSkeleton() {
         <div className="fm-skeleton review-skeleton review-skeleton--outcome" />
         <div className="fm-skeleton review-skeleton review-skeleton--button" />
         <div className="fm-skeleton review-skeleton review-skeleton--button" />
-        <div className="fm-skeleton review-skeleton review-skeleton--later" />
       </div>
     </>
   )
@@ -170,7 +169,6 @@ function Questions() {
   const { api, queryClient } = useRouteContext({ from: '__root__' })
   const { data: players } = useSuspenseQuery(accountPlayersQuery(api))
   const answer = useMutation(answerQuestionMutation(api, queryClient))
-  const navigate = useNavigate()
   const showToast = useToast()
   const [state, dispatch] = useReducer(review, start)
   const heading = useRef<HTMLHeadingElement>(null)
@@ -321,7 +319,7 @@ function Questions() {
             Is this you?
           </h1>
           <p className="review-playedas">
-            <b>{current.display_name}</b> was used on this device before you signed in.
+            <b>{current.display_name}</b> was used before you signed in.
           </p>
           {/* Results aren't recorded yet, so the preview gives only the
               count. The games work adds the player's recent matches here,
@@ -352,13 +350,6 @@ function Questions() {
             onClick={() => go('relationship')}
           >
             Someone else played
-          </Button>
-          <Button
-            variant="ghost"
-            disabled={saving !== null}
-            onClick={() => void navigate({ to: '/', state: { fromReview: true } })}
-          >
-            Review later
           </Button>
         </div>
       </>
