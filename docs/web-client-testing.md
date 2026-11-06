@@ -94,7 +94,7 @@ or an alert shows, because a save hashes the result it corrects first.
 `href` includes the fragment, and `close()` unmounts the page, so a test
 renders `href` again as a reload does. `waitForKey()` waits for this
 browser's signing key before a submit. `settle()` also waits until the
-strip isn't `aria-busy`, so the sync has stopped sending and pulling.
+strip isn't `aria-busy`, so the sync has stopped sending.
 `goOffline()` and `goOnline()` take the browser offline and back.
 `otherDeviceSyncs()` puts another device's board on the demo server,
 `serverBoard` reads it, and `slotSync()` reads what a screen reader

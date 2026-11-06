@@ -3,15 +3,14 @@ import { ApiError, ApiUnreachable } from '../api/errors'
 import { nextStep, retryable, retryDelay } from './sync'
 
 describe('nextStep', () => {
-  it('sends a waiting board before it pulls, and waits while offline', () => {
-    expect(nextStep({ pending: 'a', offline: false, wantsPull: true })).toBe('send')
-    expect(nextStep({ pending: 'a', offline: true, wantsPull: true })).toBe('waitOnline')
+  it('sends a waiting board online, and waits while offline', () => {
+    expect(nextStep({ pending: 'a', offline: false })).toBe('send')
+    expect(nextStep({ pending: 'a', offline: true })).toBe('waitOnline')
   })
 
-  it('pulls only with nothing to send, online and wanted', () => {
-    expect(nextStep({ pending: null, offline: false, wantsPull: true })).toBe('pull')
-    expect(nextStep({ pending: null, offline: true, wantsPull: true })).toBe('rest')
-    expect(nextStep({ pending: null, offline: false, wantsPull: false })).toBe('rest')
+  it('rests with nothing to send, online or offline', () => {
+    expect(nextStep({ pending: null, offline: false })).toBe('rest')
+    expect(nextStep({ pending: null, offline: true })).toBe('rest')
   })
 })
 

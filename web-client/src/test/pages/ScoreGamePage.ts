@@ -226,7 +226,7 @@ export class ScoreGamePage {
   }
 
   // Waits for the router to finish loading the page it's going to, and
-  // for the sync to stop sending and pulling, as the demo server answers
+  // for the sync to stop sending, as the demo server answers
   // after a delay.
   async settle(): Promise<void> {
     await waitFor(

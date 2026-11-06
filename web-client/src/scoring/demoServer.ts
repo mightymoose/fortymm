@@ -48,7 +48,3 @@ export function setServerBoard(matchId: string, text: string): void {
 export function putBoard(matchId: string, text: string): Promise<void> {
   return send(`PUT /v1/matches/${matchId}/board`, () => setServerBoard(matchId, text))
 }
-
-export function fetchBoard(matchId: string): Promise<string | null> {
-  return send(`GET /v1/matches/${matchId}/board`, () => serverBoard(matchId))
-}

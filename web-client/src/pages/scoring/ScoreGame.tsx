@@ -1,12 +1,12 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
-import { Link, useLoaderData, useLocation, useParams, useRouteContext, useRouter } from '@tanstack/react-router'
+import { Link, useLoaderData, useLocation, useRouteContext } from '@tanstack/react-router'
 import { useSyncExternalStore } from 'react'
 import { sessionQuery } from '../../api/queries'
 import { Icon } from '../../components/Icon'
 import { Wordmark } from '../../components/Wordmark'
 import { viewerOf, type Match, type Viewer } from '../../scoring/demoMatches'
 import { matchOf } from '../../scoring/matches'
-import { adopts, boardsOf, learnBoard, subscribeBoards, unsyncedGames } from '../../scoring/boards'
+import { boardsOf, subscribeBoards, unsyncedGames } from '../../scoring/boards'
 import { gamesOf, readFragment, type Fragment } from '../../scoring/fragment'
 import { slotsOf } from '../../scoring/planPress'
 import { useBoardSync } from '../../scoring/sync'
@@ -14,18 +14,18 @@ import { GameStrip } from './GameStrip'
 import { ResultPanel } from './ResultPanel'
 import { ScoreEntry } from './ScoreEntry'
 import { useSubmitResult } from './useSubmitResult'
-import { midSentence, PATH, playerLabel, ROUTE, sidesFor } from './sides'
+import { midSentence, playerLabel, ROUTE, sidesFor } from './sides'
 import './scoring.css'
 
 // One match's scores, open at one game. The URL's fragment holds every
 // game, so the URL is the scorer's truth: a reload shows the same games,
-// and a shared URL opens them on another device. Each save also syncs the
-// board in the background, and the page follows the server's board while
-// it has nothing to send, so spectators and tournament directors can watch.
+// and a shared URL opens them on another device. Each save also sends the
+// board in the background, so spectators and tournament directors can
+// watch. The page never follows the server's board, so another device's
+// board can't change this pad.
 // Anyone who can open the match can enter or change a game, as long as its
 // score is legal. The match rules apply only when a player submits.
 export function ScoreGame() {
-  const { matchId } = useParams({ from: ROUTE })
   const { scoring, fragment, gameNumber, last } = useLoaderData({ from: ROUTE })
   const { hash, state } = useLocation()
   const { api } = useRouteContext({ from: '__root__' })
@@ -36,24 +36,7 @@ export function ScoreGame() {
   const viewer = viewerOf(match, self.id)
   const sides = sidesFor(viewer.role === 'player' ? viewer.side : 0)
   const saved = games[gameNumber - 1]
-  const router = useRouter()
-  const sync = useBoardSync(match.id, (text) => {
-    const pulled = readFragment(text, match)
-    if (!pulled) return
-    const { synced } = boardsOf(match.id)
-    learnBoard(match.id, text)
-    const shownText = router.state.location.hash
-    const shown = readFragment(shownText, match) ?? { kind: 'empty' }
-    if (!adopts({ text: shownText, fragment: shown }, { text, fragment: pulled }, synced)) return
-    const reachable = Math.min(gamesOf(pulled).length + 1, match.bestOf)
-    void router.navigate({
-      to: PATH,
-      params: { matchId, gameNumber: String(Math.min(gameNumber, reachable)) },
-      search: true,
-      hash: text,
-      replace: true,
-    })
-  })
+  const sync = useBoardSync(match.id)
   const boards = useSyncExternalStore(subscribeBoards, () => boardsOf(match.id))
   // Only a board waiting to go marks games, so a board from a link that
   // nobody saved here doesn't read as stuck.

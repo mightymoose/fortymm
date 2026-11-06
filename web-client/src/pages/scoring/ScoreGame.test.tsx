@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from '@testing-library/react'
+import { act, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/errors'
@@ -8,7 +8,6 @@ import { demoMatch } from '../../scoring/demoMatches'
 import { putBoard } from '../../scoring/demoServer'
 import { draftHash, nowSeconds, resultOf } from '../../scoring/fragment'
 import { apiMatch } from '../../scoring/matches'
-import { PULL_MS } from '../../scoring/sync'
 import { hex } from '../../signing/bytes'
 import { takeKey } from '../../signing/deviceKey'
 import { appendSignature, decodeEnvelope, signResult, type Signer } from '../../signing/envelope'
@@ -457,73 +456,29 @@ describe('ScoreGame', () => {
       expect(ScoreGamePage.serverBoard).toBe(page.hash)
     })
 
-    it('opens the server’s board in a tab with no scores', async () => {
-      const board = boardFrom([[11, 3], [5, 11]], 30)
-      ScoreGamePage.otherDeviceSyncs(board)
-
+    it('never changes its pad for another device’s board', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
       const page = await ScoreGamePage.render()
-
-      await waitFor(() => expect(page.hash).toBe(board))
-      expect(page.slotScore(1)).toBe('11–3')
-      expect(page.slotScore(2)).toBe('5–11')
-      expect(page.heading).toHaveTextContent('Game 1')
-    })
-
-    it('follows the server’s board while watching', async () => {
-      vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setInterval', 'clearInterval'] })
-      const page = await ScoreGamePage.render()
-      const first = boardFrom([[11, 3]], 30)
-      ScoreGamePage.otherDeviceSyncs(first)
-
-      await act(() => vi.advanceTimersByTimeAsync(PULL_MS))
-      await page.settle()
-
-      expect(page.hash).toBe(first)
-
-      const later = boardFrom([[11, 3], [9, 11]], 10)
-      ScoreGamePage.otherDeviceSyncs(later)
-      await act(() => vi.advanceTimersByTimeAsync(PULL_MS))
-      await page.settle()
-
-      expect(page.hash).toBe(later)
-      expect(page.slotScore(2)).toBe('9–11')
-    })
-
-    it('sends its own unsent board rather than take the server’s', async () => {
-      const page = await ScoreGamePage.render()
-      page.goOffline()
-      await saveGame(page, 1, '11', '8')
+      await saveGame(page, 1, '11', '3')
       const mine = page.hash
-      ScoreGamePage.otherDeviceSyncs(draftHash(match, [[2, 11]], null, nowSeconds() + 60))
+      ScoreGamePage.otherDeviceSyncs(draftHash(match, [[2, 11], [11, 9]], null, nowSeconds() + 60))
 
-      const shown = new Set<string>()
-      const watch = setInterval(() => shown.add(page.hash), 20)
+      await act(() => vi.advanceTimersByTimeAsync(30_000))
       await page.goOnline()
-      clearInterval(watch)
 
-      expect([...shown]).toEqual([mine])
-      expect(ScoreGamePage.serverBoard).toBe(mine)
-      expect(page.slotScore(1)).toBe('11–8')
-    })
-
-    it('keeps a link’s scores over an older board on the server', async () => {
-      ScoreGamePage.otherDeviceSyncs(boardFrom([[3, 11], [11, 2]], 600))
-      const link = boardFrom([[11, 7]], 0)
-
-      const page = await ScoreGamePage.render(`${EDIT}/1/edit#${link}`)
-
-      expect(page.hash).toBe(link)
+      expect(page.hash).toBe(mine)
+      expect(page.slotScore(1)).toBe('11–3')
       expect(page.slotScore(2)).toBe('–')
     })
 
-    it('ignores a server board it can’t read', async () => {
-      ScoreGamePage.otherDeviceSyncs('not-a-board')
+    it('keeps an empty pad while the server holds a board', async () => {
+      ScoreGamePage.otherDeviceSyncs(boardFrom([[11, 3], [5, 11]], 30))
 
       const page = await ScoreGamePage.render()
+      await page.goOnline()
 
       expect(page.hash).toBe('')
-      expect(page.notices).toEqual([])
-      expect(screen.queryByRole('alert')).toBeNull()
+      expect(page.slotScore(1)).toBe('–')
     })
 
     it('syncs a board saved offline after the scoring page has closed', async () => {
