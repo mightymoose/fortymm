@@ -117,7 +117,7 @@ function RecentCard({ summary, now }: { summary: PlayerSummary; now: Date }) {
           </table>
         </div>
       ) : (
-        <EmptyState title="No matches yet">Log one after you play.</EmptyState>
+        <EmptyState title="No matches yet">Your matches show here after you play.</EmptyState>
       )}
     </Card>
   )

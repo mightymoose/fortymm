@@ -22,7 +22,7 @@ export type PlayerSummary = {
 // the first one as its lead and may list the rest.
 export type Attention =
   | { kind: 'review-players'; count: number }
-  | { kind: 'guest'; matchCount: number }
+  | { kind: 'keep-guest-matches'; matchCount: number }
   | { kind: 'first-match' }
 
 export type Dashboard = {
@@ -56,10 +56,10 @@ const ATTENTION: readonly ((input: { account: Session; players: readonly Account
     const count = players.filter((player) => player.open_question).length
     return count > 0 ? { kind: 'review-players', count } : null
   },
-  ({ account, players }) =>
-    account.kind === 'guest'
-      ? { kind: 'guest', matchCount: players.reduce((sum, player) => sum + player.match_count, 0) }
-      : null,
+  ({ account, players }) => {
+    const matchCount = players.reduce((sum, player) => sum + player.match_count, 0)
+    return account.kind === 'guest' && matchCount > 0 ? { kind: 'keep-guest-matches', matchCount } : null
+  },
   ({ account, players }) =>
     can(account, Permission.matchesCreate) && players.every((player) => player.match_count === 0)
       ? { kind: 'first-match' }

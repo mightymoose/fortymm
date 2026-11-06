@@ -74,7 +74,7 @@ function summaryLine(summary: PlayerSummary): string | null {
 }
 
 function Feed({ matches, more, now }: { matches: readonly RecentMatch[]; more: number; now: Date }) {
-  if (matches.length === 0) return <EmptyState title="No matches yet">Log one after you play.</EmptyState>
+  if (matches.length === 0) return <EmptyState title="No matches yet">Your matches show here after you play.</EmptyState>
   const days = new Map<string, RecentMatch[]>()
   for (const match of matches) {
     const day = dayLabel(match.played_at, now)

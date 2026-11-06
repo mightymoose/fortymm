@@ -22,26 +22,16 @@ export function useAttentionCopy(): (item: Attention, size?: 'sm' | 'lg') => Att
             </Link>
           ),
         }
-      case 'guest':
-        return item.matchCount > 0
-          ? {
-              title: 'Keep your matches',
-              body: `Your ${matchCountText(item.matchCount)} live on this device only. Sign in to keep them on every device.`,
-              action: (
-                <a href={signInHref} className={`fm-btn fm-btn--primary${sized}`}>
-                  Sign in
-                </a>
-              ),
-            }
-          : {
-              title: 'Sign in to log your matches',
-              body: 'You’re playing as a guest. Sign in to log the matches you play and keep them on every device.',
-              action: (
-                <a href={signInHref} className={`fm-btn fm-btn--primary${sized}`}>
-                  Sign in
-                </a>
-              ),
-            }
+      case 'keep-guest-matches':
+        return {
+          title: 'Keep your matches',
+          body: `Your ${matchCountText(item.matchCount)} are saved to a guest account on this device. Sign in to keep them with your account on every device.`,
+          action: (
+            <a href={signInHref} className={`fm-btn fm-btn--primary${sized}`}>
+              Sign in
+            </a>
+          ),
+        }
       case 'first-match':
         return {
           title: 'Log your first match',

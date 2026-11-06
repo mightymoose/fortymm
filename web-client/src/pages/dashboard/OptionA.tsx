@@ -27,7 +27,11 @@ export function OptionA({ dashboard, now }: { dashboard: Dashboard; now: Date })
           subtitle={me.last ? `Last played ${dayInSentence(me.last.played_at, now)}` : undefined}
           actions={dashboard.canCreateMatch ? <NewMatchLink size="lg" /> : undefined}
         >
-          <p className="dash__body">Set up a match when you get to the table. Scoring works with no signal.</p>
+          <p className="dash__body">
+            {dashboard.canCreateMatch
+              ? 'Set up a match when you get to the table. Scoring works with no signal.'
+              : 'Your matches show here after you play. Scoring works with no signal.'}
+          </p>
         </Card>
       )}
 
@@ -57,7 +61,7 @@ export function OptionA({ dashboard, now }: { dashboard: Dashboard; now: Date })
             ))}
           </div>
         ) : (
-          <EmptyState title="No matches yet">Log one after you play, and your results show here.</EmptyState>
+          <EmptyState title="No matches yet">Your results show here after you play.</EmptyState>
         )}
       </section>
 
