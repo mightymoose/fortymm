@@ -39,3 +39,8 @@ export const test = base.extend<{
 })
 
 export { expect } from '@playwright/test'
+
+// The administrator's cookies, which the `empty` project saves after its
+// sign-in. Specs that run after it reuse them, because the suite stays under
+// the guest account limit and each sign-in with no session counts.
+export const administratorState = 'test-results/.auth/administrator.json'
