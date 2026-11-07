@@ -27,7 +27,7 @@ const JSON_HEADERS = { 'Content-Type': 'application/json' }
 
 // Sends `request` and returns its body. Throws ApiUnreachable when no
 // response came back, and ApiError when the API answered with an error.
-async function send<Data>(
+export async function send<Data>(
   request: string,
   sent: Promise<{ data?: Data; error?: unknown; response: Response }>,
 ): Promise<Data> {

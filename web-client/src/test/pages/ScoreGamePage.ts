@@ -1,15 +1,19 @@
 import { act, cleanup, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
-import { serverBoard, setServerBoard } from '../../scoring/demoServer'
+import type { GamePoints } from '../../scoring/board'
+import type { Match } from '../../scoring/demoMatches'
+import { draftHash } from '../../scoring/fragment'
 import { signWithDeviceKey } from '../../signing/deviceKey'
 import { renderRoute, type AppRouter } from '../renderRoute'
 
 // Page object for the page that edits one game of a match's scores. The
 // mock session's player is `excited egret 387`, who plays the `demo` match
 // against `brave badger 214`. The scores live in the URL's fragment, so
-// `href` includes it, and rendering an `href` again is a reload. The board
-// syncs to the demo server in the background.
+// `href` includes it, and rendering an `href` again is a reload. Only an
+// API match syncs its board, for an account with `matches.score`, so a
+// sync test renders one with renderApiMatch() and reads the boards the API
+// took from mockBoards() in `test/server.ts`.
 export class ScoreGamePage {
   static async render(path = '/matches/demo/scores/game/1/edit'): Promise<ScoreGamePage> {
     const page = new ScoreGamePage(await renderRoute(path))
@@ -17,14 +21,10 @@ export class ScoreGamePage {
     return page
   }
 
-  // Another device's board for the `demo` match, synced to the server.
-  static otherDeviceSyncs(text: string): void {
-    setServerBoard('demo', text)
-  }
-
-  // The `demo` match's board on the demo server, or null when none synced.
-  static get serverBoard(): string | null {
-    return serverBoard('demo')
+  // An API match's game `game`, opened from a fragment that holds `games`,
+  // as New match's link opens it.
+  static async renderApiMatch(match: Match, games: GamePoints[] = [], game = 1): Promise<ScoreGamePage> {
+    return ScoreGamePage.render(`/matches/${match.id}/scores/game/${game}/edit#${draftHash(match, games, null, 1_793_700_000)}`)
   }
 
   readonly router: AppRouter
@@ -232,8 +232,7 @@ export class ScoreGamePage {
   }
 
   // Waits for the router to finish loading the page it's going to, and
-  // for the sync to stop sending, as the demo server answers
-  // after a delay.
+  // for the sync to stop sending.
   async settle(): Promise<void> {
     await waitFor(
       () => {

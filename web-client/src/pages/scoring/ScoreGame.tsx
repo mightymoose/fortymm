@@ -36,8 +36,8 @@ export function ScoreGame() {
   const viewer = viewerOf(match, self.id)
   const sides = sidesFor(viewer.role === 'player' ? viewer.side : 0)
   const saved = games[gameNumber - 1]
-  const syncs = syncsBoard(match)
-  const sync = useBoardSync(match.id, syncs)
+  const syncs = syncsBoard(match, account)
+  const sync = useBoardSync(match.id, syncs, api)
   const boards = useSyncExternalStore(subscribeBoards, () => boardsOf(match.id))
   // Only a board waiting to go marks games, so a board from a link that
   // nobody saved here doesn't read as stuck.

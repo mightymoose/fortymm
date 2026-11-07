@@ -269,8 +269,6 @@ replaced or cut off gets a 409.
 - Reading a match beyond the 50 newest, and by anyone without
   `matches.view`. `GET /v1/matches` and `GET /v1/matches/{match_id}` read
   them for administrators (see `docs/matches-api.md`).
-- The clients sending boards and results to these routes, rather than to
-  the demo server (#195).
 - Player short codes for picking an opponent (#187).
 - Counting a match as a player's activity for "Is this you?" (#124), and
   a player's match count.

@@ -2,11 +2,9 @@ import { act, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, ApiUnreachable } from '../../api/errors'
 import { saveAccount } from '../../api/savedSession'
 import type { GamePoints } from '../../scoring/board'
 import { demoMatch } from '../../scoring/demoMatches'
-import { putBoard } from '../../scoring/demoServer'
 import { draftHash, nowSeconds, resultOf } from '../../scoring/fragment'
 import { apiMatch } from '../../scoring/matches'
 import { hex } from '../../signing/bytes'
@@ -16,14 +14,7 @@ import { decodePayload, encodePayload, resultHash, type MatchResult } from '../.
 import { base64url, fromBase64url } from '../../signing/text'
 import { ErrorPage } from '../../test/pages/ErrorPage'
 import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
-import { API_BASE_URL, holdSession, server, sessionResponse } from '../../test/server'
-
-// A send can fail the way the API's can, while the board still lands on the
-// demo server by default.
-vi.mock('../../scoring/demoServer', async (importOriginal) => {
-  const server = await importOriginal<typeof import('../../scoring/demoServer')>()
-  return { ...server, putBoard: vi.fn(server.putBoard) }
-})
+import { API_BASE_URL, grantSession, holdSession, mockBoards, server, sessionResponse } from '../../test/server'
 
 // The pad names the players to a player as You and Your opponent.
 const ME = 'You'
@@ -47,21 +38,6 @@ function resultIn(hash: string): MatchResult {
   } catch {
     return decodePayload(bytes).result
   }
-}
-
-// Another device's board, saved `ago` seconds before now.
-function boardFrom(games: GamePoints[], ago: number): string {
-  return draftHash(match, games, null, nowSeconds() - ago)
-}
-
-// The next send is refused after a round trip, as the API refuses it, so
-// the game shows as on its way first.
-function refuseNextSend(status: number, title: string): void {
-  const body = { errors: [{ status: String(status), title }] }
-  const error = new ApiError('POST /v1/matches/demo/boards', new Response(JSON.stringify(body), { status }), body)
-  vi.mocked(putBoard).mockImplementationOnce(
-    () => new Promise<void>((_, reject) => setTimeout(() => reject(error), 300)),
-  )
 }
 
 function draft(games: GamePoints[], replaces: Uint8Array<ArrayBuffer> | null = null): string {
@@ -416,29 +392,22 @@ describe('ScoreGame', () => {
       expect(page.title).toHaveTextContent('We can’t find that page')
     })
 
-    describe('sends no board until boards go to the API', () => {
-      const demoServerKeys = () =>
-        Object.keys(localStorage).filter((key) => key.startsWith('fortymm-demo-server:'))
-
-      beforeEach(() => {
-        vi.mocked(putBoard).mockClear()
-      })
-
-      it('saves a game with no send and no sync mark', async () => {
+    describe('for an account without matches.score', () => {
+      it('saves a game with no board request and no sync mark', async () => {
+        const boards = mockBoards()
         const page = await ScoreGamePage.render(path())
 
         await page.enter({ 'Player 1': '11', 'Player 2': '3' })
         await page.save()
-        await page.settle()
 
         expect(page.slotScore(1)).toBe('11–3')
         expect(page.slotSync(1)).toBeNull()
         expect(page.stripNote).toBeNull()
-        expect(putBoard).not.toHaveBeenCalled()
-        expect(demoServerKeys()).toEqual([])
+        expect(boards.pushes).toEqual([])
       })
 
-      it('submits a decided match with no send', async () => {
+      it('submits a decided match with no board request', async () => {
+        const boards = mockBoards()
         const played = apiMatch(id, 3, false, [player.id, gecko])
         const page = await ScoreGamePage.render(path(played, [[11, 5]]).replace('/game/1/', '/game/2/'))
         await page.waitForKey()
@@ -448,44 +417,68 @@ describe('ScoreGame', () => {
         await page.waitForPath(`/matches/${id}/scores/submission`)
 
         expect(decodeEnvelope(fromBase64url(page.hash)).signatures).toHaveLength(1)
-        expect(putBoard).not.toHaveBeenCalled()
-        expect(demoServerKeys()).toEqual([])
+        expect(boards.pushes).toEqual([])
       })
     })
   })
 
+  it('saves the demo match with no board request and no sync mark, whatever the account may do', async () => {
+    grantSession('matches.score')
+    const boards = mockBoards()
+    const page = await ScoreGamePage.render()
+
+    await saveGame(page, 1, '11', '3')
+
+    expect(page.slotSync(1)).toBeNull()
+    expect(page.stripNote).toBeNull()
+    expect(boards.pushes).toEqual([])
+  })
+
   describe('background sync', () => {
+    const gecko = 'a4d8f0e6-1b2c-4e3d-8f5a-9c7b6e1d2f08'
+    // The session's player plays side 0, so the page can submit.
+    const scored = apiMatch('01970000-0000-7000-8000-0000000000c8', 5, false, [player.id, gecko])
+    const edit = `/matches/${scored.id}/scores/game`
+    let boards: ReturnType<typeof mockBoards>
+
+    beforeEach(() => {
+      grantSession('matches.score')
+      boards = mockBoards()
+    })
+
     afterEach(() => {
       vi.useRealTimers()
       vi.restoreAllMocks()
-      vi.mocked(putBoard).mockReset()
     })
 
-    it('syncs a save to the server', async () => {
-      const page = await ScoreGamePage.render()
+    const render = (games: GamePoints[] = [], game = 1) => ScoreGamePage.renderApiMatch(scored, games, game)
+    const landed = () => boards.board(scored.id)
+
+    it('sends a save to the API as the hex of the fragment', async () => {
+      const page = await render()
 
       await saveGame(page, 1, '11', '3')
 
-      expect(ScoreGamePage.serverBoard).toBe(page.hash)
+      expect(boards.pushes).toEqual([{ matchId: scored.id, board: hex(fromBase64url(page.hash)) }])
+      expect(landed()).toBe(page.hash)
       expect(page.slotSync(1)).toBe('Synced')
     })
 
-    it('shows a board on its way as syncing, and as synced once the server takes it', async () => {
-      let land = () => {}
-      vi.mocked(putBoard).mockImplementationOnce(() => new Promise<void>((resolve) => (land = resolve)))
-      const page = await ScoreGamePage.render()
+    it('shows a board on its way as syncing, and as synced once the API takes it', async () => {
+      boards.hold = true
+      const page = await render()
       await page.enter({ [ME]: '11', [OPPONENT]: '6' })
 
       await userEvent.click(page.saveButton!)
 
       await waitFor(() => expect(page.slotSync(1)).toBe('Syncing'))
-      act(() => land())
+      await boards.release()
       await page.settle()
       expect(page.slotSync(1)).toBe('Synced')
       expect(page.slotShowsSynced(1)).toBe(true)
     })
 
-    describe('a board the server refuses', () => {
+    describe('a board the API refuses', () => {
       it.each([
         [403, 'Not synced. Saved on this device.'],
         [404, 'Not synced. Saved on this device.'],
@@ -493,41 +486,35 @@ describe('ScoreGame', () => {
         [422, 'Not synced. Saved on this device.'],
       ])('never shows a %i as synced, and says why', async (status, note) => {
         vi.spyOn(console, 'warn').mockImplementation(() => {})
-        refuseNextSend(status, 'Refused')
-        const page = await ScoreGamePage.render()
+        boards.answers.push({ status })
+        const page = await render()
 
         await saveGame(page, 1, '11', '7')
 
         expect(page.slotSync(1)).toBeNull()
         expect(page.slotShowsSynced(1)).toBe(false)
         expect(page.stripNote).toBe(note)
-        expect(ScoreGamePage.serverBoard).toBeNull()
+        expect(landed()).toBeNull()
       })
 
       it('refreshes the session after a 403, and never sends the board again', async () => {
         vi.useFakeTimers({ shouldAdvanceTime: true })
         vi.spyOn(console, 'warn').mockImplementation(() => {})
-        const page = await ScoreGamePage.render()
-        let sessions = 0
-        server.use(
-          http.post(`${API_BASE_URL}/v1/session`, () => {
-            sessions += 1
-            return HttpResponse.json(sessionResponse)
-          }),
-        )
-        refuseNextSend(403, 'You can’t score this match')
+        const page = await render()
+        const sessions = countSessions()
+        boards.answers.push({ status: 403, title: 'You can’t score this match' })
 
         await saveGame(page, 1, '11', '2')
         await act(() => vi.advanceTimersByTimeAsync(60_000))
 
-        expect(putBoard).toHaveBeenCalledTimes(1)
-        await waitFor(() => expect(sessions).toBe(1))
+        expect(boards.pushes).toHaveLength(1)
+        await waitFor(() => expect(sessions.count).toBe(1))
       })
 
       it('warns with the status and title of a 422', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-        refuseNextSend(422, 'The board isn’t a valid result')
-        const page = await ScoreGamePage.render()
+        boards.answers.push({ status: 422, title: 'The board isn’t a valid result' })
+        const page = await render()
 
         await saveGame(page, 1, '11', '8')
 
@@ -535,38 +522,39 @@ describe('ScoreGame', () => {
       })
 
       it('still says why after the person leaves and comes back', async () => {
-        refuseNextSend(409, 'The match is final')
-        const page = await ScoreGamePage.render()
+        boards.answers.push({ status: 409 })
+        const page = await render()
         await saveGame(page, 1, '11', '4')
+        const saved = page.hash
 
         await act(() => page.router.navigate({ to: '/' }))
-        await act(() => page.router.navigate({ href: `${EDIT}/1/edit#${page.hash}` }))
+        await act(() => page.router.navigate({ href: `${edit}/1/edit#${saved}` }))
         await page.settle()
 
         expect(page.stripNote).toBe('Match final. Changes here don’t sync.')
       })
 
       it('says why a board refused with the scoring page closed', async () => {
-        const page = await ScoreGamePage.render()
+        const page = await render()
         page.goOffline()
         await saveGame(page, 1, '11', '6')
         const saved = page.hash
-        refuseNextSend(422, 'The board isn’t a valid result')
+        boards.answers.push({ status: 422 })
         vi.spyOn(console, 'warn').mockImplementation(() => {})
 
         await act(() => page.router.navigate({ to: '/' }))
         await page.goOnline()
-        await waitFor(() => expect(putBoard).toHaveBeenCalledTimes(1))
+        await waitFor(() => expect(boards.pushes).toHaveLength(1))
         await waitFor(() => expect(console.warn).toHaveBeenCalled())
-        await act(() => page.router.navigate({ href: `${EDIT}/2/edit#${saved}` }))
+        await act(() => page.router.navigate({ href: `${edit}/2/edit#${saved}` }))
         await page.settle()
 
         expect(page.stripNote).toBe('Not synced. Saved on this device.')
       })
 
       it('clears its note once a later save lands, and shows that game as synced', async () => {
-        refuseNextSend(409, 'The match is final')
-        const page = await ScoreGamePage.render()
+        boards.answers.push({ status: 409 })
+        const page = await render()
         await saveGame(page, 1, '11', '5')
         expect(page.stripNote).toBe('Match final. Changes here don’t sync.')
 
@@ -574,12 +562,57 @@ describe('ScoreGame', () => {
 
         expect(page.stripNote).toBeNull()
         expect(page.slotSync(2)).toBe('Synced')
-        expect(ScoreGamePage.serverBoard).toBe(page.hash)
+        expect(landed()).toBe(page.hash)
       })
     })
 
+    it('refreshes the session after a 401, keeps the board, and sends it again', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const page = await render()
+      const sessions = countSessions()
+      boards.answers.push({ status: 401, title: 'The request has no valid session' })
+
+      await saveGame(page, 1, '11', '2')
+
+      expect(landed()).toBeNull()
+      expect(page.stripNote).toBeNull()
+      await waitFor(() => expect(sessions.count).toBe(1))
+
+      await act(() => vi.advanceTimersByTimeAsync(2000))
+      await page.settle()
+
+      expect(boards.pushes).toHaveLength(2)
+      expect(landed()).toBe(page.hash)
+      expect(page.slotSync(1)).toBe('Synced')
+    })
+
+    it('waits for a slow session refresh rather than starting another, and says why after a second 401', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const page = await render()
+      const session = holdSession()
+      boards.answers.push({ status: 401 }, { status: 401 })
+
+      await saveGame(page, 1, '11', '2')
+      await waitFor(() => expect(session.requests).toHaveLength(1))
+      await act(() => vi.advanceTimersByTimeAsync(2000))
+      await waitFor(() => expect(boards.pushes).toHaveLength(2))
+      await page.settle()
+
+      expect(session.requests).toHaveLength(1)
+      expect(page.stripNote).toBe('Not synced yet. Saved on this device.')
+
+      await session.respond(
+        Response.json({ data: { account: { ...sessionResponse.data.account, permissions: ['matches.score'] } } }),
+      )
+      await act(() => vi.advanceTimersByTimeAsync(4000))
+      await page.settle()
+
+      expect(landed()).toBe(page.hash)
+      expect(page.stripNote).toBeNull()
+    })
+
     it('saves at once while offline, and syncs once back online', async () => {
-      const page = await ScoreGamePage.render()
+      const page = await render()
       page.goOffline()
 
       await saveGame(page, 1, '11', '9')
@@ -588,80 +621,69 @@ describe('ScoreGame', () => {
       expect(page.slotScore(1)).toBe('11–9')
       expect(page.slotSync(1)).toBe('Not synced')
       expect(page.stripNote).toBe('Offline. Saved on this device.')
-      expect(ScoreGamePage.serverBoard).toBeNull()
+      expect(boards.pushes).toEqual([])
 
       await page.goOnline()
 
-      expect(ScoreGamePage.serverBoard).toBe(page.hash)
+      expect(landed()).toBe(page.hash)
       expect(page.slotSync(1)).toBe('Synced')
     })
 
     describe('a send that doesn’t get through', () => {
-      const answers = (status: number) => new ApiError('POST /v1/matches/demo/boards', new Response(null, { status }))
-
       beforeEach(() => {
         vi.useFakeTimers({ shouldAdvanceTime: true })
       })
 
       it('shows nothing after one 503, and tries again after 2 seconds', async () => {
-        const page = await ScoreGamePage.render()
-        vi.mocked(putBoard).mockRejectedValueOnce(answers(503))
+        const page = await render()
+        boards.answers.push({ status: 503 })
 
         await saveGame(page, 1, '11', '4')
 
         expect(page.stripNote).toBeNull()
         expect(page.slotSync(1)).toBeNull()
-        expect(ScoreGamePage.serverBoard).toBeNull()
+        expect(landed()).toBeNull()
 
         await act(() => vi.advanceTimersByTimeAsync(2000))
         await page.settle()
 
-        expect(ScoreGamePage.serverBoard).toBe(page.hash)
+        expect(landed()).toBe(page.hash)
       })
 
       it.each([502, 503, 504])('says the server is failing, not offline, after a second %i', async (status) => {
-        const page = await ScoreGamePage.render()
-        vi.mocked(putBoard).mockRejectedValueOnce(answers(status)).mockRejectedValueOnce(answers(status))
+        const page = await render()
+        boards.answers.push({ status }, { status })
 
         await saveGame(page, 1, '11', '4')
         await act(() => vi.advanceTimersByTimeAsync(2000))
         await page.settle()
 
-        expect(putBoard).toHaveBeenCalledTimes(2)
+        expect(boards.pushes).toHaveLength(2)
         expect(page.slotSync(1)).toBe('Not synced')
         expect(page.stripNote).toBe('Not synced yet. Saved on this device.')
       })
 
       it('counts failures only in a row, so a refusal starts the count again', async () => {
         vi.spyOn(console, 'warn').mockImplementation(() => {})
-        const page = await ScoreGamePage.render()
-        vi.mocked(putBoard).mockRejectedValueOnce(answers(503)).mockRejectedValueOnce(answers(422))
+        const page = await render()
+        boards.answers.push({ status: 503 }, { status: 422 })
         await saveGame(page, 1, '11', '4')
         await act(() => vi.advanceTimersByTimeAsync(2000))
         await page.settle()
-        vi.mocked(putBoard).mockRejectedValueOnce(answers(503))
+        boards.answers.push({ status: 503 })
 
         await saveGame(page, 2, '11', '6')
 
-        expect(putBoard).toHaveBeenCalledTimes(3)
+        expect(boards.pushes).toHaveLength(3)
         expect(page.stripNote).toBe('Not synced. Saved on this device.')
       })
 
       describe('a 429', () => {
-        // Made at the send, as the API's answer would be, so Retry-After
-        // counts from then.
         const rateLimitNextSend = (retryAfter?: string) =>
-          vi.mocked(putBoard).mockImplementationOnce(() =>
-            Promise.reject(
-              new ApiError(
-                'POST /v1/matches/demo/boards',
-                new Response(null, { status: 429, headers: retryAfter ? { 'Retry-After': retryAfter } : {} }),
-              ),
-            ),
-          )
+          boards.answers.push({ status: 429, headers: retryAfter ? { 'Retry-After': retryAfter } : {} })
 
         it('waits out its Retry-After, whatever wakes the page', async () => {
-          const page = await ScoreGamePage.render()
+          const page = await render()
           rateLimitNextSend('60')
 
           await saveGame(page, 1, '11', '4')
@@ -672,60 +694,58 @@ describe('ScoreGame', () => {
           act(() => window.dispatchEvent(new Event('pageshow')))
           await act(() => vi.advanceTimersByTimeAsync(59_000))
 
-          expect(putBoard).toHaveBeenCalledTimes(1)
+          expect(boards.pushes).toHaveLength(1)
 
           await act(() => vi.advanceTimersByTimeAsync(1000))
           await page.settle()
 
-          expect(putBoard).toHaveBeenCalledTimes(2)
-          expect(ScoreGamePage.serverBoard).toBe(page.hash)
+          expect(boards.pushes).toHaveLength(2)
+          expect(landed()).toBe(page.hash)
         })
 
         it('waits no more than 5 minutes', async () => {
-          const page = await ScoreGamePage.render()
+          const page = await render()
           rateLimitNextSend('600')
 
           await saveGame(page, 1, '11', '4')
           await act(() => vi.advanceTimersByTimeAsync(299_000))
 
-          expect(putBoard).toHaveBeenCalledTimes(1)
+          expect(boards.pushes).toHaveLength(1)
 
           await act(() => vi.advanceTimersByTimeAsync(1000))
 
-          expect(putBoard).toHaveBeenCalledTimes(2)
+          await waitFor(() => expect(boards.pushes).toHaveLength(2))
         })
 
         it('waits the backoff without a Retry-After', async () => {
-          const page = await ScoreGamePage.render()
+          const page = await render()
           rateLimitNextSend()
 
           await saveGame(page, 1, '11', '4')
           await act(() => vi.advanceTimersByTimeAsync(1000))
 
-          expect(putBoard).toHaveBeenCalledTimes(1)
+          expect(boards.pushes).toHaveLength(1)
 
           await act(() => vi.advanceTimersByTimeAsync(1000))
 
-          expect(putBoard).toHaveBeenCalledTimes(2)
+          await waitFor(() => expect(boards.pushes).toHaveLength(2))
         })
       })
 
       it('sends at once when the browser comes back online during a backoff', async () => {
-        const page = await ScoreGamePage.render()
-        vi.mocked(putBoard).mockRejectedValueOnce(answers(503))
+        const page = await render()
+        boards.answers.push({ status: 503 })
         await saveGame(page, 1, '11', '4')
 
         await page.goOnline()
 
-        expect(putBoard).toHaveBeenCalledTimes(2)
-        expect(ScoreGamePage.serverBoard).toBe(page.hash)
+        expect(boards.pushes).toHaveLength(2)
+        expect(landed()).toBe(page.hash)
       })
 
       it('says offline when no response came back', async () => {
-        const page = await ScoreGamePage.render()
-        vi.mocked(putBoard).mockRejectedValueOnce(
-          new ApiUnreachable('POST /v1/matches/demo/boards', { cause: new TypeError('Failed to fetch') }),
-        )
+        const page = await render()
+        boards.answers.push('unreachable')
 
         await saveGame(page, 1, '11', '4')
 
@@ -736,10 +756,10 @@ describe('ScoreGame', () => {
 
     it('never changes its pad for another device’s board', async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true })
-      const page = await ScoreGamePage.render()
+      const page = await render()
       await saveGame(page, 1, '11', '3')
       const mine = page.hash
-      ScoreGamePage.otherDeviceSyncs(draftHash(match, [[2, 11], [11, 9]], null, nowSeconds() + 60))
+      boards.store(scored.id, draftHash(scored, [[2, 11], [11, 9]], null, nowSeconds() + 60))
 
       await act(() => vi.advanceTimersByTimeAsync(30_000))
       await page.goOnline()
@@ -749,18 +769,19 @@ describe('ScoreGame', () => {
       expect(page.slotScore(2)).toBe('–')
     })
 
-    it('keeps an empty pad while the server holds a board', async () => {
-      ScoreGamePage.otherDeviceSyncs(boardFrom([[11, 3], [5, 11]], 30))
+    it('keeps an empty pad while the API holds a board', async () => {
+      boards.store(scored.id, draftHash(scored, [[11, 3], [5, 11]], null, nowSeconds() - 30))
 
-      const page = await ScoreGamePage.render()
+      const page = await render()
+      const opened = page.hash
       await page.goOnline()
 
-      expect(page.hash).toBe('')
+      expect(page.hash).toBe(opened)
       expect(page.slotScore(1)).toBe('–')
     })
 
     it('syncs a board saved offline when the page comes back without an online event', async () => {
-      const page = await ScoreGamePage.render()
+      const page = await render()
       page.goOffline()
       await saveGame(page, 1, '11', '7')
 
@@ -769,12 +790,12 @@ describe('ScoreGame', () => {
       act(() => document.dispatchEvent(new Event('visibilitychange')))
       await page.settle()
 
-      expect(ScoreGamePage.serverBoard).toBe(page.hash)
+      expect(landed()).toBe(page.hash)
       expect(page.slotSync(1)).toBe('Synced')
     })
 
     it('syncs a board saved offline after the scoring page has closed', async () => {
-      const page = await ScoreGamePage.render()
+      const page = await render()
       page.goOffline()
       await saveGame(page, 1, '11', '5')
       const saved = page.hash
@@ -782,19 +803,34 @@ describe('ScoreGame', () => {
       await act(() => page.router.navigate({ to: '/' }))
       await page.goOnline()
 
-      await waitFor(() => expect(ScoreGamePage.serverBoard).toBe(saved))
+      await waitFor(() => expect(landed()).toBe(saved))
     })
 
     it('syncs the submitted result for whoever watches', async () => {
-      const page = await ScoreGamePage.render(`${EDIT}/3/edit#${draft([[11, 5], [11, 9]])}`)
+      const page = await render([[11, 5], [11, 9]], 3)
       await page.waitForKey()
       await page.enter({ [ME]: '11', [OPPONENT]: '2' })
 
       await page.click('Submit result')
-      await page.waitForPath('/matches/demo/scores/submission')
+      await page.waitForPath(`/matches/${scored.id}/scores/submission`)
 
-      await waitFor(() => expect(ScoreGamePage.serverBoard).toBe(page.hash))
+      await waitFor(() => expect(landed()).toBe(page.hash))
       expect(decodeEnvelope(fromBase64url(page.hash)).signatures).toHaveLength(1)
     })
   })
 })
+
+// Counts the session requests from now on, each answered with the default
+// guest holding `matches.score`.
+function countSessions() {
+  const sessions = { count: 0 }
+  server.use(
+    http.post(`${API_BASE_URL}/v1/session`, () => {
+      sessions.count += 1
+      return HttpResponse.json({
+        data: { account: { ...sessionResponse.data.account, permissions: ['matches.score'] } },
+      })
+    }),
+  )
+  return sessions
+}
