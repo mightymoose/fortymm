@@ -76,6 +76,12 @@ describe('keepScoreTarget', () => {
     expect(keepScoreTarget(detail(status, [[11, 5], [11, 7]]), AT)).toBeNull()
   })
 
+  it('opens nothing for a match whose players were merged into one', () => {
+    const match = detail({ kind: 'live' }, [[11, 5]])
+    const merged: MatchDetail = { ...match, players: [match.players[0], { ...match.players[1], id: PLAYERS[0] }] }
+    expect(keepScoreTarget(merged, AT)).toBeNull()
+  })
+
   it('keeps no more games than the best of', () => {
     expect(opened(detail({ kind: 'live' }, [[11, 5], [11, 7]], 1))).toEqual({
       gameNumber: '1',

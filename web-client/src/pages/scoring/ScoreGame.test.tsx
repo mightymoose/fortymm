@@ -436,6 +436,16 @@ describe('ScoreGame', () => {
         expect(page.pathname).toBe(`/matches/${id}`)
       })
 
+      it('opens the match’s page when its players were merged into one', async () => {
+        const merged = served([[11, 3]])
+        merged.sides[1].players[0].id = crane
+        mockMatchReads([merged])
+        grantSession('matches.view')
+        const page = await ScoreGamePage.render(`/matches/${id}/scores/game/1/edit`)
+
+        expect(page.pathname).toBe(`/matches/${id}`)
+      })
+
       it('shows the not-found page when no match has the id', async () => {
         mockMatchReads([])
         const page = await ErrorPage.render(`/matches/${id}/scores/game/1/edit`)

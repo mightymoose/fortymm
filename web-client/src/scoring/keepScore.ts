@@ -7,10 +7,12 @@ import { apiMatch } from './matches'
 // fragment for it: the first game with no score, and a draft of the
 // server's games, as Start would have built it. A pending result's draft
 // names it in `replaces`, so the other side's approval of the correction
-// is taken, not refused as stale. A final match opens nowhere.
+// is taken, not refused as stale. A final match opens nowhere, and nor
+// does one whose players were merged into one, as no result can name the
+// same player on both sides.
 export function keepScoreTarget(match: MatchDetail, issuedAt: number): { gameNumber: string; hash: string } | null {
   const { status } = match
-  if (status.kind === 'final') return null
+  if (status.kind === 'final' || match.players[0].id === match.players[1].id) return null
   // A board may hold a game in play, and a fragment holds only final scores.
   const end = match.games.findIndex((game) => !finished(game))
   const games: GamePoints[] = match.games
