@@ -515,7 +515,9 @@ describe('ScoreGame', () => {
 
       it('says to open the match with signal when the API holds the request for 8 seconds', async () => {
         vi.useFakeTimers({ shouldAdvanceTime: true })
-        onTestFinished(() => vi.useRealTimers())
+        onTestFinished(() => {
+          vi.useRealTimers()
+        })
         const api = mockMatchReads([served([[11, 3]])])
         api.hold = true
         const page = await ScoreGamePage.renderLoading(`/matches/${id}/scores/game/1/edit`)
