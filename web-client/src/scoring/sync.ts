@@ -34,6 +34,17 @@ export type SyncStatus = {
 
 const IDLE: SyncStatus = { sending: false, stuck: null, refused: null, landed: 0 }
 
+// Where a match with no sync stands: idle, but still saying why the server
+// last refused its board. One object per answer, so the snapshot is stable.
+const IDLE_REFUSED: Record<Refusal, SyncStatus> = {
+  final: { ...IDLE, refused: 'final' },
+  other: { ...IDLE, refused: 'other' },
+}
+function idleStatus(matchId: string): SyncStatus {
+  const { refused } = boardsOf(matchId)
+  return refused ? IDLE_REFUSED[refused] : IDLE
+}
+
 const RETRY_MS = [2000, 4000, 8000, 15000, 30000]
 
 export function retryDelay(failures: number): number {
@@ -281,14 +292,20 @@ export function useAppSync(api: ApiClient, refresh: () => void): void {
 }
 
 // Syncs the match while the calling page is mounted, and returns where the
-// sync stands. A match that isn't `enabled` holds nothing and stays idle.
+// sync stands. A match that isn't `enabled` holds nothing and stays idle,
+// but still shows a refusal, such as a 403 that took away its permission
+// to sync.
 export function useBoardSync(matchId: string, enabled: boolean, api: ApiClient): SyncStatus {
   useEffect(() => (enabled ? hold(matchId, api) : undefined), [matchId, enabled, api])
   return useSyncExternalStore(
     (listener) => {
       statusListeners.add(listener)
-      return () => statusListeners.delete(listener)
+      const unsubscribe = subscribeBoards(listener)
+      return () => {
+        statusListeners.delete(listener)
+        unsubscribe()
+      }
     },
-    () => (enabled ? (syncs.get(matchId)?.status ?? IDLE) : IDLE),
+    () => (enabled ? (syncs.get(matchId)?.status ?? idleStatus(matchId)) : idleStatus(matchId)),
   )
 }

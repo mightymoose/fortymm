@@ -511,6 +511,26 @@ describe('ScoreGame', () => {
         await waitFor(() => expect(sessions.count).toBe(1))
       })
 
+      it('still says why after a 403 whose session refresh takes away matches.score', async () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const page = await render()
+        const sessions = { count: 0 }
+        server.use(
+          http.post(`${API_BASE_URL}/v1/session`, () => {
+            sessions.count += 1
+            return HttpResponse.json({ data: { account: { ...sessionResponse.data.account, permissions: [] } } })
+          }),
+        )
+        boards.answers.push({ status: 403, title: 'You can’t score this match' })
+
+        await saveGame(page, 1, '11', '2')
+        await waitFor(() => expect(sessions.count).toBe(1))
+        await page.settle()
+
+        expect(page.stripNote).toBe('Not synced. Saved on this device.')
+        expect(page.slotSync(1)).not.toBe('Synced')
+      })
+
       it('warns with the status and title of a 422', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
         boards.answers.push({ status: 422, title: 'The board isn’t a valid result' })

@@ -119,7 +119,8 @@ The scoring pages, the URL fragment, board sync and the result pages.
   request is still on its way joins it (`sessionQuery()`), so two never
   go at once and start a second guest account. Any other 4xx is a refusal. It drops the board, which is never sent
   again and never shows as synced, and keeps why in `refused` until a
-  later board lands, even after the sync stops. A 409 reads as a final
+  later board lands, even after the sync stops, and even when the
+  account may no longer sync, as after a 403. A 409 reads as a final
   match. Any other refusal is logged with `console.warn`, and a 403
   also refreshes the session through the callback `Root` gives
   `useAppSync()`, in case a permission was taken away. `useAppSync()` runs in `Root`, on every
