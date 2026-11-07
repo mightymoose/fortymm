@@ -534,6 +534,36 @@ describe('ScoreGame', () => {
         expect(warn).toHaveBeenCalledWith(expect.any(String), 422, 'The board isn’t a valid result')
       })
 
+      it('still says why after the person leaves and comes back', async () => {
+        refuseNextSend(409, 'The match is final')
+        const page = await ScoreGamePage.render()
+        await saveGame(page, 1, '11', '4')
+
+        await act(() => page.router.navigate({ to: '/' }))
+        await act(() => page.router.navigate({ href: `${EDIT}/1/edit#${page.hash}` }))
+        await page.settle()
+
+        expect(page.stripNote).toBe('Match final. Changes here don’t sync.')
+      })
+
+      it('says why a board refused with the scoring page closed', async () => {
+        const page = await ScoreGamePage.render()
+        page.goOffline()
+        await saveGame(page, 1, '11', '6')
+        const saved = page.hash
+        refuseNextSend(422, 'The board isn’t a valid result')
+        vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+        await act(() => page.router.navigate({ to: '/' }))
+        await page.goOnline()
+        await waitFor(() => expect(putBoard).toHaveBeenCalledTimes(1))
+        await waitFor(() => expect(console.warn).toHaveBeenCalled())
+        await act(() => page.router.navigate({ href: `${EDIT}/2/edit#${saved}` }))
+        await page.settle()
+
+        expect(page.stripNote).toBe('Not synced. Saved on this device.')
+      })
+
       it('clears its note once a later save lands, and shows that game as synced', async () => {
         refuseNextSend(409, 'The match is final')
         const page = await ScoreGamePage.render()

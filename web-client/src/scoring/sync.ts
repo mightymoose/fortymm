@@ -1,6 +1,6 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { ApiError, classifyFailure } from '../api/errors'
-import { acknowledge, boardsOf, dropBoard, matchesWithPending, subscribeBoards } from './boards'
+import { acknowledge, boardsOf, dropBoard, matchesWithPending, subscribeBoards, type Refusal } from './boards'
 import { putBoard } from './demoServer'
 
 // Sends a match's board to the server in the background, so spectators and
@@ -20,8 +20,9 @@ export type SyncStatus = {
   sending: boolean
   // Why the last send didn't get through, until one does.
   stuck: 'offline' | 'failed' | null
-  // Why the server last refused a board, until it takes one.
-  refused: 'final' | 'other' | null
+  // Why the server last refused a board, until it takes one. It outlasts
+  // the sync, so a refusal sent with the scoring page closed still shows.
+  refused: Refusal | null
   // How many boards the server took while this sync lived. A game that
   // stops being unsynced with no rise here was dropped, not synced.
   landed: number
@@ -63,7 +64,6 @@ class MatchSync {
   holders = 0
   private state: State = { kind: 'idle' }
   private stuck: SyncStatus['stuck'] = null
-  private refused: SyncStatus['refused'] = null
   private landed = 0
   private failures = 0
   private readonly unsubscribe: () => void
@@ -106,7 +106,7 @@ class MatchSync {
     this.status = {
       sending: state.kind === 'sending',
       stuck: this.stuck,
-      refused: this.refused,
+      refused: boardsOf(this.matchId).refused,
       landed: this.landed,
     }
     for (const listener of statusListeners) listener()
@@ -155,7 +155,6 @@ class MatchSync {
     if (!this.isIn(sending)) return
     this.failures = 0
     this.stuck = null
-    this.refused = null
     // The rise and the acknowledge must reach the strip in one render, so
     // nothing may await between them.
     this.landed += 1
@@ -168,11 +167,11 @@ class MatchSync {
   private refuse(board: string, error: ApiError): void {
     // The boards route also answers 409 when the board's players or rules
     // differ from the server's match, which only a hand-edited link reaches.
-    this.refused = error.status === 409 ? 'final' : 'other'
-    if (this.refused === 'other') console.warn('The server refused a board', error.status, error.title)
+    const refused = error.status === 409 ? 'final' : 'other'
+    if (refused === 'other') console.warn('The server refused a board', error.status, error.title)
     if (error.status === 403) onForbidden()
     this.enter({ kind: 'idle' })
-    dropBoard(this.matchId, board)
+    dropBoard(this.matchId, board, refused)
     void this.step()
   }
 }

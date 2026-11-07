@@ -3,12 +3,14 @@ import type { GamePoints } from './board'
 // What this tab knows about each match's board on the server. A board is a
 // fragment's text: empty, a draft payload or an envelope. `pending` is the
 // newest board this tab saved that the server hasn't taken yet, and
-// `synced` the last board the server took from this tab.
-// Both stay in memory, because sync is best effort and the URL keeps the
+// `synced` the last board the server took from this tab. `refused` is why
+// the server last refused one, until it takes one.
+// All stay in memory, because sync is best effort and the URL keeps the
 // scores: a reload forgets an unsent board.
-export type Boards = { pending: string | null; synced: string | null }
+export type Refusal = 'final' | 'other'
+export type Boards = { pending: string | null; synced: string | null; refused: Refusal | null }
 
-const NOTHING: Boards = { pending: null, synced: null }
+const NOTHING: Boards = { pending: null, synced: null, refused: null }
 
 const boards = new Map<string, Boards>()
 const listeners = new Set<() => void>()
@@ -35,12 +37,13 @@ export function saveBoard(matchId: string, text: string): void {
 // The server took `text`. A board saved after it still waits.
 export function acknowledge(matchId: string, text: string): void {
   const { pending } = boardsOf(matchId)
-  update(matchId, { synced: text, pending: pending === text ? null : pending })
+  update(matchId, { synced: text, pending: pending === text ? null : pending, refused: null })
 }
 
 // The server refused `text` for good, so sending it again can't help.
-export function dropBoard(matchId: string, text: string): void {
-  if (boardsOf(matchId).pending === text) update(matchId, { pending: null })
+export function dropBoard(matchId: string, text: string, refused: Refusal): void {
+  const { pending } = boardsOf(matchId)
+  update(matchId, { pending: pending === text ? null : pending, refused })
 }
 
 export function forgetBoards(): void {

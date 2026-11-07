@@ -6,7 +6,7 @@ describe('the boards this tab keeps', () => {
     saveBoard('m1', 'a')
     saveBoard('m1', 'b')
 
-    expect(boardsOf('m1')).toEqual({ pending: 'b', synced: null })
+    expect(boardsOf('m1')).toEqual({ pending: 'b', synced: null, refused: null })
     expect(matchesWithPending()).toBe('m1')
   })
 
@@ -15,24 +15,36 @@ describe('the boards this tab keeps', () => {
     saveBoard('m2', 'b')
     acknowledge('m2', 'a')
 
-    expect(boardsOf('m2')).toEqual({ pending: 'b', synced: 'a' })
+    expect(boardsOf('m2')).toEqual({ pending: 'b', synced: 'a', refused: null })
 
     acknowledge('m2', 'b')
 
-    expect(boardsOf('m2')).toEqual({ pending: null, synced: 'b' })
+    expect(boardsOf('m2')).toEqual({ pending: null, synced: 'b', refused: null })
     expect(matchesWithPending()).toBe('')
   })
 
   it('drops a refused board only if nothing newer replaced it', () => {
     saveBoard('m3', 'a')
     saveBoard('m3', 'b')
-    dropBoard('m3', 'a')
+    dropBoard('m3', 'a', 'other')
 
     expect(boardsOf('m3').pending).toBe('b')
 
-    dropBoard('m3', 'b')
+    dropBoard('m3', 'b', 'final')
 
-    expect(boardsOf('m3')).toEqual({ pending: null, synced: null })
+    expect(boardsOf('m3')).toEqual({ pending: null, synced: null, refused: 'final' })
+  })
+
+  it('keeps why a board was refused until a later one lands', () => {
+    saveBoard('m4', 'a')
+    dropBoard('m4', 'a', 'other')
+    saveBoard('m4', 'b')
+
+    expect(boardsOf('m4').refused).toBe('other')
+
+    acknowledge('m4', 'b')
+
+    expect(boardsOf('m4').refused).toBeNull()
   })
 })
 
