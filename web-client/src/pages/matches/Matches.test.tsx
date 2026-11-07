@@ -2,6 +2,7 @@ import { act, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { components } from '../../api/schema'
 import { MatchesPage } from '../../test/pages/MatchesPage'
+import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
 import { grantSession, mockMatchReads } from '../../test/server'
 import { formatTime } from './browse/match'
 
@@ -33,6 +34,7 @@ function match(
     retired_by: null,
     state: { kind: 'not_started' },
     history: [],
+    result_hash: null,
     ...rest,
   }
 }
@@ -385,8 +387,109 @@ describe('A match', () => {
 
     expect(page.text('Not started')).toBeInTheDocument()
     expect(page.text('No scores yet.')).toBeInTheDocument()
-    expect(page.button('Keep score')).toBeInTheDocument()
+    expect(page.link('Keep score')).toHaveAttribute('href', `/matches/${notStarted.id}/scores/game/1/edit`)
     expect(page.signatures()).toEqual(['Signs when the match ends', 'Signs when the match ends'])
+  })
+
+  const scoredAwaiting = (you: 0 | 1) =>
+    match(['Meera Okafor', ALEX], {
+      you,
+      best_of: 3,
+      games: [[11, 6], [8, 11]],
+      state: { kind: 'awaiting', signed_by: 0, signed_at: '2026-11-05T18:41:00Z' },
+      result_hash: '07'.repeat(32),
+    })
+  const disputedFor = (you?: 0 | 1) =>
+    match(['Thanh Nguyen', 'Rashid Ali'], {
+      you,
+      best_of: 3,
+      games: [[11, 9], [7, 11]],
+      state: { kind: 'disputed', signed_by: 1, signed_at: '2026-11-03T19:40:00Z', their_games: [[11, 9], [11, 7]] },
+      result_hash: '07'.repeat(32),
+    })
+
+  it.each([
+    ['the player who hasn’t signed corrects an awaiting result', scoredAwaiting(1), 'Enter different scores'],
+    ['the player who signed keeps score of an awaiting result', scoredAwaiting(0), 'Keep score'],
+    ['a player of a disputed match corrects it', disputedFor(0), 'Correct and sign again'],
+    ['a spectator keeps score of a disputed match', disputedFor(), 'Keep score'],
+  ])('%s from the match page, at the first game with no score', async (_, shown, label) => {
+    api = mockMatchReads([shown])
+    const page = await MatchesPage.render(`/matches/${shown.id}`)
+    await waitFor(() => expect(page.title).toHaveTextContent(name(shown)))
+
+    expect(page.link(label)).toHaveAttribute('href', `/matches/${shown.id}/scores/game/${shown.games.length + 1}/edit`)
+  })
+
+  describe('Keep score', () => {
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it('opens the server’s games, not an older read the page cached', async () => {
+      const scored = match(['Giulia Rossi', 'Youssef Haddad'], { games: [[11, 4]], state: { kind: 'live' } })
+      api = mockMatchReads([scored])
+      const page = await MatchesPage.render(`/matches/${scored.id}`)
+      await waitFor(() => expect(page.title).toHaveTextContent(name(scored)))
+      scored.games = [[11, 4], [9, 11]]
+
+      await page.follow('Keep score')
+
+      const scoring = new ScoreGamePage(page.router)
+      await waitFor(() => expect(scoring.heading).toHaveTextContent('Game 3'))
+      expect(scoring.slotScore(1)).toBe('11–4')
+      expect(scoring.slotScore(2)).toBe('9–11')
+    })
+
+    it('rebuilds a scoring URL with no fragment from the read the page cached, with no network', async () => {
+      api = mockMatchReads([betweenGames])
+      const page = await MatchesPage.render(`/matches/${betweenGames.id}`)
+      await waitFor(() => expect(page.title).toHaveTextContent(name(betweenGames)))
+      page.setOnline(false)
+
+      await act(() =>
+        page.router.navigate({ href: `/matches/${betweenGames.id}/scores/game/1/edit` }),
+      )
+
+      const scoring = new ScoreGamePage(page.router)
+      await waitFor(() => expect(scoring.heading).toHaveTextContent('Game 3'))
+      expect(scoring.slotScore(1)).toBe('11–4')
+      expect(scoring.slotScore(2)).toBe('11–9')
+      page.setOnline(true)
+    })
+
+    it('carries the page’s games only while the browser is offline', async () => {
+      api = mockMatchReads([betweenGames])
+      const page = await MatchesPage.render(`/matches/${betweenGames.id}`)
+      await waitFor(() => expect(page.title).toHaveTextContent(name(betweenGames)))
+      const path = `/matches/${betweenGames.id}/scores/game/3/edit`
+      expect(page.link('Keep score')).toHaveAttribute('href', path)
+
+      page.setOnline(false)
+      expect(page.link('Keep score').getAttribute('href')).toMatch(new RegExp(`^${path}#.+`))
+
+      page.setOnline(true)
+      expect(page.link('Keep score')).toHaveAttribute('href', path)
+    })
+
+    it('isn’t offered for a match whose players were merged into one, which still shows', async () => {
+      const merged = match(['Giulia Rossi', 'Youssef Haddad'], { games: [[11, 4]], state: { kind: 'live' } })
+      merged.sides[1].players[0].id = merged.sides[0].players[0].id
+      api = mockMatchReads([merged])
+      const page = await MatchesPage.render(`/matches/${merged.id}`)
+      await waitFor(() => expect(page.title).toHaveTextContent(name(merged)))
+
+      expect(page.games()).toEqual(['Game 1 11–4 Giulia Rossi won'])
+      expect(page.text('Keep score')).toBeNull()
+    })
+  })
+
+  it('offers no Keep score once the result is final', async () => {
+    const page = await MatchesPage.render(`/matches/${approved.id}`)
+    await waitFor(() => expect(page.title).toHaveTextContent(name(approved)))
+
+    expect(page.text('Keep score')).toBeNull()
+    expect(page.button('Share result')).toBeInTheDocument()
   })
 
   it('says both players approved a final result', async () => {

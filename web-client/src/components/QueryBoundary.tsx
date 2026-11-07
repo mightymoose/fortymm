@@ -35,7 +35,7 @@ export function QueryBoundary({
   )
 }
 
-function QueryError({
+export function QueryError({
   error,
   onRetry,
   actions,

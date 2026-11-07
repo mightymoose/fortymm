@@ -12,7 +12,7 @@ type SessionAccount = components['schemas']['SessionAccount']
 // page works it out from the session on each render: a saved account can
 // stand in for the session until the API answers with another player. A
 // match the API made is the same for everyone.
-type ScoringMatch = { kind: 'demo'; id: string } | { kind: 'api'; match: Match }
+export type ScoringMatch = { kind: 'demo'; id: string } | { kind: 'api'; match: Match }
 
 const DEMO_IDS = new Set(['demo', 'demo-spectator'])
 
@@ -21,9 +21,17 @@ const DEMO_IDS = new Set(['demo', 'demo-spectator'])
 // no request, which works with no network. A fragment that is empty,
 // can't be read or names another match throws notFound().
 export function scoringMatch(matchId: string, hash: string): ScoringMatch {
+  const carried = carriedMatch(matchId, hash)
+  if (!carried) throw notFound()
+  return carried
+}
+
+// The match the fragment carries, or null when it carries none for
+// `matchId`.
+export function carriedMatch(matchId: string, hash: string): ScoringMatch | null {
   if (DEMO_IDS.has(matchId)) return { kind: 'demo', id: matchId }
   const carried = fragmentResult(hash)
-  if (carried?.match !== matchId) throw notFound()
+  if (carried?.match !== matchId) return null
   return { kind: 'api', match: apiMatch(matchId, carried.bestOf, carried.rated, carried.players) }
 }
 

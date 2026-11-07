@@ -1377,6 +1377,8 @@ export interface components {
             state: components["schemas"]["NotStartedState"] | components["schemas"]["LiveState"] | components["schemas"]["AwaitingState"] | components["schemas"]["DisputedState"] | components["schemas"]["FinalState"];
             /** History */
             history: components["schemas"]["MatchEvent"][];
+            /** Result Hash */
+            result_hash: string | null;
         };
         /** MatchDetailResponse */
         MatchDetailResponse: {

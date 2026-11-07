@@ -1,10 +1,11 @@
-import { cleanup, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, screen, waitFor } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { HomePage } from '../../test/pages/HomePage'
+import { MatchesPage } from '../../test/pages/MatchesPage'
 import { NewMatchPage } from '../../test/pages/NewMatchPage'
 import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
-import { API_BASE_URL, mockMatches, server, sessionResponse } from '../../test/server'
+import { API_BASE_URL, grantSession, mockMatches, server, sessionResponse } from '../../test/server'
 
 const self = sessionResponse.data.account.player
 const badger = { id: '6f1d2c43-8b5e-4a0f-9c71-2e4b8d0a5f13', display_name: 'brave badger 214' }
@@ -179,6 +180,36 @@ describe('NewMatch', () => {
     const scores = new ScoreGamePage(page.router)
     expect(await screen.findByRole('heading', { level: 1, name: 'Game 1' })).toBeInTheDocument()
     expect(scores.sides).toEqual(['You', 'Your opponent'])
+  })
+
+  it('opens the match afresh with Back from game 1, not a read made before its board', async () => {
+    mockMatches({ recent: [badger] })
+    grantSession('matches.create', 'matches.view')
+    let hold = false
+    let answer = () => {}
+    server.use(
+      http.get<{ matchId: string }>(`${API_BASE_URL}/v1/matches/:matchId`, async ({ params }) => {
+        if (params.matchId === 'opponents') return undefined
+        if (hold) await new Promise<void>((resolve) => (answer = resolve))
+        return HttpResponse.json({ errors: [{ status: '404', title: 'No match has this id' }] }, { status: 404 })
+      }),
+    )
+    const page = await NewMatchPage.render()
+    await page.findRecent()
+    await page.pick(badger.display_name)
+    await page.start()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Game 1' })).toBeInTheDocument()
+    const id = page.pathname.split('/')[2]
+    // Time for a read the match page started on the way to land.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    hold = true
+    await act(async () => page.router.history.back())
+
+    const match = new MatchesPage(page.router)
+    await waitFor(() => expect(match.path).toBe(`/matches/${id}`))
+    expect(match.loading).toBeInTheDocument()
+    await act(async () => answer())
   })
 
   it('opens the scores of the match it made from the URL alone when a reload can’t reach the API', async () => {

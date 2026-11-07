@@ -4,7 +4,7 @@ export type Side = 0 | 1
 export type GameScore = readonly [number, number]
 export type BestOf = 1 | 3 | 5 | 7
 
-export type MatchPlayer = { name: string; you: boolean }
+export type MatchPlayer = { id: string; name: string; you: boolean }
 
 // One step in the match's history. `games` are the scores it carried, side
 // 0's points first, and `side` the side a signature was for.
@@ -42,7 +42,12 @@ export type MatchRecord = {
   status: MatchStatus
 }
 
-export type MatchDetail = MatchRecord & { history: readonly MatchEvent[] }
+// `resultHash` is the SHA-256 of the result nothing replaces yet, which a
+// correction names in `replaces`, or null before any result.
+export type MatchDetail = MatchRecord & {
+  history: readonly MatchEvent[]
+  resultHash: Uint8Array<ArrayBuffer> | null
+}
 
 export const other = (side: Side): Side => (side === 0 ? 1 : 0)
 

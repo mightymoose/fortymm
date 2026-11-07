@@ -4101,6 +4101,14 @@
             },
             "type": "array",
             "title": "History"
+          },
+          "result_hash": {
+            "pattern": "^(?:[0-9a-f]{2})*$",
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Result Hash"
           }
         },
         "type": "object",
@@ -4114,7 +4122,8 @@
           "games",
           "retired_by",
           "state",
-          "history"
+          "history",
+          "result_hash"
         ],
         "title": "MatchDetail"
       },

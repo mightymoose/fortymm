@@ -68,6 +68,7 @@ function apiMatch(names: [string, string], fields: Partial<MatchDetail> = {}): M
     retired_by: null,
     state: { kind: 'awaiting', signed_by: 0, signed_at: '2026-11-07T19:30:00Z' },
     history: [],
+    result_hash: null,
     ...fields,
   }
 }

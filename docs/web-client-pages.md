@@ -81,9 +81,26 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   that replaces the other side's pending one reads "Signed different
   scores". An id that isn't a uuid, or one the API answers 404 to, shows
   "No such match". The first sends no request.
+- Until the match is final, the page links to its scores. The link is
+  Keep score, except Enter different scores for the player an awaiting
+  result waits on, and Correct and sign again for either player of a
+  disputed match. `keepScoreTarget()` (`src/scoring/keepScore.ts`)
+  builds the link from the match the page loaded: the first game with no
+  score, and a draft of the API's finished games, which names the head's
+  `result_hash` in `replaces` once a result is pending. So a player who
+  lost the scoring tab carries on, and the opponent's approval of the
+  correction is taken. Online (`navigator.onLine`, followed through its
+  `online` and `offline` events) the link drops the draft, so the scoring
+  route loads the match again and builds it from the server's board. The
+  page may show a read it cached before more games were saved. A match
+  whose two players were merged into one has no link, as no result can
+  name one player on both sides. The page's other actions, such as Share
+  match and Approve, only say "Not ready yet".
 - `matchesQuery()` and `matchQuery()` (`src/api/queries.ts`) turn the
   API's matches into `MatchRecord` and `MatchDetail` (`browse/match.ts`).
-  The API works out each match's state, and the page only words it. Each
+  The API works out each match's state, and the page only words it. A
+  `MatchPlayer` carries its side's first player's id, and a `MatchDetail`
+  the head's `resultHash`. Each
   loader prefetches its query without waiting for it, so a link's preload
   (hover, focus or touch) loads the data, and the page's own boundary
   shows the skeleton.
@@ -111,9 +128,11 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   press sends `POST /v1/matches` with a UUIDv7 (`uuidv7()` in
   `src/api/uuidv7.ts`). A press with the same details as the last one
   sends its id again, so a retry after a lost response finds the match
-  the first press made. Then the page opens game 1 of the match's
-  scores, with a draft of no games as the fragment, so the scores open
-  with no network. Nothing caches the match. A 422 shows the API's
+  the first press made. Then it replaces itself with the match's page and
+  opens game 1 of the match's scores, with a draft of no games as the
+  fragment, so the scores open with no network. Back from game 1 then
+  opens the match, not this form, whose Start would make a second match
+  (#302). Nothing caches the match. A 422 shows the API's
   title and loads the opponents again, since a player may have merged.
   A create that answers after the person left the page opens nothing. While `navigator.onLine` is false, Start match sends
   nothing, and a request that gets no response is the same. Both say

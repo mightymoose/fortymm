@@ -1,5 +1,6 @@
-import { fireEvent, screen, within } from '@testing-library/react'
+import { act, fireEvent, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { vi } from 'vitest'
 import { renderRoute, type AppRouter } from '../renderRoute'
 
 // Page object for the Matches page and a match's page in unit tests.
@@ -49,6 +50,16 @@ export class MatchesPage {
 
   link(name: string): HTMLElement {
     return screen.getByRole('link', { name })
+  }
+
+  async follow(name: string): Promise<void> {
+    await this.user.click(this.link(name))
+  }
+
+  // Takes the browser offline or back online, as a hall's signal does.
+  setOnline(online: boolean): void {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(online)
+    act(() => window.dispatchEvent(new Event(online ? 'online' : 'offline')))
   }
 
   button(name: string): HTMLElement | null {

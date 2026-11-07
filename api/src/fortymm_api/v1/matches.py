@@ -326,6 +326,9 @@ class MatchEvent(BaseModel):
 class MatchDetail(MatchSummary):
     # Oldest first.
     history: list[MatchEvent]
+    # The SHA-256 of the payload of the result nothing replaces yet, which a
+    # correction names as `replaces`. Null until the match has a result.
+    result_hash: HexBytes | None
 
 
 class MatchesMeta(BaseModel):
@@ -482,6 +485,7 @@ def get_match(
                 )
                 for event in found.history
             ],
+            result_hash=found.result_hash,
         )
     )
 

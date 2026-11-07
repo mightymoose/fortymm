@@ -11,7 +11,7 @@ import type {
   Side,
 } from '../pages/matches/browse/match'
 import { afterEarlierResults, notYet, resultsOf } from '../scoring/results'
-import { hex } from '../signing/bytes'
+import { fromHex, hex } from '../signing/bytes'
 import { registerDeviceKey, takeKey } from '../signing/deviceKey'
 import { base64url } from '../signing/text'
 
@@ -583,6 +583,7 @@ function parseStatus(state: MatchSummary['state']): MatchStatus {
 // every match is singles so far.
 function parseMatch(match: MatchSummary): MatchRecord {
   const player = (side: Side) => ({
+    id: match.sides[side].players[0].id,
     name: match.sides[side].players[0].display_name,
     you: match.viewer_side === side,
   })
@@ -624,6 +625,7 @@ export function matchQuery(api: ApiClient, id: string) {
         return {
           ...parseMatch(data),
           history: data.history.map((event) => ({ ...event, games: gameScores(event.games ?? []) })),
+          resultHash: data.result_hash === null ? null : fromHex(data.result_hash),
         }
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) return null

@@ -296,6 +296,24 @@ guest's phone approves with `context.setOffline()`, and is told to send
 the link back, and the administrator's phone opens what it approved,
 which makes the match final.
 
+Both specs make and read matches through `e2e/matchApi.ts` and approve
+on the guest's phone through `OpponentsPhone` (`e2e/pages/`).
+
+The same file checks that a match whose scoring tab was lost carries on,
+with the same guest, as another would pass the guest account limit. A
+best of 3 started through New
+match saves game 1. Once the API has the board, the scorer goes Home,
+opens the match from Matches and presses Keep score, which opens game 2
+with game 1 kept. It saves game 2 and does it again, with the match
+page's read from before game 2 cached, and Keep score opens game 3 with
+both games. It then submits; the guest approves, and the match is final
+with all three games. Keep score after a submitted result opens a
+correction that names it, whose approval FortyMM takes, not refuses as
+stale.
+A scoring URL with no fragment after a saved board opens the next game
+with the board's game and a fragment. Back from game 1 right after Start
+opens the match's page, and only that match was made.
+
 `e2e/matches-empty.spec.ts` checks the empty Matches page at 390 and
 1280px. Only a database with no match shows it, and the other specs make
 matches, so it is the `empty` project in `playwright.config.ts`, which

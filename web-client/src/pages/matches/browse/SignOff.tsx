@@ -1,10 +1,12 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
-import { useRouteContext } from '@tanstack/react-router'
-import { useState } from 'react'
+import { Link, useRouteContext } from '@tanstack/react-router'
+import { useState, useSyncExternalStore } from 'react'
 import { matchQuery } from '../../../api/queries'
 import { EmptyState } from '../../../components/EmptyState'
 import { Icon } from '../../../components/Icon'
 import { QueryBoundary } from '../../../components/QueryBoundary'
+import { nowSeconds } from '../../../scoring/fragment'
+import { keepScoreTarget } from '../../../scoring/keepScore'
 import {
   eventText,
   finished,
@@ -70,7 +72,13 @@ function LoadedSignOff({ id }: { id: string }) {
   return <DetailSignOff match={match} updatedAt={dataUpdatedAt} />
 }
 
-type Action = { label: string; kind: 'primary' | 'secondary' | 'ghost' }
+// `score` opens the match's scores. `notYet` is an action the app can't
+// do yet.
+type Action = { does: 'score' | 'notYet'; label: string; kind: 'primary' | 'secondary' | 'ghost' }
+
+const keepScore = (label: string, kind: Action['kind']): Action => ({ does: 'score', label, kind })
+const notYet = (label: string, kind: Action['kind']): Action => ({ does: 'notYet', label, kind })
+
 type Situation = {
   // A sentence in the content flow, or an alert for a problem with its fix.
   notice: { icon: 'info' | 'clock' | 'check'; text: string } | null
@@ -93,7 +101,7 @@ function situation(match: MatchRecord): Situation {
       return {
         notice: { icon: 'info', text: 'Anyone can keep score. Only the players sign the result.' },
         alert: null,
-        actions: [{ label: 'Keep score', kind: 'primary' }, { label: 'Share match', kind: 'ghost' }],
+        actions: [keepScore('Keep score', 'primary'), notYet('Share match', 'ghost')],
       }
     case 'awaiting': {
       const signer = name(status.signedBy)
@@ -105,8 +113,8 @@ function situation(match: MatchRecord): Situation {
           notice: { icon: 'clock', text: `${signer} signed these scores at ${at}. Approve them if they’re right.` },
           alert: null,
           actions: [
-            { label: `Approve ${won[mine]}–${won[other(mine)]}`, kind: 'primary' },
-            { label: 'Enter different scores', kind: 'secondary' },
+            notYet(`Approve ${won[mine]}–${won[other(mine)]}`, 'primary'),
+            keepScore('Enter different scores', 'secondary'),
           ],
         }
       }
@@ -114,12 +122,12 @@ function situation(match: MatchRecord): Situation {
         return {
           notice: { icon: 'clock', text: `You signed at ${at}. The result counts once ${name(waiting)} approves it.` },
           alert: null,
-          actions: [{ label: 'Show QR code', kind: 'secondary' }, { label: 'Share result', kind: 'ghost' }],
+          actions: [notYet('Show QR code', 'secondary'), notYet('Share result', 'ghost'), keepScore('Keep score', 'ghost')],
         }
       return {
         notice: { icon: 'clock', text: `${signer} signed at ${at}. The result counts once ${name(waiting)} approves it.` },
         alert: null,
-        actions: [{ label: 'Share match', kind: 'ghost' }],
+        actions: [keepScore('Keep score', 'secondary'), notYet('Share match', 'ghost')],
       }
     }
     case 'disputed': {
@@ -137,7 +145,7 @@ function situation(match: MatchRecord): Situation {
             title: 'The players signed different scores',
             body: `${version(0)}. ${version(1)}. It counts once they both sign the same scores.`,
           },
-          actions: [{ label: 'Share match', kind: 'ghost' }],
+          actions: [keepScore('Keep score', 'secondary'), notYet('Share match', 'ghost')],
         }
       const them = name(other(mine))
       return {
@@ -146,10 +154,7 @@ function situation(match: MatchRecord): Situation {
           title: `${them} signed different scores`,
           body: `${version(mine)}. ${version(other(mine))}. It counts once you both sign the same scores.`,
         },
-        actions: [
-          { label: `Approve ${them}’s scores`, kind: 'primary' },
-          { label: 'Correct and sign again', kind: 'secondary' },
-        ],
+        actions: [notYet(`Approve ${them}’s scores`, 'primary'), keepScore('Correct and sign again', 'secondary')],
       }
     }
     case 'final': {
@@ -161,7 +166,7 @@ function situation(match: MatchRecord): Situation {
       return {
         notice: { icon: 'check', text },
         alert: null,
-        actions: [{ label: 'Share result', kind: 'secondary' }],
+        actions: [notYet('Share result', 'secondary')],
       }
     }
   }
@@ -181,12 +186,49 @@ function DemoButton({ action }: { action: Action }) {
   )
 }
 
-function Actions({ actions, className }: { actions: readonly Action[]; className?: string }) {
+const subscribeToNetwork = (listener: () => void) => {
+  window.addEventListener('online', listener)
+  window.addEventListener('offline', listener)
+  return () => {
+    window.removeEventListener('online', listener)
+    window.removeEventListener('offline', listener)
+  }
+}
+
+function useOnline(): boolean {
+  return useSyncExternalStore(subscribeToNetwork, () => navigator.onLine)
+}
+
+// Opens the match's scores, so a player who lost the scoring tab carries
+// on from here. Online the link has no fragment, so the scoring route
+// loads the match again: this page may show a cached read that is older
+// than the server's board. Offline it carries the games this page shows.
+function ScoreLink({ match, action }: { match: MatchDetail; action: Action }) {
+  const online = useOnline()
+  const target = keepScoreTarget(match, nowSeconds())
+  if (!target) return null
+  return (
+    <Link
+      to="/matches/$matchId/scores/game/$gameNumber/edit"
+      params={{ matchId: match.id, gameNumber: target.gameNumber }}
+      hash={online ? undefined : target.hash}
+      className={`fm-btn fm-btn--${action.kind}`}
+    >
+      {action.label}
+    </Link>
+  )
+}
+
+function Actions({ match, actions, className }: { match: MatchDetail; actions: readonly Action[]; className?: string }) {
   return (
     <div className={className ?? 'match-actions'}>
-      {actions.map((action) => (
-        <DemoButton key={action.label} action={action} />
-      ))}
+      {actions.map((action) =>
+        action.does === 'score' ? (
+          <ScoreLink key={action.label} match={match} action={action} />
+        ) : (
+          <DemoButton key={action.label} action={action} />
+        ),
+      )}
     </div>
   )
 }
@@ -300,7 +342,7 @@ function DetailSignOff({ match, updatedAt }: { match: MatchDetail; updatedAt: nu
             </ul>
             <SituationNotes s={s} />
           </div>
-          <Actions actions={s.actions} className="fm-card__foot" />
+          <Actions match={match} actions={s.actions} className="fm-card__foot" />
         </aside>
       </div>
       <section className="match-section" aria-label="History">

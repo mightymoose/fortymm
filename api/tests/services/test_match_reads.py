@@ -207,6 +207,38 @@ def accepted_at(database: Engine) -> datetime:
     return head
 
 
+def head_hash(database: Engine, viewer: AccountId) -> bytes | None:
+    return in_transaction(
+        database, lambda session: get_match(session, MATCH, viewer)
+    ).result_hash
+
+
+def test_a_match_with_no_result_has_no_result_hash(migrated_database: Engine) -> None:
+    s = scene(migrated_database)
+    board(migrated_database, s, ((11, 5),), s.ann_account)
+
+    assert head_hash(migrated_database, s.bo_account) is None
+
+
+def test_the_result_hash_is_the_submitted_results(migrated_database: Engine) -> None:
+    s = scene(migrated_database)
+    r1 = upload(migrated_database, envelope_of(result_of(s, FIRST), (ANN_KEY, s.ann)))
+
+    assert head_hash(migrated_database, s.bo_account) == r1.hash
+
+
+def test_the_result_hash_is_the_corrections(migrated_database: Engine) -> None:
+    s = scene(migrated_database)
+    r1 = upload(migrated_database, envelope_of(result_of(s, FIRST), (ANN_KEY, s.ann)))
+    r2 = upload(
+        migrated_database,
+        envelope_of(result_of(s, OTHER, replaces=r1), (ANN_KEY, s.ann)),
+    )
+
+    assert r2.hash != r1.hash
+    assert head_hash(migrated_database, s.bo_account) == r2.hash
+
+
 def test_a_match_with_no_board_has_not_started(migrated_database: Engine) -> None:
     s = scene(migrated_database)
 
