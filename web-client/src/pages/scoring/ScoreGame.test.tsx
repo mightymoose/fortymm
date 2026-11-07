@@ -443,6 +443,17 @@ describe('ScoreGame', () => {
         expect(page.title).toHaveTextContent('We can’t find that page')
       })
 
+      it('shows the not-found page to an account that can’t view the match', async () => {
+        server.use(
+          http.get(`${API_BASE_URL}/v1/matches/:matchId`, () =>
+            HttpResponse.json({ errors: [{ status: '403', title: 'Forbidden' }] }, { status: 403 }),
+          ),
+        )
+        const page = await ErrorPage.render(`/matches/${id}/scores/game/1/edit`)
+
+        expect(page.title).toHaveTextContent('We can’t find that page')
+      })
+
       it('shows a skeleton while the match loads, then its scores', async () => {
         const api = mockMatchReads([served([[11, 3]])])
         api.hold = true

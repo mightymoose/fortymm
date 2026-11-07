@@ -1,7 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { createFileRoute, notFound, redirect } from '@tanstack/react-router'
 import type { ApiClient } from '../../../../../../../api/client'
-import { ApiUnreachable } from '../../../../../../../api/errors'
+import { ApiError, ApiUnreachable } from '../../../../../../../api/errors'
 import { matchQuery, sessionQuery } from '../../../../../../../api/queries'
 import { ScoreGame, type ScoreGameData } from '../../../../../../../pages/scoring/ScoreGame'
 import { ScoresFailed, ScoresLoading } from '../../../../../../../pages/scoring/ScoresLoading'
@@ -91,6 +91,8 @@ async function rebuildFromApi(api: ApiClient, queryClient: QueryClient, matchId:
     ])
   } catch (error) {
     if (error instanceof ApiUnreachable) return
+    // An account that can score but not view the match can't see it.
+    if (error instanceof ApiError && error.status === 403) throw notFound()
     throw error
   } finally {
     clearTimeout(timer)
