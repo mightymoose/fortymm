@@ -287,9 +287,7 @@ best of 3 started through New
 match saves game 1. Once the API has the board, the scorer goes Home,
 opens the match from Matches and presses Keep score, which opens game 2
 with game 1 kept, then submits; the guest approves, and the match is
-final with both games. The match page shows the board only after its
-10-second refetch, as the dev server's StrictMode mounts it twice and
-that cancels the refetch on arrival. Keep score after a submitted result opens a
+final with both games. Keep score after a submitted result opens a
 correction that names it, whose approval the API takes (201, not 409).
 A scoring URL with no fragment after a saved board opens the next game
 with the board's game and a fragment. Back from game 1 right after Start

@@ -148,10 +148,7 @@ test('a match whose scoring tab was lost carries on from the match page to final
   // Other matches in this file have the same players.
   await page.locator(`a[href="/matches/${id}"]`).first().click()
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(vs)
-  // Start cached the match before its board. The dev server's StrictMode
-  // mounts the page twice, which cancels its refetch on arrival, so the
-  // page catches up on its 10-second refetch.
-  await expect(page.getByText('Game 1', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText('Game 1', { exact: true })).toBeVisible()
   await page.getByRole('link', { name: 'Keep score' }).click()
 
   await expect(phone.heading).toHaveText('Game 2')

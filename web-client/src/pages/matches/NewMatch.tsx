@@ -2,7 +2,7 @@ import { useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useRouteContext } from '@tanstack/react-router'
 import { useEffect, useId, useReducer, useRef } from 'react'
 import { ApiError, ApiUnreachable, classifyFailure, failureMessages } from '../../api/errors'
-import { createMatch, OPPONENTS_KEY, sessionQuery } from '../../api/queries'
+import { createMatch, matchQuery, OPPONENTS_KEY, sessionQuery } from '../../api/queries'
 import { uuidv7 } from '../../api/uuidv7'
 import { Button } from '../../components/Button'
 import { Icon } from '../../components/Icon'
@@ -74,6 +74,10 @@ export function NewMatch() {
         params: { matchId: id, gameNumber: '1' },
         hash: draftHash(apiMatch(id, request.best_of, request.rated, [first, second]), [], null, nowSeconds()),
       })
+      // The match page's loader read the match before it had a board. Kept,
+      // that read would show first when the match page opens again, and its
+      // Keep score would drop the games saved since.
+      queryClient.removeQueries({ queryKey: matchQuery(api, id).queryKey })
     } catch (error) {
       if (error instanceof ApiError && error.status === 422 && error.title) {
         // A player may have merged since the list loaded.
