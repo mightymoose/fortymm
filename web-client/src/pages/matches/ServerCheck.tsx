@@ -1,8 +1,11 @@
-import { useSuspenseQuery } from '@tanstack/react-query'
+import { useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
 import { useRouteContext } from '@tanstack/react-router'
+import { useEffect } from 'react'
 import { approvalCheckQuery } from '../../api/queries'
 import { Icon } from '../../components/Icon'
 import { QueryBoundary } from '../../components/QueryBoundary'
+import { resultsOf, subscribeResults } from '../../scoring/results'
+import { base64url } from '../../signing/text'
 
 type Props = { matchId: string; envelope: Uint8Array<ArrayBuffer> }
 
@@ -26,7 +29,20 @@ export function ServerCheck(props: Props) {
 
 function Verdict({ matchId, envelope }: Props) {
   const { api } = useRouteContext({ from: '__root__' })
+  const queryClient = useQueryClient()
   const { data: verdict } = useSuspenseQuery(approvalCheckQuery(api, matchId, envelope))
+  // A waiting approval checks again once the outbox has sent it.
+  const waiting = verdict.kind === 'waiting'
+  useEffect(() => {
+    if (!waiting) return
+    const text = base64url(envelope)
+    const { queryKey } = approvalCheckQuery(api, matchId, envelope)
+    const checkIfSent = () => {
+      if (!resultsOf(matchId).includes(text)) void queryClient.invalidateQueries({ queryKey })
+    }
+    checkIfSent()
+    return subscribeResults(checkIfSent)
+  }, [waiting, api, matchId, envelope, queryClient])
   if (verdict.kind === 'refused') {
     return (
       <div className="fm-alert fm-alert--error" role="alert">
@@ -34,6 +50,14 @@ function Verdict({ matchId, envelope }: Props) {
         <p className="fm-alert__title">FortyMM refused this result</p>
         <p className="fm-alert__body">{verdict.title}</p>
       </div>
+    )
+  }
+  if (verdict.kind === 'waiting') {
+    return (
+      <p className="fm-notice" role="status">
+        <Icon name="clock" />
+        <span>FortyMM can’t take it yet, so this device keeps sending it</span>
+      </p>
     )
   }
   return (

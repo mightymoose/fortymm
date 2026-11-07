@@ -1,5 +1,5 @@
 import { Outlet, useRouteContext } from '@tanstack/react-router'
-import { useCallback } from 'react'
+import { useCallback, useSyncExternalStore } from 'react'
 import { sessionQuery } from '../api/queries'
 import { ToastProvider } from '../components/ToastProvider'
 import { TooltipProvider } from '../components/TooltipProvider'
@@ -20,7 +20,14 @@ export function Root() {
       }),
     [api, queryClient],
   )
-  useAppSync(api, refreshSession)
+  // Whether a page loaded the session. It reads the cache, so it starts no
+  // session, and adds no observer, which the refresh above would skip as
+  // disabled.
+  const signedIn = useSyncExternalStore(
+    (listener) => queryClient.getQueryCache().subscribe(listener),
+    () => queryClient.getQueryData(sessionQuery(api).queryKey) !== undefined,
+  )
+  useAppSync(api, refreshSession, signedIn)
   return (
     <ToastProvider pinned={<UpdateNotice appUpdate={appUpdate} />}>
       <TooltipProvider>

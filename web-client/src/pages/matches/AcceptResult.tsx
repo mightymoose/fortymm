@@ -9,6 +9,7 @@ import { Icon } from '../../components/Icon'
 import { Wordmark } from '../../components/Wordmark'
 import { checkGame, tally, type Side } from '../../scoring/board'
 import type { Fragment } from '../../scoring/fragment'
+import { queueResult } from '../../scoring/results'
 import { appendSignature } from '../../signing/envelope'
 import { signWithDeviceKey } from '../../signing/deviceKey'
 import type { MatchResult } from '../../signing/result'
@@ -42,7 +43,7 @@ export function AcceptResult() {
   const { matchId } = useParams({ from: ROUTE })
   const { api } = useRouteContext({ from: '__root__' })
   const { data: account } = useSuspenseQuery(sessionQuery(api))
-  const { fragment } = useLoaderData({ from: ROUTE })
+  const { fragment, syncs } = useLoaderData({ from: ROUTE })
   if (!fragment) {
     return (
       <ErrorScreen
@@ -57,7 +58,7 @@ export function AcceptResult() {
       </ErrorScreen>
     )
   }
-  return <Result opened={open(fragment)} hash={hash} matchId={matchId} player={account.player} />
+  return <Result opened={open(fragment)} hash={hash} matchId={matchId} player={account.player} syncs={syncs} />
 }
 
 function Result({
@@ -65,11 +66,13 @@ function Result({
   hash,
   matchId,
   player,
+  syncs,
 }: {
   opened: Opened
   hash: string
   matchId: string
   player: { id: string; display_name: string }
+  syncs: boolean
 }) {
   const { result, issuedAt, mySide, approved } = opened
   // Nothing is fetched, so only the session's own player has a name here.
@@ -158,7 +161,7 @@ function Result({
             <EditScores matchId={matchId} hash={hash} />
           </div>
         ) : (
-          <ApproveForm envelope={opened.envelope} side={mySide} matchId={matchId} hash={hash} />
+          <ApproveForm envelope={opened.envelope} side={mySide} matchId={matchId} hash={hash} syncs={syncs} />
         )}
       </main>
     </div>
@@ -170,16 +173,24 @@ function Result({
 // The approval happens on this device, so it works with no network. The
 // approved page then sends the result to FortyMM to check. The page never
 // says "sign": to a player, signing is approving.
+//
+// Only Approve queues anything: opening a link sends nothing, or a link
+// could commit scores with the viewer's session before they review them.
+// The link's result, then the approved one, go after anything this device
+// queued before, so a counter built on a result that hasn't reached the
+// server yet lands after it, not before it.
 function ApproveForm({
   envelope,
   side,
   matchId,
   hash,
+  syncs,
 }: {
   envelope: Uint8Array<ArrayBuffer>
   side: Side
   matchId: string
   hash: string
+  syncs: boolean
 }) {
   const navigate = useNavigate()
   const submit = useMutation({
@@ -189,7 +200,14 @@ function ApproveForm({
       if (!signer) throw new NoSigningKey()
       return appendSignature(signer, envelope, side)
     },
-    onSuccess: (signed) => navigate({ to: '.', hash: base64url(signed), replace: true }),
+    onSuccess: (signed) => {
+      const approved = base64url(signed)
+      if (syncs) {
+        queueResult(matchId, hash)
+        queueResult(matchId, approved)
+      }
+      return navigate({ to: '.', hash: approved, replace: true })
+    },
   })
   const failure = submit.error && failureMessages[classifyFailure(submit.error).kind]
 

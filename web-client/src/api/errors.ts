@@ -95,3 +95,9 @@ export const failureMessages: Record<Failure['kind'], { title: string; sentence:
       'FortyMM hit an error loading this page. Try again. If it keeps happening, tell us what you were doing.',
   },
 }
+
+// The API's titles for the refusals of a result that can mean "not yet":
+// the result it replaces hasn't reached the API, or the key that signed it
+// isn't registered yet. The API's errors carry no code to match instead.
+export const STALE_RESULT = "The result doesn't replace the match's newest result"
+export const UNKNOWN_KEY = "A signature's key isn't registered, or was revoked"

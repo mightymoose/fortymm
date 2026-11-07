@@ -67,7 +67,7 @@ describe('eventText', () => {
 
   it('says both sides signing the same scores together each signed the result', () => {
     expect(texts([created, signed(0, FIRST), signed(1, FIRST)])).toEqual([
-      'Started the match',
+      'Created the match',
       'Signed the result, 2–0',
       'Signed the result, 2–0',
     ])
@@ -75,7 +75,7 @@ describe('eventText', () => {
 
   it('says a side that counters the other side’s scores signed different scores', () => {
     expect(texts([created, signed(0, FIRST), signed(1, OTHER)])).toEqual([
-      'Started the match',
+      'Created the match',
       'Signed the result, 2–0',
       'Signed different scores, 2–1',
     ])
