@@ -86,6 +86,10 @@ function unknownKey(error: unknown): boolean {
 }
 
 const NOT_YET_FOR_MS = 24 * 60 * 60 * 1000
+// How far ahead of this device's clock another phone's may run. A link's
+// signing time isn't checked against its signature here, so a later one
+// can't keep a refusal "not yet" for longer.
+const CLOCK_AHEAD_MS = 60 * 60 * 1000
 // After the backoff, a result that isn't taken yet tries this often, or
 // when the page wakes.
 const NOT_YET_RETRY_MS = 300_000
@@ -102,7 +106,8 @@ export function notYet(error: unknown, envelope: string, now: number): boolean {
   if (!staleResult(error) && !unknownKey(error) && error.status !== 403) return false
   try {
     const { issuedAt } = decodePayload(decodeEnvelope(fromBase64url(envelope)).payload)
-    return now - issuedAt * 1000 < NOT_YET_FOR_MS
+    const age = now - issuedAt * 1000
+    return age > -CLOCK_AHEAD_MS && age < NOT_YET_FOR_MS
   } catch {
     return false
   }
@@ -165,8 +170,10 @@ class MatchSync {
   private stuck: SyncStatus['stuck'] = null
   private landed = 0
   private failures = 0
-  // Stale results put behind the others since one was last settled.
+  // Stale results put behind the others since one was last settled or
+  // joined the queue, which gives each queued result a turn first.
   private deferred = 0
+  private queued = 0
   private readonly unsubscribe: () => void
   private readonly unsubscribeResults: () => void
   private readonly matchId: string
@@ -190,7 +197,12 @@ class MatchSync {
       }
       saved()
     })
-    this.unsubscribeResults = subscribeResults(saved)
+    this.unsubscribeResults = subscribeResults(() => {
+      const queued = resultsOf(this.matchId).length
+      if (queued > this.queued) this.deferred = 0
+      this.queued = queued
+      saved()
+    })
     window.addEventListener('online', this.kick)
     document.addEventListener('visibilitychange', this.resume)
     window.addEventListener('pageshow', this.kick)

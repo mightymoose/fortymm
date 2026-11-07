@@ -149,9 +149,12 @@ The scoring pages, the URL fragment, board sync and the result pages.
   the first two are told by their titles (`src/api/errors.ts`). After
   any of them, the result keeps trying, with the backoff and then every
   5 minutes or when the page wakes, until a day after it was signed
-  (`notYet()`). A stale result first goes behind the match's other
+  (`notYet()`). A link's signing time isn't checked against its
+  signature on the device, so one more than an hour ahead of the
+  device's clock counts as a refusal for good. A stale result first goes behind the match's other
   queued results, as one of them may be the result it replaces, queued
-  after it, and waits only once each of them came back stale. Such a
+  after it, and waits only once each of them came back stale. A result
+  joining the queue starts that count again, so it gets its turn too. Such a
   wait doesn't make the strip say the sync is stuck, and a board saved
   meanwhile goes at once. The API
   taking it, or refusing it for good (any other 4xx, logged with
