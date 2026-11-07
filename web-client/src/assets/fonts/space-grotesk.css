@@ -1,7 +1,7 @@
 /* Space Grotesk, the UI font, self-hosted (variable weight, from
    Fontsource). tokens.css imports this where the reference's
    colors_and_type.css imports Google Fonts' copy, and the e2e tests serve
-   the reference kit this same file in its place. */
+   the reference kit this file, with its font files inlined, in its place. */
 
 @font-face {
   font-family: 'Space Grotesk';

@@ -1,4 +1,4 @@
-import { fileURLToPath } from 'node:url'
+import { readFileSync } from 'node:fs'
 import { GalleryPage } from './GalleryPage.ts'
 
 // The design system's component gallery, opened straight from references/.
@@ -8,8 +8,15 @@ const galleryUrl = new URL(
   import.meta.url,
 ).href
 
-// The app's fonts, where its self-hosted Space Grotesk stylesheet lives.
+// The app's Space Grotesk stylesheet with its font files inlined as data:
+// URLs, so the gallery has the font from its first layout, with no fetch to
+// race (see loadTestModeFonts() in src/testMode.ts).
 const fontsDir = new URL('../../src/assets/fonts/', import.meta.url)
+const spaceGroteskCss = readFileSync(new URL('space-grotesk.css', fontsDir), 'utf8').replace(
+  /url\('\.\/([^']+\.woff2)'\)/g,
+  (_, file: string) =>
+    `url('data:font/woff2;base64,${readFileSync(new URL(file, fontsDir)).toString('base64')}')`,
+)
 
 export class ReferenceKitPage extends GalleryPage {
   private fontsRouted = false
@@ -18,20 +25,11 @@ export class ReferenceKitPage extends GalleryPage {
     if (!this.fontsRouted) {
       // The gallery embeds its display and mono fonts but loads Space
       // Grotesk from Google Fonts. Serve it the app's own Space Grotesk
-      // stylesheet instead, unchanged, so both pages load the same font
-      // files the same way, offline. The stylesheet's relative URLs resolve
-      // to Google Fonts' host too, so the font files come through this
-      // route as well.
-      await this.page.route('https://fonts.googleapis.com/**', (route) => {
-        const file = new URL(route.request().url()).pathname.slice(1)
-        return route.fulfill({
-          path: fileURLToPath(
-            new URL(file.endsWith('.woff2') ? file : 'space-grotesk.css', fontsDir),
-          ),
-          // The gallery is opened from disk, so its fonts are cross-origin.
-          headers: { 'Access-Control-Allow-Origin': '*' },
-        })
-      })
+      // stylesheet instead, with the same font files, so both pages show
+      // the same font, offline.
+      await this.page.route('https://fonts.googleapis.com/**', (route) =>
+        route.fulfill({ body: spaceGroteskCss, contentType: 'text/css' }),
+      )
       this.fontsRouted = true
     }
     await super.goto(only)
