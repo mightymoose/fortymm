@@ -15,8 +15,8 @@ import { gamesWon, PATH, playerLabel, shown, wins, type Sides } from './sides'
 
 // The pad that edits one game: a score input per player with the games
 // tally between them, then the actions. A save puts the games in the URL,
-// on this device, and the page moves on at once. The board then syncs in
-// the background, for whoever watches the match.
+// on this device, and the page moves on at once. If the match syncs, the
+// board then goes in the background, for whoever watches the match.
 export function ScoreEntry({
   match,
   gameNumber,
@@ -24,6 +24,7 @@ export function ScoreEntry({
   viewer,
   sides,
   submit,
+  syncs,
 }: {
   match: Match
   gameNumber: number
@@ -31,6 +32,7 @@ export function ScoreEntry({
   viewer: Viewer
   sides: Sides
   submit: SubmitResult
+  syncs: boolean
 }) {
   const navigate = useNavigate()
   const feedbackId = useId()
@@ -47,7 +49,7 @@ export function ScoreEntry({
 
   async function show(next: GamePoints[], game: number) {
     const hash = draftHash(match, next, await replacesOf(fragment), nowSeconds())
-    saveBoard(match.id, hash)
+    if (syncs) saveBoard(match.id, hash)
     await navigate({
       to: PATH,
       params: { matchId: match.id, gameNumber: String(game) },

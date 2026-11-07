@@ -1,6 +1,6 @@
 import { act, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/errors'
 import { saveAccount } from '../../api/savedSession'
 import type { GamePoints } from '../../scoring/board'
@@ -403,6 +403,43 @@ describe('ScoreGame', () => {
       const page = await ErrorPage.render(`/matches/${id}/scores/game/1/edit${hash}`)
 
       expect(page.title).toHaveTextContent('We can’t find that page')
+    })
+
+    describe('sends no board until boards go to the API', () => {
+      const demoServerKeys = () =>
+        Object.keys(localStorage).filter((key) => key.startsWith('fortymm-demo-server:'))
+
+      beforeEach(() => {
+        vi.mocked(putBoard).mockClear()
+      })
+
+      it('saves a game with no send and no sync mark', async () => {
+        const page = await ScoreGamePage.render(path())
+
+        await page.enter({ 'Player 1': '11', 'Player 2': '3' })
+        await page.save()
+        await page.settle()
+
+        expect(page.slotScore(1)).toBe('11–3')
+        expect(page.slotSync(1)).toBeNull()
+        expect(page.stripNote).toBeNull()
+        expect(putBoard).not.toHaveBeenCalled()
+        expect(demoServerKeys()).toEqual([])
+      })
+
+      it('submits a decided match with no send', async () => {
+        const played = apiMatch(id, 3, false, [player.id, gecko])
+        const page = await ScoreGamePage.render(path(played, [[11, 5]]).replace('/game/1/', '/game/2/'))
+        await page.waitForKey()
+        await page.enter({ [ME]: '11', [OPPONENT]: '2' })
+
+        await page.click('Submit result')
+        await page.waitForPath(`/matches/${id}/scores/submission`)
+
+        expect(decodeEnvelope(fromBase64url(page.hash)).signatures).toHaveLength(1)
+        expect(putBoard).not.toHaveBeenCalled()
+        expect(demoServerKeys()).toEqual([])
+      })
     })
   })
 

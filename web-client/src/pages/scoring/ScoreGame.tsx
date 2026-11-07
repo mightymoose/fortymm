@@ -5,7 +5,7 @@ import { sessionQuery } from '../../api/queries'
 import { Icon } from '../../components/Icon'
 import { Wordmark } from '../../components/Wordmark'
 import { viewerOf, type Match, type Viewer } from '../../scoring/demoMatches'
-import { matchOf } from '../../scoring/matches'
+import { matchOf, syncsBoard } from '../../scoring/matches'
 import { boardsOf, subscribeBoards, unsyncedGames } from '../../scoring/boards'
 import { gamesOf, readFragment, type Fragment } from '../../scoring/fragment'
 import { slotsOf } from '../../scoring/planPress'
@@ -19,10 +19,10 @@ import './scoring.css'
 
 // One match's scores, open at one game. The URL's fragment holds every
 // game, so the URL is the scorer's truth: a reload shows the same games,
-// and a shared URL opens them on another device. Each save also sends the
-// board in the background, so spectators and tournament directors can
-// watch. The page never follows the server's board, so another device's
-// board can't change this pad.
+// and a shared URL opens them on another device. Each save of a match
+// whose board syncs also sends the board in the background, so spectators
+// and tournament directors can watch. The page never follows the server's
+// board, so another device's board can't change this pad.
 // Anyone who can open the match can enter or change a game, as long as its
 // score is legal. The match rules apply only when a player submits.
 export function ScoreGame() {
@@ -36,11 +36,12 @@ export function ScoreGame() {
   const viewer = viewerOf(match, self.id)
   const sides = sidesFor(viewer.role === 'player' ? viewer.side : 0)
   const saved = games[gameNumber - 1]
-  const sync = useBoardSync(match.id)
+  const syncs = syncsBoard(match)
+  const sync = useBoardSync(match.id, syncs)
   const boards = useSyncExternalStore(subscribeBoards, () => boardsOf(match.id))
   // Only a board waiting to go marks games, so a board from a link that
   // nobody saved here doesn't read as stuck.
-  const submit = useSubmitResult(match, fragment)
+  const submit = useSubmitResult(match, fragment, syncs)
   const unsynced =
     boards.pending === null
       ? new Set<number>()
@@ -72,6 +73,7 @@ export function ScoreGame() {
           viewer={viewer}
           sides={sides}
           submit={submit}
+          syncs={syncs}
         />
         <GameStrip
           match={match}
