@@ -151,12 +151,14 @@ The scoring pages, the URL fragment, board sync and the result pages.
   5 minutes or when the page wakes, until a day after it was signed
   (`notYet()`). A link's signing time isn't checked against its
   signature on the device, so one more than an hour ahead of the
-  device's clock counts as a refusal for good. A stale result first goes behind the match's other
-  queued results, as one of them may be the result it replaces, queued
-  after it, and waits only once each of them came back stale. A result
-  joining the queue starts that count again, so it gets its turn too. Such a
-  wait doesn't make the strip say the sync is stuck, and a board saved
-  meanwhile goes at once. The API
+  device's clock counts as a refusal for good. Results go in passes: a pass sends
+  every queued result once, oldest first, skipping only those that came
+  back stale earlier in the same pass, as a later one may be the result
+  an earlier one replaces. The sync waits only once a whole pass came
+  back stale. A result settling, and every wait, starts a fresh pass, so
+  a result that the other phone has since unblocked gets its turn. Such
+  a wait doesn't make the strip say the sync is stuck, and a board or a
+  result saved meanwhile ends it. The API
   taking it, or refusing it for good (any other 4xx, logged with
   `console.warn`), removes it, and the next one goes. A
   result refused for good changes nothing on the strip. The approval

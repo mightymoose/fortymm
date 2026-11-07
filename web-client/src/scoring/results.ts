@@ -64,16 +64,6 @@ export function removeResult(matchId: string, envelope: string): void {
   })
 }
 
-// Puts `envelope` behind the match's other results, as one of them may be
-// the result it replaces, which a page queued after it.
-export function deferResult(matchId: string, envelope: string): void {
-  update((outbox) => {
-    const queued = outbox[matchId] ?? []
-    if (!queued.includes(envelope)) return outbox
-    return { ...outbox, [matchId]: [...queued.filter((queuedEnvelope) => queuedEnvelope !== envelope), envelope] }
-  })
-}
-
 export function forgetResults(): void {
   storageFailed = false
   write({})

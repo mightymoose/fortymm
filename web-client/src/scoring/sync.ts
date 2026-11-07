@@ -6,7 +6,7 @@ import { acknowledge, boardsOf, dropBoard, matchesWithPending, subscribeBoards, 
 import { decodeEnvelope } from '../signing/envelope'
 import { decodePayload } from '../signing/result'
 import { fromBase64url } from '../signing/text'
-import { deferResult, matchesWithResults, removeResult, resultsOf, subscribeResults } from './results'
+import { matchesWithResults, removeResult, resultsOf, subscribeResults } from './results'
 
 // Sends a match's board to the API in the background, so spectators and
 // tournament directors can watch it. It's best effort: the URL keeps the
@@ -170,10 +170,11 @@ class MatchSync {
   private stuck: SyncStatus['stuck'] = null
   private landed = 0
   private failures = 0
-  // Stale results put behind the others since one was last settled or
-  // joined the queue, which gives each queued result a turn first.
-  private deferred = 0
-  private queued = 0
+  // The results that came back stale in this pass. A pass sends every
+  // queued result once, oldest first, as a later one may be what an
+  // earlier one replaces. Any result settling, or any wait, starts a new
+  // pass.
+  private readonly stale = new Set<string>()
   private readonly unsubscribe: () => void
   private readonly unsubscribeResults: () => void
   private readonly matchId: string
@@ -184,25 +185,17 @@ class MatchSync {
     this.api = api
     // A save, here or in another component. A waiting retry keeps its
     // backoff.
+    // A result that isn't taken yet waits minutes, which neither a board,
+    // sent first, nor a new result, perhaps the one it replaces, waits out.
     const saved = () => {
-      if (this.state.kind === 'waitingOnline') this.enter({ kind: 'idle' })
-      void this.step()
-    }
-    // A result that isn't taken yet waits minutes, which a board, sent
-    // first, doesn't wait out.
-    this.unsubscribe = subscribeBoards(() => {
-      if (this.state.kind === 'waitingRetry' && this.state.notYet) {
-        clearTimeout(this.state.timer)
+      if (this.state.kind === 'waitingRetry' && this.state.notYet) clearTimeout(this.state.timer)
+      if (this.state.kind === 'waitingOnline' || (this.state.kind === 'waitingRetry' && this.state.notYet)) {
         this.enter({ kind: 'idle' })
       }
-      saved()
-    })
-    this.unsubscribeResults = subscribeResults(() => {
-      const queued = resultsOf(this.matchId).length
-      if (queued > this.queued) this.deferred = 0
-      this.queued = queued
-      saved()
-    })
+      void this.step()
+    }
+    this.unsubscribe = subscribeBoards(saved)
+    this.unsubscribeResults = subscribeResults(saved)
     window.addEventListener('online', this.kick)
     document.addEventListener('visibilitychange', this.resume)
     window.addEventListener('pageshow', this.kick)
@@ -253,7 +246,7 @@ class MatchSync {
   private async step(): Promise<void> {
     if (this.state.kind !== 'idle') return
     const { pending } = boardsOf(this.matchId)
-    const result = resultsOf(this.matchId)[0] ?? null
+    const result = this.nextResult()
     switch (nextStep({ pending, result: resultsEnabled ? result : null, offline: !navigator.onLine })) {
       case 'rest':
         this.stuck = null
@@ -282,14 +275,15 @@ class MatchSync {
         refreshSession()
       }
       const later = sent.kind === 'result' && notYet(error, sent.text, Date.now())
-      // A stale result may replace one queued behind it. That one goes
-      // first, until each queued result came back stale.
-      if (later && staleResult(error) && this.deferred < resultsOf(this.matchId).length - 1) {
-        this.deferred += 1
-        this.enter({ kind: 'idle' })
-        deferResult(this.matchId, sent.text)
-        return
+      if (later && staleResult(error)) {
+        this.stale.add(sent.text)
+        if (this.nextResult() !== null) {
+          this.enter({ kind: 'idle' })
+          void this.step()
+          return
+        }
       }
+      this.stale.clear()
       if (retryable(error) || later) {
         const delay = this.retryDelayFor(error, later)
         const limited = rateLimited(error)
@@ -322,6 +316,11 @@ class MatchSync {
     void this.step()
   }
 
+  // The oldest queued result not yet stale in this pass.
+  private nextResult(): string | null {
+    return resultsOf(this.matchId).find((result) => !this.stale.has(result)) ?? null
+  }
+
   // A 429 waits out its Retry-After. A result that isn't taken yet tries
   // less often once the backoff runs out.
   private retryDelayFor(error: unknown, notYet: boolean): number {
@@ -333,7 +332,7 @@ class MatchSync {
   // The server took the result, or refused it for good, so the next goes
   // once the outbox, which may wait for another tab, has changed.
   private settle(result: string): void {
-    this.deferred = 0
+    this.stale.clear()
     this.enter({ kind: 'idle' })
     removeResult(this.matchId, result)
   }

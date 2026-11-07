@@ -118,6 +118,25 @@ describe('the approval page and the results outbox', () => {
     expect(await screen.findByText('FortyMM checked the signatures and the scores')).toBeInTheDocument()
   }, 30_000)
 
+  it('tries every queued result again on the next pass, once the result they replace lands from another phone', async () => {
+    grantSession('matches.score')
+    const r1 = await signedResult(null, 0)
+    const r2 = await signedResult(await hashOf(r1), 1)
+    const r3 = await signedResult(await hashOf(r2), 0)
+    const chain = mockLongChain([r1, r2, r3])
+    queueResult(MATCH, r2)
+    queueResult(MATCH, r3)
+    await AcceptResultPage.render(`/matches/${MATCH}/scores/approvals/new#${r3}`)
+    await waitFor(() => expect(chain.order).toEqual(['r2', 'r3']))
+
+    chain.current = 'r1'
+    window.dispatchEvent(new Event('online'))
+
+    await waitFor(() => expect(resultsOf(MATCH)).toEqual([]), { timeout: 5000 })
+    expect(chain.order).toEqual(['r2', 'r3', 'r2', 'r3'])
+    expect(chain.current).toBe('r3')
+  })
+
   it('gives a predecessor queued after its corrections were put back a turn', async () => {
     grantSession('matches.score')
     const r1 = await signedResult(null, 0)
