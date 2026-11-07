@@ -611,6 +611,33 @@ describe('ScoreGame', () => {
       expect(page.stripNote).toBeNull()
     })
 
+    it('refreshes the session again after a refresh that got no response', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const page = await render()
+      const sessions: string[] = []
+      server.use(
+        http.post(`${API_BASE_URL}/v1/session`, () => {
+          sessions.push('sent')
+          if (sessions.length === 1) return HttpResponse.error()
+          return HttpResponse.json({
+            data: { account: { ...sessionResponse.data.account, permissions: ['matches.score'] } },
+          })
+        }),
+      )
+      boards.answers.push({ status: 401 }, { status: 401 })
+
+      await saveGame(page, 1, '11', '2')
+      await waitFor(() => expect(sessions).toHaveLength(1))
+      await act(() => vi.advanceTimersByTimeAsync(2000))
+      await waitFor(() => expect(sessions).toHaveLength(2))
+      await act(() => vi.advanceTimersByTimeAsync(4000))
+      await page.settle()
+
+      expect(boards.pushes).toHaveLength(3)
+      expect(landed()).toBe(page.hash)
+      expect(page.slotSync(1)).toBe('Synced')
+    })
+
     it('saves at once while offline, and syncs once back online', async () => {
       const page = await render()
       page.goOffline()

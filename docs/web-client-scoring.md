@@ -114,8 +114,9 @@ The scoring pages, the URL fragment, board sync and the result pages.
   nothing wakes it early. A 401 means the session lapsed. It refreshes
   the session through the callback `Root` gives `useAppSync()`, keeps
   the board and waits the backoff, so the board goes once the session
-  is back. A 401 in a row doesn't refresh again, as a second refresh
-  while the first is on its way could start a second guest account. Any other 4xx is a refusal. It drops the board, which is never sent
+  is back. Each 401 refreshes again, and a refresh while a session
+  request is still on its way joins it (`sessionQuery()`), so two never
+  go at once and start a second guest account. Any other 4xx is a refusal. It drops the board, which is never sent
   again and never shows as synced, and keeps why in `refused` until a
   later board lands, even after the sync stops. A 409 reads as a final
   match. Any other refusal is logged with `console.warn`, and a 403

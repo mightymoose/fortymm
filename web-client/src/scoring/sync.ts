@@ -98,10 +98,6 @@ class MatchSync {
   private stuck: SyncStatus['stuck'] = null
   private landed = 0
   private failures = 0
-  // Whether the last send got a 401, so the session is already being
-  // refreshed. Another refresh could start a second guest account while
-  // the first is on its way.
-  private lapsed = false
   private readonly unsubscribe: () => void
   private readonly matchId: string
   private readonly api: ApiClient
@@ -185,9 +181,7 @@ class MatchSync {
       await pushBoard(this.api, this.matchId, board)
     } catch (error) {
       if (!this.isIn(sending)) return
-      const lapsed = sessionLapsed(error)
-      if ((lapsed && !this.lapsed) || (error instanceof ApiError && error.status === 403)) refreshSession()
-      this.lapsed = lapsed
+      if (sessionLapsed(error) || (error instanceof ApiError && error.status === 403)) refreshSession()
       if (retryable(error)) {
         const backoff = retryDelay(this.failures)
         const limited = rateLimited(error)
@@ -209,7 +203,6 @@ class MatchSync {
     }
     if (!this.isIn(sending)) return
     this.failures = 0
-    this.lapsed = false
     this.stuck = null
     // The rise and the acknowledge must reach the strip in one render, so
     // nothing may await between them.

@@ -9,11 +9,9 @@ import { UpdateNotice } from './UpdateNotice'
 export function Root() {
   const { api, appUpdate, queryClient } = useRouteContext({ from: '__root__' })
   // A board refused for want of a session or a permission means the
-  // session may be out of date. A refresh already on its way is left to
-  // land, as dropping it drops its cookie and starts another account.
+  // session may be out of date.
   const refreshSession = useCallback(
-    () =>
-      void queryClient.invalidateQueries({ queryKey: sessionQuery(api).queryKey }, { cancelRefetch: false }),
+    () => void queryClient.invalidateQueries({ queryKey: sessionQuery(api).queryKey }),
     [api, queryClient],
   )
   useAppSync(api, refreshSession)
