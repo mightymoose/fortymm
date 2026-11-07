@@ -115,7 +115,22 @@ describe('the approval page and the results outbox', () => {
     approvals.answer = 'accepted'
 
     await waitFor(() => expect(resultsOf(MATCH)).toEqual([]), { timeout: 8000 })
+    expect(await screen.findByText('FortyMM checked the signatures and the scores')).toBeInTheDocument()
   }, 30_000)
+
+  it('sends a result queued behind the correction of it first', async () => {
+    grantSession('matches.score')
+    const first = await signedResult(null, 0)
+    const correction = await signedResult(await resultHash(decodeEnvelope(fromBase64url(first)).payload), 1)
+    const head = mockChain(first)
+    queueResult(MATCH, correction)
+
+    await AcceptResultPage.render(`/matches/${MATCH}/scores/approvals/new#${first}`)
+
+    await waitFor(() => expect(resultsOf(MATCH)).toEqual([]), { timeout: 5000 })
+    expect(head.order).toEqual(['correction', 'first', 'correction'])
+    expect(head.current).toBe('correction')
+  })
 
   it('drops a stale result signed more than a day ago', async () => {
     grantSession('matches.score')
@@ -143,4 +158,46 @@ async function renderCounter(issuedAt = Math.floor(Date.now() / 1000)): Promise<
   } as MatchResult
   const envelope = base64url(await signResult(await device(), issuedAt, counter, 1))
   return AcceptResultPage.render(`/matches/${MATCH}/scores/approvals/new#${envelope}`)
+}
+
+// A result of the match, signed now for `side`, that replaces `replaces`.
+async function signedResult(replaces: Uint8Array<ArrayBuffer> | null, side: 0 | 1): Promise<string> {
+  const result = {
+    match: MATCH,
+    bestOf: 5,
+    rated: false,
+    players: [player.id, GECKO],
+    games: side === 0 ? [[11, 5], [11, 9], [11, 2]] : [[11, 5], [9, 11], [11, 2], [11, 4]],
+    ending: 'completed',
+    replaces,
+  } as MatchResult
+  return base64url(await signResult(await device(), Math.floor(Date.now() / 1000), result, side))
+}
+
+// A chain of two results on the mock API: the correction is stale until
+// `first` landed. Records each upload, by name, in `order`.
+function mockChain(first: string) {
+  const chain = { order: [] as string[], current: null as string | null }
+  server.use(
+    http.post<{ matchId: string }, { envelope: string }>(
+      `${API_BASE_URL}/v1/matches/:matchId/approvals`,
+      async ({ request }) => {
+        const { envelope } = await request.json()
+        const name = envelope === hex(fromBase64url(first)) ? 'first' : 'correction'
+        chain.order.push(name)
+        if (name === 'correction' && chain.current === null) {
+          return HttpResponse.json(
+            { errors: [{ status: '409', title: "The result doesn't replace the match's newest result" }] },
+            { status: 409 },
+          )
+        }
+        chain.current = name
+        return HttpResponse.json(
+          { data: { hash: '00', match_id: MATCH, approvals: [], accepted_at: null } },
+          { status: 201 },
+        )
+      },
+    ),
+  )
+  return chain
 }

@@ -6,7 +6,7 @@ import { acknowledge, boardsOf, dropBoard, matchesWithPending, subscribeBoards, 
 import { decodeEnvelope } from '../signing/envelope'
 import { decodePayload } from '../signing/result'
 import { fromBase64url } from '../signing/text'
-import { matchesWithResults, resultsOf, subscribeResults, removeResult } from './results'
+import { deferResult, matchesWithResults, removeResult, resultsOf, subscribeResults } from './results'
 
 // Sends a match's board to the API in the background, so spectators and
 // tournament directors can watch it. It's best effort: the URL keeps the
@@ -93,10 +93,13 @@ const NOT_YET_RETRY_MS = 300_000
 // Whether a refusal of `envelope` may still change, so it is worth sending
 // again: the result it replaces may still arrive, the key may register, or
 // the next session may hold `matches.score`.
+function staleResult(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409 && error.title === STALE_RESULT
+}
+
 export function notYet(error: unknown, envelope: string, now: number): boolean {
   if (!(error instanceof ApiError)) return false
-  const stale = error.status === 409 && error.title === STALE_RESULT
-  if (!stale && !unknownKey(error) && error.status !== 403) return false
+  if (!staleResult(error) && !unknownKey(error) && error.status !== 403) return false
   try {
     const { issuedAt } = decodePayload(decodeEnvelope(fromBase64url(envelope)).payload)
     return now - issuedAt * 1000 < NOT_YET_FOR_MS
@@ -162,6 +165,8 @@ class MatchSync {
   private stuck: SyncStatus['stuck'] = null
   private landed = 0
   private failures = 0
+  // Stale results put behind the others since one was last settled.
+  private deferred = 0
   private readonly unsubscribe: () => void
   private readonly unsubscribeResults: () => void
   private readonly matchId: string
@@ -265,6 +270,14 @@ class MatchSync {
         refreshSession()
       }
       const later = sent.kind === 'result' && notYet(error, sent.text, Date.now())
+      // A stale result may replace one queued behind it. That one goes
+      // first, until each queued result came back stale.
+      if (later && staleResult(error) && this.deferred < resultsOf(this.matchId).length - 1) {
+        this.deferred += 1
+        this.enter({ kind: 'idle' })
+        deferResult(this.matchId, sent.text)
+        return
+      }
       if (retryable(error) || later) {
         const delay = this.retryDelayFor(error, later)
         const limited = rateLimited(error)
@@ -305,11 +318,12 @@ class MatchSync {
     return notYet && this.failures >= RETRY_MS.length ? NOT_YET_RETRY_MS : backoff
   }
 
-  // The server took the result, or refused it for good, so the next goes.
+  // The server took the result, or refused it for good, so the next goes
+  // once the outbox, which may wait for another tab, has changed.
   private settle(result: string): void {
+    this.deferred = 0
     this.enter({ kind: 'idle' })
     removeResult(this.matchId, result)
-    void this.step()
   }
 
   // Drops a board or a result the server won't take, and never sends it

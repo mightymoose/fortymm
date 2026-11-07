@@ -135,7 +135,8 @@ The scoring pages, the URL fragment, board sync and the result pages.
   once. Unlike a board, every result goes, in order, because each
   replaces the one before, so a first result and its correction
   submitted offline both land, first first. The outbox lives in
-  `localStorage`, read afresh on each change, so a reload keeps it and
+  `localStorage`, read afresh and written under a Web Lock on each
+  change, so two tabs' changes take turns, and a reload keeps it and
   `useAppSync()` sends it from any page that has loaded the session.
   Without one, as on a public page or `/signed-out`, results wait, since
   a 401's session refresh would start a guest account there. If a write to it fails, the
@@ -148,8 +149,11 @@ The scoring pages, the URL fragment, board sync and the result pages.
   the first two are told by their titles (`src/api/errors.ts`). After
   any of them, the result keeps trying, with the backoff and then every
   5 minutes or when the page wakes, until a day after it was signed
-  (`notYet()`). Such a wait doesn't make the strip say the sync is
-  stuck, and a board saved meanwhile goes at once. The API
+  (`notYet()`). A stale result first goes behind the match's other
+  queued results, as one of them may be the result it replaces, queued
+  after it, and waits only once each of them came back stale. Such a
+  wait doesn't make the strip say the sync is stuck, and a board saved
+  meanwhile goes at once. The API
   taking it, or refusing it for good (any other 4xx, logged with
   `console.warn`), removes it, and the next one goes. A
   result refused for good changes nothing on the strip. The approval
@@ -245,7 +249,7 @@ The scoring pages, the URL fragment, board sync and the result pages.
   land (`afterEarlierResults()`), as the API would find it stale before
   them. A stale answer for an envelope the outbox still holds shows "It
   goes to FortyMM once the result it corrects reaches it" rather than a
-  refusal. Its verdict is
+  refusal, and checks again once the outbox has sent it. Its verdict is
   `accepted`, or `refused` with the API's title for a 404, a 409 or a
   422. Accepted says
   "FortyMM checked the signatures and the scores". Refused shows "FortyMM

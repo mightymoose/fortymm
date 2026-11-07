@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { matchesWithResults, queueResult, resultsOf, subscribeResults, removeResult } from './results'
+import { deferResult, matchesWithResults, queueResult, removeResult, resultsOf, subscribeResults } from './results'
 
 describe('the results outbox', () => {
   it('keeps each match’s results oldest first, and the same one once', () => {
@@ -60,4 +60,32 @@ describe('the results outbox', () => {
       expect(resultsOf('m')).toEqual(['first', 'correction'])
     })
   })
+
+  it('writes under a Web Lock, so two tabs’ changes take turns', async () => {
+    const held: string[] = []
+    vi.stubGlobal('navigator', {
+      ...navigator,
+      locks: { request: async (name: string, run: () => void) => (held.push(name), run()) },
+    })
+    try {
+      queueResult('m', 'first')
+      deferResult('m', 'first')
+      removeResult('m', 'first')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    expect(held).toEqual(['fortymm-results', 'fortymm-results', 'fortymm-results'])
+    expect(resultsOf('m')).toEqual([])
+  })
+
+  it('puts a result behind the match’s others', () => {
+    queueResult('m', 'correction')
+    queueResult('m', 'first')
+
+    deferResult('m', 'correction')
+
+    expect(resultsOf('m')).toEqual(['first', 'correction'])
+  })
 })
+

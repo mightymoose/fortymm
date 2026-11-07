@@ -3,8 +3,9 @@
 // Each replaces the one before it, so the server takes them only in order,
 // and a result can't wait in memory like a board: a correction whose
 // first result a reload forgot could never be approved. So they stay in
-// localStorage, read afresh on every change so two tabs don't undo each
-// other's writes. Without storage they stay in this tab's memory.
+// localStorage. Each change reads it afresh and writes it under a Web
+// Lock, so two tabs' changes take turns rather than undo each other.
+// Without storage they stay in this tab's memory.
 type Outbox = Record<string, string[]>
 
 const KEY = 'fortymm-results'
@@ -35,22 +36,42 @@ function write(outbox: Outbox): void {
   for (const listener of listeners) listener()
 }
 
+// Applies `change` to the outbox as it stands, under the lock where the
+// browser has one. Listeners hear once it is written.
+function update(change: (outbox: Outbox) => Outbox): void {
+  const run = () => write(change(read()))
+  if (typeof navigator !== 'undefined' && navigator.locks) void navigator.locks.request(KEY, run)
+  else run()
+}
+
 export function resultsOf(matchId: string): readonly string[] {
   return read()[matchId] ?? []
 }
 
 // A submit. The same envelope twice waits once.
 export function queueResult(matchId: string, envelope: string): void {
-  const outbox = read()
-  const queued = outbox[matchId] ?? []
-  if (!queued.includes(envelope)) write({ ...outbox, [matchId]: [...queued, envelope] })
+  update((outbox) => {
+    const queued = outbox[matchId] ?? []
+    return queued.includes(envelope) ? outbox : { ...outbox, [matchId]: [...queued, envelope] }
+  })
 }
 
 // The server took `envelope`, or refused it for good.
 export function removeResult(matchId: string, envelope: string): void {
-  const { [matchId]: queued = [], ...others } = read()
-  const left = queued.filter((queuedEnvelope) => queuedEnvelope !== envelope)
-  write(left.length ? { ...others, [matchId]: left } : others)
+  update(({ [matchId]: queued = [], ...others }) => {
+    const left = queued.filter((queuedEnvelope) => queuedEnvelope !== envelope)
+    return left.length ? { ...others, [matchId]: left } : others
+  })
+}
+
+// Puts `envelope` behind the match's other results, as one of them may be
+// the result it replaces, which a page queued after it.
+export function deferResult(matchId: string, envelope: string): void {
+  update((outbox) => {
+    const queued = outbox[matchId] ?? []
+    if (!queued.includes(envelope)) return outbox
+    return { ...outbox, [matchId]: [...queued.filter((queuedEnvelope) => queuedEnvelope !== envelope), envelope] }
+  })
 }
 
 export function forgetResults(): void {
