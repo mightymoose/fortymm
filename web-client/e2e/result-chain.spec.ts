@@ -1,6 +1,8 @@
 import type { Page } from '@playwright/test'
 import { administratorState, expect, test } from './fixtures.ts'
-import { makeMatch, matchState, readMatch, uploadResult } from './matchApi.ts'
+import { makeMatch, matchesOf, matchState, readMatch, uploadResult } from './matchApi.ts'
+import { HomePage } from './pages/HomePage.ts'
+import { NewMatchPage } from './pages/NewMatchPage.ts'
 import { OpponentsPhone } from './pages/OpponentsPhone.ts'
 import { ScoringPage } from './pages/ScoringPage.ts'
 import { SignInPage } from './pages/SignInPage.ts'
@@ -13,6 +15,8 @@ test.use({ storageState: administratorState, viewport: PHONE })
 
 let opponent: OpponentsPhone
 let players: [string, string]
+// "A vs B", as the Matches page names the matches.
+let vs = ''
 
 test.beforeAll(async ({ browser, baseURL }) => {
   const page = await browser.newPage({ baseURL, storageState: administratorState })
@@ -21,6 +25,7 @@ test.beforeAll(async ({ browser, baseURL }) => {
   await page.close()
   opponent = await OpponentsPhone.open(browser, baseURL)
   players = [me.id, opponent.player.id]
+  vs = `${me.display_name} vs ${opponent.player.display_name}`
 })
 
 test.afterAll(async () => {
@@ -115,4 +120,89 @@ test('a result that hasn’t reached the API still goes after a reload', async (
 
   await expect.poll(() => matchState(page.request, match.id), { timeout: 20_000 }).toBe('awaiting 11-5')
   expect(landed).toEqual([envelopeOf(link)])
+})
+
+// A lost scoring tab carries on from the match's page. These share the
+// file's guest, as one more would pass the suite's guest account limit.
+
+// Starts a best of 3 against the opponent through New match, and gives its
+// id once game 1 opens.
+async function startMatch(page: Page): Promise<string> {
+  const newMatch = new NewMatchPage(page)
+  await newMatch.goto()
+  await newMatch.pickBySearch(opponent.player.display_name)
+  await page.getByRole('radio', { name: '3 Short' }).click()
+  await newMatch.startButton.click()
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Game 1')
+  return new URL(page.url()).pathname.split('/')[2]
+}
+
+test('a match whose scoring tab was lost carries on from the match page to final', async ({ page }) => {
+  const id = await startMatch(page)
+  const phone = new ScoringPage(page)
+  await phone.save(1, [11, 5])
+  await expect.poll(() => matchState(page.request, id), { timeout: 10_000 }).toBe('live 11-5')
+
+  await page.getByRole('link', { name: 'Home' }).click()
+  await new HomePage(page).navLink('Matches').click()
+  // Other matches in this file have the same players.
+  await page.locator(`a[href="/matches/${id}"]`).first().click()
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(vs)
+  // Start cached the match before its board. The dev server's StrictMode
+  // mounts the page twice, which cancels its refetch on arrival, so the
+  // page catches up on its 10-second refetch.
+  await expect(page.getByText('Game 1', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await page.getByRole('link', { name: 'Keep score' }).click()
+
+  await expect(phone.heading).toHaveText('Game 2')
+  await expect(phone.points(1)).toHaveText('11–5')
+  const link = await phone.submit([11, 7])
+  const approved = await uploadResult(page.request, id, await opponent.approve(link))
+  expect(approved.status, `the API took the result: ${JSON.stringify(approved.body)}`).toBe(201)
+  expect(await matchState(page.request, id)).toBe('final 11-5 11-7')
+})
+
+test('a correction made from the match page is approved, not refused as stale', async ({ page }) => {
+  const match = await makeMatch(page.request, players, { rated: true })
+  const phone = new ScoringPage(page)
+  await phone.open(match)
+  await phone.submit([11, 5])
+  await expect.poll(() => matchState(page.request, match.id), { timeout: 10_000 }).toBe('awaiting 11-5')
+
+  await page.goto(`/matches/${match.id}`)
+  await page.getByRole('link', { name: 'Keep score' }).click()
+  await expect(phone.points(1)).toHaveText('11–5')
+  const corrected = await phone.submit([11, 6])
+  await expect.poll(() => matchState(page.request, match.id), { timeout: 10_000 }).toBe('awaiting 11-6')
+
+  const approved = await uploadResult(page.request, match.id, await opponent.approve(corrected))
+  expect(approved.status, `the API took the correction: ${JSON.stringify(approved.body)}`).toBe(201)
+  expect(await matchState(page.request, match.id)).toBe('final 11-6')
+})
+
+test('a scoring URL with no scores rebuilds the board from the server', async ({ page }) => {
+  const match = await makeMatch(page.request, players, { rated: false, bestOf: 3 })
+  const phone = new ScoringPage(page)
+  await phone.open(match)
+  await phone.save(1, [11, 5])
+  await expect.poll(() => matchState(page.request, match.id), { timeout: 10_000 }).toBe('live 11-5')
+
+  await page.goto(`/matches/${match.id}/scores/game/1/edit`)
+
+  await expect(phone.heading).toHaveText('Game 2')
+  await expect(phone.points(1)).toHaveText('11–5')
+  expect(phone.fragment).not.toBe('')
+})
+
+test('Back right after Start opens the match, so a second Start can’t make another', async ({ page }) => {
+  const before = await matchesOf(page.request, players)
+  const id = await startMatch(page)
+
+  await page.goBack()
+
+  await expect(page).toHaveURL(new RegExp(`/matches/${id}$`))
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(vs)
+  await expect(page.getByRole('button', { name: 'Start match' })).toHaveCount(0)
+  const made = (await matchesOf(page.request, players)).filter((other) => !before.includes(other))
+  expect(made).toEqual([id])
 })
