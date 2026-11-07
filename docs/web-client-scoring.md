@@ -6,7 +6,9 @@ The scoring pages, the URL fragment, board sync and the result pages.
   `ScoreGame` (`src/pages/scoring/`), a match's scores, with the
   wordmark, a link to Home and no `AppShell`. It edits one game. Each
   scoring route's loader finds the match with `scoringMatch()`
-  (`src/scoring/matches.ts`), and the pages read it with `matchOf()`.
+  (`src/scoring/matches.ts`), or the edit route's with `carriedMatch()`,
+  which gives null rather than throwing, and the pages read it with
+  `matchOf()`.
   `demo` and `demo-spectator` come from `demoMatch()`
   (`src/scoring/demoMatches.ts`). `demo` is a best of 5 between the
   session's player and `brave badger 214`. In `demo-spectator`, two
@@ -19,9 +21,9 @@ The scoring pages, the URL fragment, board sync and the result pages.
   The page reads no match from the API, so it has no player's name. A
   player sees You and Your opponent, and a spectator sees `Player 1` and
   `Player 2`. For an id that isn't a demo match, a fragment that is
-  empty, can't be read or names another match throws `notFound()`. So
-  the edit route's redirect after an unreadable fragment of the match
-  ends on the not-found page too. Only an API match syncs its board,
+  empty, can't be read or names another match throws `notFound()` on the
+  submission and approval routes. The edit route rebuilds it instead (see
+  below). Only an API match syncs its board,
   and only for an account with `matches.score`, as the API refuses
   anyone else's (`syncsBoard()` in `src/scoring/matches.ts`). A demo
   match, or an account without it, sends nothing and shows no sync mark.
@@ -52,12 +54,31 @@ The scoring pages, the URL fragment, board sync and the result pages.
   score (`checkGame()`). A save changes only the hash, which keeps the
   same route match. So the routes set `shouldReload: true` and a
   `blocking` loader, and the loader runs again before the page renders.
-- The edit route drops a fragment it can't read. It redirects to game 1
-  with no scores, with a replace. An API match's fragment keeps its
-  details, and a demo match's is empty, so a reload or a share doesn't carry it,
-  and sets `discardedScores` in the router's history state (typed in
+- The edit route rebuilds a fragment that gives no scores for an API
+  match: empty, unreadable, for another match, or holding scores the
+  match can't. Online (`navigator.onLine`), its loader loads the match
+  with `matchQuery()`, with no retry, and redirects with a replace to
+  where Keep score on the match's page goes (`keepScoreTarget()`, see
+  `docs/web-client-pages.md`): the first game with no score, with the
+  API's finished games and, for a pending result, its `result_hash` in
+  `replaces`. A final match goes to its page instead, as editing after
+  final is #316's. No match is `notFound()`. While it loads, the route's
+  `pendingComponent` (`ScoresLoading`) shows the score page's frame with
+  a skeleton, and an error answer shows the boundary's alert with Try
+  again (`ScoresFailed`), which runs the loader again. A fragment that
+  gives scores never asks the API, so a restored tab works offline.
+- With no network (`navigator.onLine` false, or the request got no
+  response), and for a demo match always, the edit route drops a
+  fragment it can't read. It redirects to game 1 with no scores, with a
+  replace. An API match's fragment keeps its details, and a demo match's
+  is empty, so a reload or a share doesn't carry it, and sets
+  `discardedScores` in the router's history state (typed in
   `src/router.tsx`). The page then says "This link’s scores couldn’t be
-  read, so the scores start empty." A game number past the first game
+  read, so the scores start empty." A fragment with no details of the
+  match leaves nothing to start from, so the loader gives `unreachable`
+  and the page (`ScoresUnreachable`) says "This match’s scores aren’t on
+  this device" and to open the match once with signal, with a link to its
+  page. A game number past the first game
   with no score, or one that isn't a whole number, goes to that game,
   with a replace, keeping the hash.
 - `matchFor()` in `demoMatches.ts` is the demo match a result names, as

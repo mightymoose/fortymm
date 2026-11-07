@@ -278,6 +278,20 @@ with no route to the API (`page.route()` aborts the match requests, as
 `context.setOffline()` would also cut off the dev server) both land once
 it is back, first first, and a result still waiting goes after a reload.
 
+Both specs make and read matches through `e2e/matchApi.ts` and approve
+on the guest's phone through `OpponentsPhone` (`e2e/pages/`).
+
+`e2e/keep-score.spec.ts` checks that a match whose scoring tab was lost
+carries on, with the same two phones. A best of 3 started through New
+match saves game 1. Once the API has the board, the scorer goes Home,
+opens the match from Matches and presses Keep score, which opens game 2
+with game 1 kept, then submits; the guest approves, and the match is
+final with both games. Keep score after a submitted result opens a
+correction that names it, whose approval the API takes (201, not 409).
+A scoring URL with no fragment after a saved board opens the next game
+with the board's game and a fragment. Back from game 1 right after Start
+opens the match's page, and only that match was made.
+
 `e2e/matches-empty.spec.ts` checks the empty Matches page at 390 and
 1280px. Only a database with no match shows it, and the other specs make
 matches, so it is the `empty` project in `playwright.config.ts`, which
@@ -289,7 +303,7 @@ it. A local run whose `postgres-data` volume kept matches skips it and
 says so. Run `docker compose down -v` in the checkout for a fresh
 database.
 
-The suite counts about 25 guest accounts and sign-ins with no session,
+The suite counts about 26 guest accounts and sign-ins with no session,
 under the limit of 30 a minute.
 
 The design system page is a copy of the reference's component gallery
