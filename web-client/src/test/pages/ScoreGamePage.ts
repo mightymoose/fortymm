@@ -129,6 +129,12 @@ export class ScoreGamePage {
     return this.cell(game).querySelector('.score-slot__sync')?.textContent?.trim() ?? null
   }
 
+  // Whether game `game` shows that the server took it: green, with a check.
+  slotShowsSynced(game: number): boolean {
+    const cell = this.cell(game)
+    return cell.classList.contains('score-slot--synced') || cell.querySelector('.score-slot__badge > *') !== null
+  }
+
   // The note in the strip's header, such as that the device is offline.
   get stripNote(): string | null {
     return this.strip.querySelector('.score-strip__note')?.textContent ?? null

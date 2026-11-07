@@ -103,7 +103,12 @@ The scoring pages, the URL fragment, board sync and the result pages.
   is false), it sends nothing and waits for `online`. A board that
   can't get through waits, with a backoff of 2, 4, 8, 15 and then 30
   seconds, and goes as soon as the browser fires `online`. A 4xx
-  other than 429 drops the board. `useAppSync()` runs in `Root`, on every
+  other than 429 is a refusal. It drops the board, which is never sent
+  again and never shows as synced, and keeps why (`refused`) until a
+  later board lands. A 409 reads as a final match. Any other refusal is
+  logged with `console.warn`, and a 403 also refreshes the session
+  through the callback `Root` gives `useAppSync()`, in case a
+  permission was taken away. `useAppSync()` runs in `Root`, on every
   page, for each match with a board to send, so it still goes after the
   person leaves the scoring page. A sync stops when its last holder lets
   go, and a response that lands after that changes nothing.
@@ -114,8 +119,13 @@ The scoring pages, the URL fragment, board sync and the result pages.
   A game is unsynced when its points differ from the `synced` board. It
   shows a dot while the board is on its way, a dashed amber edge and
   label after a send that didn't get through, and green for 1.2 seconds
-  once it lands. Screen readers hear `Syncing`, `Not synced` or
-  `Synced`. The strip's header line says when the device is offline.
+  once it lands. A game goes green only when `landed`, the count of
+  boards the server took, went up, so a refused board's games just go
+  plain. Screen readers hear `Syncing`, `Not synced` or `Synced`. The
+  strip's header line says when the device is offline or a send is
+  stuck. Otherwise, after a refusal, it says `Match final. Changes here
+  don’t sync.` for a 409 and `Not synced. Saved on this device.` for
+  any other.
   The marks never change a cell's size, and the line keeps its height.
 - When a player's press would leave a `decided` board, the button reads
   Submit result, and the line beside it says who wins. Submit drops any
