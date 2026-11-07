@@ -78,6 +78,7 @@ type Action = { does: 'score' | 'notYet'; label: string; kind: 'primary' | 'seco
 
 const keepScore = (label: string, kind: Action['kind']): Action => ({ does: 'score', label, kind })
 const notYet = (label: string, kind: Action['kind']): Action => ({ does: 'notYet', label, kind })
+
 type Situation = {
   // A sentence in the content flow, or an alert for a problem with its fix.
   notice: { icon: 'info' | 'clock' | 'check'; text: string } | null
