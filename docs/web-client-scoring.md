@@ -100,10 +100,15 @@ The scoring pages, the URL fragment, board sync and the result pages.
   tab's pad.
 - A match's sync is a state machine of `idle`, `sending`,
   `waitingRetry`, `waitingOnline` and `stopped`, with why the last send
-  got stuck kept beside it. `nextStep()` picks what an idle sync does. While the browser knows it's offline (`navigator.onLine`
-  is false), it sends nothing and waits for `online`. A board that
-  can't get through waits, with a backoff of 2, 4, 8, 15 and then 30
-  seconds, and goes as soon as the browser fires `online`. A 4xx
+  got stuck kept beside it. `nextStep()` picks what an idle sync does.
+  While the browser knows it's offline (`navigator.onLine` is false),
+  it sends nothing until it wakes. A board that can't get through
+  waits, with a backoff of 2, 4, 8, 15 and then 30 seconds, or until
+  it wakes. The sync wakes when the browser fires `online`, or the
+  page fires `pageshow` or turns visible, as iOS Safari can resume a
+  page without `online`. A 429 waits out its `Retry-After` instead, if
+  that is longer than the backoff, but never more than 5 minutes, and
+  nothing wakes it early. A 4xx
   other than 429 is a refusal. It drops the board, which is never sent
   again and never shows as synced, and keeps why in `refused` until a
   later board lands, even after the sync stops. A 409 reads as a final
@@ -127,10 +132,11 @@ The scoring pages, the URL fragment, board sync and the result pages.
   `Offline. Saved on this device.` shows while the browser knows it's
   offline, and from the first send that got no response
   (`ApiUnreachable`). `Not synced yet. Saved on this device.` shows from
-  the second failed send in a row that got a response, such as a 5xx
-  or a 429. A 502 to 504 from Cloudflare is a failing server, not an
-  offline device. One failed send with a response changes nothing
-  while it waits to retry, so a blip doesn't flash a warning. A refusal
+  the second failed send in a row that got a response, such as a 5xx,
+  and from the first 429, as its wait can last minutes. A 502 to 504
+  from Cloudflare is a failing server, not an offline device. Any other
+  one failed send with a response changes nothing while it waits to
+  retry, so a blip doesn't flash a warning. A refusal
   ends the run of failures. Otherwise,
   after a refusal, it says `Match final. Changes here don’t sync.` for
   a 409 and `Not synced. Saved on this device.` for

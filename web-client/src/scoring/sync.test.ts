@@ -36,7 +36,11 @@ describe('stuckAfter', () => {
     expect(stuckAfter(unreachable, 1, null)).toBe('offline')
   })
 
-  it.each([502, 503, 504, 500, 429])('is failing from the second %i in a row, never offline', (status) => {
+  it('is failing from the first 429, as its wait can last minutes', () => {
+    expect(stuckAfter(answer(429), 1, null)).toBe('failed')
+  })
+
+  it.each([502, 503, 504, 500])('is failing from the second %i in a row, never offline', (status) => {
     expect(stuckAfter(answer(status), 1, null)).toBeNull()
     expect(stuckAfter(answer(status), 2, null)).toBe('failed')
     expect(stuckAfter(answer(status), 2, 'offline')).toBe('failed')

@@ -647,6 +647,80 @@ describe('ScoreGame', () => {
         expect(page.stripNote).toBe('Not synced. Saved on this device.')
       })
 
+      describe('a 429', () => {
+        // Made at the send, as the API's answer would be, so Retry-After
+        // counts from then.
+        const rateLimitNextSend = (retryAfter?: string) =>
+          vi.mocked(putBoard).mockImplementationOnce(() =>
+            Promise.reject(
+              new ApiError(
+                'POST /v1/matches/demo/boards',
+                new Response(null, { status: 429, headers: retryAfter ? { 'Retry-After': retryAfter } : {} }),
+              ),
+            ),
+          )
+
+        it('waits out its Retry-After, whatever wakes the page', async () => {
+          const page = await ScoreGamePage.render()
+          rateLimitNextSend('60')
+
+          await saveGame(page, 1, '11', '4')
+          expect(page.stripNote).toBe('Not synced yet. Saved on this device.')
+          await page.goOnline()
+          vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+          act(() => document.dispatchEvent(new Event('visibilitychange')))
+          act(() => window.dispatchEvent(new Event('pageshow')))
+          await act(() => vi.advanceTimersByTimeAsync(59_000))
+
+          expect(putBoard).toHaveBeenCalledTimes(1)
+
+          await act(() => vi.advanceTimersByTimeAsync(1000))
+          await page.settle()
+
+          expect(putBoard).toHaveBeenCalledTimes(2)
+          expect(ScoreGamePage.serverBoard).toBe(page.hash)
+        })
+
+        it('waits no more than 5 minutes', async () => {
+          const page = await ScoreGamePage.render()
+          rateLimitNextSend('600')
+
+          await saveGame(page, 1, '11', '4')
+          await act(() => vi.advanceTimersByTimeAsync(299_000))
+
+          expect(putBoard).toHaveBeenCalledTimes(1)
+
+          await act(() => vi.advanceTimersByTimeAsync(1000))
+
+          expect(putBoard).toHaveBeenCalledTimes(2)
+        })
+
+        it('waits the backoff without a Retry-After', async () => {
+          const page = await ScoreGamePage.render()
+          rateLimitNextSend()
+
+          await saveGame(page, 1, '11', '4')
+          await act(() => vi.advanceTimersByTimeAsync(1000))
+
+          expect(putBoard).toHaveBeenCalledTimes(1)
+
+          await act(() => vi.advanceTimersByTimeAsync(1000))
+
+          expect(putBoard).toHaveBeenCalledTimes(2)
+        })
+      })
+
+      it('sends at once when the browser comes back online during a backoff', async () => {
+        const page = await ScoreGamePage.render()
+        vi.mocked(putBoard).mockRejectedValueOnce(answers(503))
+        await saveGame(page, 1, '11', '4')
+
+        await page.goOnline()
+
+        expect(putBoard).toHaveBeenCalledTimes(2)
+        expect(ScoreGamePage.serverBoard).toBe(page.hash)
+      })
+
       it('says offline when no response came back', async () => {
         const page = await ScoreGamePage.render()
         vi.mocked(putBoard).mockRejectedValueOnce(
@@ -683,6 +757,20 @@ describe('ScoreGame', () => {
 
       expect(page.hash).toBe('')
       expect(page.slotScore(1)).toBe('–')
+    })
+
+    it('syncs a board saved offline when the page comes back without an online event', async () => {
+      const page = await ScoreGamePage.render()
+      page.goOffline()
+      await saveGame(page, 1, '11', '7')
+
+      vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
+      vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+      act(() => document.dispatchEvent(new Event('visibilitychange')))
+      await page.settle()
+
+      expect(ScoreGamePage.serverBoard).toBe(page.hash)
+      expect(page.slotSync(1)).toBe('Synced')
     })
 
     it('syncs a board saved offline after the scoring page has closed', async () => {

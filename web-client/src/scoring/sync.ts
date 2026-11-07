@@ -8,11 +8,12 @@ import { putBoard } from './demoServer'
 // scores, and nothing waits on a send or fails with it. Only the newest
 // board saved goes, one send at a time, so a late older copy from this tab
 // can't land after a newer one. While the browser knows it's offline, it
-// sends nothing until `online`. A board the server can't take now waits,
-// with a backoff, or until `online`. One it refuses for good (a 4xx other
-// than 429) is dropped, and never shows as synced. It never reads the
-// server's board back, so a board another device sent can't change this
-// tab's pad.
+// sends nothing until `online` or the page resumes. A board the server
+// can't take now waits, with a backoff, or until the same. A 429 waits out
+// its Retry-After instead, which nothing cuts short. One it refuses for
+// good (a 4xx other than 429) is dropped, and never shows as synced. It
+// never reads the server's board back, so a board another device sent
+// can't change this tab's pad.
 
 // Two separate facts about a match's sync. A stuck board that is trying
 // again is both stuck and sending.
@@ -37,16 +38,29 @@ export function retryDelay(failures: number): number {
   return RETRY_MS[Math.min(failures, RETRY_MS.length - 1)]
 }
 
+const RATE_LIMIT_MAX_MS = 300_000
+
+function rateLimitDelay(retryAt: Date | null, backoff: number, now: number): number {
+  const retryAfter = retryAt === null ? 0 : retryAt.getTime() - now
+  return Math.min(Math.max(backoff, retryAfter), RATE_LIMIT_MAX_MS)
+}
+
+function rateLimited(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.status === 429
+}
+
 export function retryable(error: unknown): boolean {
-  return !(error instanceof ApiError) || error.status >= 500 || error.status === 429
+  return !(error instanceof ApiError) || error.status >= 500 || rateLimited(error)
 }
 
 // Why a sync is stuck after its `failures`th failed send in a row. No
 // response means the device is offline. A response, even a 502 to 504 from
 // Cloudflare, means the server is failing, which the strip only says from
-// the second failure, so one blip shows nothing.
+// the second failure, so one blip shows nothing. A 429 says so at once,
+// as its wait can last minutes.
 export function stuckAfter(error: unknown, failures: number, stuck: SyncStatus['stuck']): SyncStatus['stuck'] {
   if (error instanceof ApiUnreachable) return 'offline'
+  if (rateLimited(error)) return 'failed'
   return failures >= 2 ? 'failed' : stuck
 }
 
@@ -61,7 +75,7 @@ export function nextStep({ pending, offline }: { pending: string | null; offline
 type State =
   | { kind: 'idle' }
   | { kind: 'sending'; board: string }
-  | { kind: 'waitingRetry'; timer: ReturnType<typeof setTimeout> }
+  | { kind: 'waitingRetry'; timer: ReturnType<typeof setTimeout>; rateLimited: boolean }
   | { kind: 'waitingOnline' }
   | { kind: 'stopped' }
 
@@ -88,14 +102,23 @@ class MatchSync {
       void this.step()
     })
     window.addEventListener('online', this.kick)
+    document.addEventListener('visibilitychange', this.resume)
+    window.addEventListener('pageshow', this.kick)
   }
 
   // Syncs now rather than at the next retry, as when the browser comes back
-  // online or the page opens.
+  // online or the page opens. A 429's wait is the server's to end.
   readonly kick = (): void => {
+    if (this.state.kind === 'waitingRetry' && this.state.rateLimited) return
     if (this.state.kind === 'waitingRetry') clearTimeout(this.state.timer)
     if (this.state.kind === 'waitingRetry' || this.state.kind === 'waitingOnline') this.enter({ kind: 'idle' })
     void this.step()
+  }
+
+  // iOS Safari can resume a page without firing `online`, so a board
+  // waiting for it would wait until the next save.
+  private readonly resume = (): void => {
+    if (document.visibilityState === 'visible') this.kick()
   }
 
   stop(): void {
@@ -103,6 +126,8 @@ class MatchSync {
     this.state = { kind: 'stopped' }
     this.unsubscribe()
     window.removeEventListener('online', this.kick)
+    document.removeEventListener('visibilitychange', this.resume)
+    window.removeEventListener('pageshow', this.kick)
   }
 
   // Whether `state` is still the one, after an await. Anything else, such
@@ -147,11 +172,14 @@ class MatchSync {
     } catch (error) {
       if (!this.isIn(sending)) return
       if (retryable(error)) {
-        const delay = retryDelay(this.failures)
+        const backoff = retryDelay(this.failures)
+        const limited = rateLimited(error)
+        const delay = limited ? rateLimitDelay(error.retryAt, backoff, Date.now()) : backoff
         this.failures += 1
         this.stuck = stuckAfter(error, this.failures, this.stuck)
         this.enter({
           kind: 'waitingRetry',
+          rateLimited: limited,
           timer: setTimeout(() => {
             this.enter({ kind: 'idle' })
             void this.step()
