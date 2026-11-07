@@ -95,6 +95,8 @@ suite against the deployment. `docs/ci.md` describes each step, and
   ([.claude/rules/business-logic-in-services.md](.claude/rules/business-logic-in-services.md)).
 - A component that loads data owns its loading and error states
   ([.claude/rules/loading-and-errors.md](.claude/rules/loading-and-errors.md)).
+- A session tears down every dev stack it started in a worktree before it
+  closes ([.claude/rules/tear-down-dev-stacks.md](.claude/rules/tear-down-dev-stacks.md)).
 - A published API version (`/v1`) never changes in a breaking way.
   Released apps call the API that `main` deploys for months.
 - The web app must work offline in a hall with no signal. Scoring and
