@@ -137,12 +137,8 @@ async function startMatch(page: Page): Promise<string> {
   return new URL(page.url()).pathname.split('/')[2]
 }
 
-test('a match whose scoring tab was lost carries on from the match page to final', async ({ page }) => {
-  const id = await startMatch(page)
-  const phone = new ScoringPage(page)
-  await phone.save(1, [11, 5])
-  await expect.poll(() => matchState(page.request, id), { timeout: 10_000 }).toBe('live 11-5')
-
+// Opens the match from Matches, in the same session, and presses Keep score.
+async function keepScoreFromMatches(page: Page, id: string): Promise<void> {
   await page.getByRole('link', { name: 'Home' }).click()
   await new HomePage(page).navLink('Matches').click()
   // Other matches in this file have the same players.
@@ -150,13 +146,28 @@ test('a match whose scoring tab was lost carries on from the match page to final
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(vs)
   await expect(page.getByText('Game 1', { exact: true })).toBeVisible()
   await page.getByRole('link', { name: 'Keep score' }).click()
+}
 
+test('a match whose scoring tab was lost carries on from the match page to final', async ({ page }) => {
+  const id = await startMatch(page)
+  const phone = new ScoringPage(page)
+  await phone.save(1, [11, 5])
+  await expect.poll(() => matchState(page.request, id), { timeout: 10_000 }).toBe('live 11-5')
+
+  await keepScoreFromMatches(page, id)
   await expect(phone.heading).toHaveText('Game 2')
   await expect(phone.points(1)).toHaveText('11–5')
+  await phone.save(2, [7, 11])
+  await expect.poll(() => matchState(page.request, id), { timeout: 10_000 }).toBe('live 11-5 7-11')
+
+  // The match page has a read from before game 2 cached.
+  await keepScoreFromMatches(page, id)
+  await expect(phone.heading).toHaveText('Game 3')
+  await expect(phone.points(2)).toHaveText('7–11')
   const link = await phone.submit([11, 7])
   const approved = await uploadResult(page.request, id, await opponent.approve(link))
   expect(approved.status, `the API took the result: ${JSON.stringify(approved.body)}`).toBe(201)
-  expect(await matchState(page.request, id)).toBe('final 11-5 11-7')
+  expect(await matchState(page.request, id)).toBe('final 11-5 7-11 11-7')
 })
 
 test('a correction made from the match page is approved, not refused as stale', async ({ page }) => {

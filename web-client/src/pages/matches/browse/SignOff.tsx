@@ -1,6 +1,6 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { Link, useRouteContext } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import { matchQuery } from '../../../api/queries'
 import { EmptyState } from '../../../components/EmptyState'
 import { Icon } from '../../../components/Icon'
@@ -72,8 +72,8 @@ function LoadedSignOff({ id }: { id: string }) {
   return <DetailSignOff match={match} updatedAt={dataUpdatedAt} />
 }
 
-// `score` opens the match's scores, with this page's games. `notYet` is an
-// action the app can't do yet.
+// `score` opens the match's scores. `notYet` is an action the app can't
+// do yet.
 type Action = { does: 'score' | 'notYet'; label: string; kind: 'primary' | 'secondary' | 'ghost' }
 
 const keepScore = (label: string, kind: Action['kind']): Action => ({ does: 'score', label, kind })
@@ -186,16 +186,32 @@ function DemoButton({ action }: { action: Action }) {
   )
 }
 
-// Opens the match's scores with the games this page shows, so a player
-// who lost the scoring tab carries on from here.
+const subscribeToNetwork = (listener: () => void) => {
+  window.addEventListener('online', listener)
+  window.addEventListener('offline', listener)
+  return () => {
+    window.removeEventListener('online', listener)
+    window.removeEventListener('offline', listener)
+  }
+}
+
+function useOnline(): boolean {
+  return useSyncExternalStore(subscribeToNetwork, () => navigator.onLine)
+}
+
+// Opens the match's scores, so a player who lost the scoring tab carries
+// on from here. Online the link has no fragment, so the scoring route
+// loads the match again: this page may show a cached read that is older
+// than the server's board. Offline it carries the games this page shows.
 function ScoreLink({ match, action }: { match: MatchDetail; action: Action }) {
+  const online = useOnline()
   const target = keepScoreTarget(match, nowSeconds())
   if (!target) return null
   return (
     <Link
       to="/matches/$matchId/scores/game/$gameNumber/edit"
       params={{ matchId: match.id, gameNumber: target.gameNumber }}
-      hash={target.hash}
+      hash={online ? undefined : target.hash}
       className={`fm-btn fm-btn--${action.kind}`}
     >
       {action.label}

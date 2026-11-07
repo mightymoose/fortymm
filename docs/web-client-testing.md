@@ -286,8 +286,10 @@ with the same guest, as another would pass the guest account limit. A
 best of 3 started through New
 match saves game 1. Once the API has the board, the scorer goes Home,
 opens the match from Matches and presses Keep score, which opens game 2
-with game 1 kept, then submits; the guest approves, and the match is
-final with both games. Keep score after a submitted result opens a
+with game 1 kept. It saves game 2 and does it again, with the match
+page's read from before game 2 cached, and Keep score opens game 3 with
+both games. It then submits; the guest approves, and the match is final
+with all three games. Keep score after a submitted result opens a
 correction that names it, whose approval the API takes (201, not 409).
 A scoring URL with no fragment after a saved board opens the next game
 with the board's game and a fragment. Back from game 1 right after Start

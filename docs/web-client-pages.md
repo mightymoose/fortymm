@@ -89,8 +89,13 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   score, and a draft of the API's finished games, which names the head's
   `result_hash` in `replaces` once a result is pending. So a player who
   lost the scoring tab carries on, and the opponent's approval of the
-  correction is taken. The page's other actions, such as Share match and
-  Approve, only say "Not ready yet".
+  correction is taken. Online (`navigator.onLine`, followed through its
+  `online` and `offline` events) the link drops the draft, so the scoring
+  route loads the match again and builds it from the server's board. The
+  page may show a read it cached before more games were saved. A match
+  whose two players were merged into one has no link, as no result can
+  name one player on both sides. The page's other actions, such as Share
+  match and Approve, only say "Not ready yet".
 - `matchesQuery()` and `matchQuery()` (`src/api/queries.ts`) turn the
   API's matches into `MatchRecord` and `MatchDetail` (`browse/match.ts`).
   The API works out each match's state, and the page only words it. A

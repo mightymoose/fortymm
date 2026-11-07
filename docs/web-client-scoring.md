@@ -57,12 +57,13 @@ The scoring pages, the URL fragment, board sync and the result pages.
 - The edit route rebuilds a fragment that gives no scores for an API
   match: empty, unreadable, for another match, or holding scores the
   match can't. Online (`navigator.onLine`), its loader loads the match
-  with `matchQuery()`, with no retry, and redirects with a replace to
+  with `matchQuery()`, with no retry and `staleTime: 0`, so a read the
+  match page cached is fetched again, and redirects with a replace to
   where Keep score on the match's page goes (`keepScoreTarget()`, see
   `docs/web-client-pages.md`): the first game with no score, with the
   API's finished games and, for a pending result, its `result_hash` in
   `replaces`. A final match goes to its page instead, as editing after
-  final is #316's. No match, or a 403 for an account that can score but
+  final is #316's, and so does one whose players were merged into one. No match, or a 403 for an account that can score but
   not view matches, is `notFound()`. While it loads, the route's
   `pendingComponent` (`ScoresLoading`) shows the score page's frame with
   a skeleton, and an error answer shows the boundary's alert with Try

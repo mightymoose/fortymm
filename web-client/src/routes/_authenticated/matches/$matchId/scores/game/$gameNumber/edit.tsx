@@ -83,6 +83,8 @@ async function rebuildFromApi(api: ApiClient, queryClient: QueryClient, matchId:
     found = await Promise.race([
       queryClient.fetchQuery({
         ...query,
+        // The match page may have cached an older read than the server's.
+        staleTime: 0,
         // The page waits on this, so a failure shows at once, with Try again.
         // No response is a hall with no signal, which a retry won't fix.
         retry: false,
