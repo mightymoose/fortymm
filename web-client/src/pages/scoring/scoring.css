@@ -135,9 +135,6 @@
   .score-slot__pts{font-size:var(--text-sm)}
 }
 
-
-/* While the route loads the match from the API (ScoresLoading.tsx): the
-   game's heading, the pad and the strip. */
 .score-skel--title{width:160px;height:36px}
 .score-skel--pad{height:280px;border-radius:var(--r-lg)}
 .score-skel--strip{height:96px;border-radius:var(--r-lg)}

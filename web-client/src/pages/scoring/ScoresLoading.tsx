@@ -8,7 +8,6 @@ import { Wordmark } from '../../components/Wordmark'
 import { ROUTE } from './sides'
 import './scoring.css'
 
-// The score page's frame, for what the route shows in place of the scores.
 function ScoreFrame({ children }: { children: ReactNode }) {
   return (
     <div className="score-page">
@@ -24,7 +23,6 @@ function ScoreFrame({ children }: { children: ReactNode }) {
   )
 }
 
-// While the route loads a match whose URL carries no scores from the API.
 export function ScoresLoading() {
   return (
     <ScoreFrame>
