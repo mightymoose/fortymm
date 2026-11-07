@@ -217,6 +217,19 @@ export class ScoreGamePage {
     return screen.findByRole('alert')
   }
 
+  // Try again in the alert the page shows when the API failed to give the
+  // match. It waits for the page to load again.
+  async tryAgain(): Promise<void> {
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await this.settle()
+  }
+
+  // The link the page offers when the URL carries no scores and the API
+  // couldn't give the match.
+  get openMatchLink(): HTMLElement {
+    return screen.getByRole('link', { name: 'Open the match' })
+  }
+
   // The spectator's note about who submits.
   get result(): HTMLElement {
     return screen.getByRole('region', { name: 'Result' })

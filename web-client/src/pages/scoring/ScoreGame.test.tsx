@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from '@testing-library/react'
+import { act, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
@@ -16,7 +16,6 @@ import { decodePayload, encodePayload, resultHash, type MatchResult } from '../.
 import { base64url, fromBase64url } from '../../signing/text'
 import { ErrorPage } from '../../test/pages/ErrorPage'
 import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
-import { renderRoute } from '../../test/renderRoute'
 import {
   API_BASE_URL,
   grantSession,
@@ -378,8 +377,8 @@ describe('ScoreGame', () => {
     const crane = '0c9e7b21-3d4a-4f68-a1b5-7e2f9c8d6a40'
     const gecko = 'a4d8f0e6-1b2c-4e3d-8f5a-9c7b6e1d2f08'
     const spectated = apiMatch(id, 7, false, [crane, gecko])
-    const path = (match = spectated, games: GamePoints[] = []) =>
-      `/matches/${id}/scores/game/1/edit#${draftHash(match, games, null, 1_793_700_000)}`
+    const fragment = (match = spectated, games: GamePoints[] = []) => `#${draftHash(match, games, null, 1_793_700_000)}`
+    const path = (match = spectated, games: GamePoints[] = []) => `/matches/${id}/scores/game/1/edit${fragment(match, games)}`
 
     it('shows the match with no request, naming the players by side', async () => {
       const page = await ScoreGamePage.render(path())
@@ -411,8 +410,8 @@ describe('ScoreGame', () => {
       it.each([
         ['no fragment', ''],
         ['a fragment it can’t read', '#not-a-result'],
-        ['a fragment for another match', path(apiMatch('01970000-0000-7000-8000-0000000000b6', 3, false, [crane, gecko])).slice(path().indexOf('#'))],
-        ['scores the match can’t hold', path(spectated, [[11, 10]]).slice(path().indexOf('#'))],
+        ['a fragment for another match', fragment(apiMatch('01970000-0000-7000-8000-0000000000b6', 3, false, [crane, gecko]))],
+        ['scores the match can’t hold', fragment(spectated, [[11, 10]])],
       ])('rebuilds the board from the API with %s', async (_, hash) => {
         mockMatchReads([served([[11, 3], [4, 2]])])
         const page = await ScoreGamePage.render(`/matches/${id}/scores/game/1/edit${hash}`)
@@ -459,13 +458,13 @@ describe('ScoreGame', () => {
       it('shows an error with Try again when the API fails, then the scores', async () => {
         const api = mockMatchReads([served([[11, 3]])])
         api.fails = true
-        const page = await ErrorPage.render(`/matches/${id}/scores/game/1/edit`)
-        expect(page.text).toContain('Try again')
+        const page = await ScoreGamePage.renderLoading(`/matches/${id}/scores/game/1/edit`)
+        expect(await page.findAlert()).toHaveTextContent('Try again')
 
         api.fails = false
-        await userEvent.click(screen.getByRole('button', { name: 'Try again' }))
+        await page.tryAgain()
 
-        await waitFor(() => expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Game 2'))
+        expect(page.heading).toHaveTextContent('Game 2')
       })
 
       describe('with no network', () => {
@@ -477,12 +476,10 @@ describe('ScoreGame', () => {
 
         it('says to open the match with signal, and sends nothing', async () => {
           const api = mockMatchReads([served([[11, 3]])])
-          await renderRoute(`/matches/${id}/scores/game/1/edit`)
+          const page = await ScoreGamePage.render(`/matches/${id}/scores/game/1/edit`)
 
-          expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent(
-            'This match’s scores aren’t on this device',
-          )
-          expect(screen.getByRole('link', { name: 'Open the match' })).toHaveAttribute('href', `/matches/${id}`)
+          expect(page.heading).toHaveTextContent('This match’s scores aren’t on this device')
+          expect(page.openMatchLink).toHaveAttribute('href', `/matches/${id}`)
           expect(api.reads).toEqual([])
         })
 
@@ -499,11 +496,9 @@ describe('ScoreGame', () => {
 
       it('says to open the match with signal when the request gets no response', async () => {
         server.use(http.get(`${API_BASE_URL}/v1/matches/:matchId`, () => HttpResponse.error()))
-        await renderRoute(`/matches/${id}/scores/game/1/edit`)
+        const page = await ScoreGamePage.render(`/matches/${id}/scores/game/1/edit`)
 
-        expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent(
-          'This match’s scores aren’t on this device',
-        )
+        expect(page.heading).toHaveTextContent('This match’s scores aren’t on this device')
       })
     })
 
