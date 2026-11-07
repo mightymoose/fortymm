@@ -21,8 +21,10 @@ The scoring pages, the URL fragment, board sync and the result pages.
   `Player 2`. For an id that isn't a demo match, a fragment that is
   empty, can't be read or names another match throws `notFound()`. So
   the edit route's redirect after an unreadable fragment of the match
-  ends on the not-found page too. Board sync still goes to the demo
-  server for every match.
+  ends on the not-found page too. Only a demo match syncs its board, to
+  the demo server (`syncsBoard()` in `src/scoring/matches.ts`). An API
+  match sends nothing and shows no sync mark until boards go to the API,
+  rather than a tick for a board FortyMM never got.
   One pad holds a big score input per player and the games tally
   between them, the viewer's player on the left, then the actions
   (`ScoreEntry.tsx`). To a player, the page names the players You and
@@ -82,11 +84,11 @@ The scoring pages, the URL fragment, board sync and the result pages.
   moves on at once. It pushes when the game number changes and replaces
   when it stays. Nothing about saving waits on the network. Clear game
   shows only on the last game with a score, and removes it.
-- Each save, and each submit, also syncs the board in the background
-  (`src/scoring/sync.ts`), so spectators and tournament directors can
-  watch the match. Sync is best effort. It never holds up or fails a
-  save. The board is a snapshot, the fragment's text, with no outbox of
-  changes. `src/scoring/boards.ts` keeps, per match and in memory only,
+- On a demo match, each save and each submit also syncs the board in
+  the background (`src/scoring/sync.ts`), so spectators and tournament
+  directors can watch the match. Sync is best effort. It never holds up
+  or fails a save. The board is a snapshot, the fragment's text, with no
+  outbox of changes. `src/scoring/boards.ts` keeps, per match and in memory only,
   the newest board this tab saved that the server hasn't taken
   (`pending`), and the last one the server took from this tab
   (`synced`). A newer save replaces an unsent one, and a reload forgets

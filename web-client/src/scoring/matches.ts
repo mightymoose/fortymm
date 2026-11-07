@@ -30,6 +30,13 @@ export function matchOf(scoring: ScoringMatch, self: MatchPlayer, result: MatchR
   return matchFor(scoring.id, self, result) ?? demoMatch(scoring.id, self)
 }
 
+// Whether the scoring page sends the match's board. Only the demo server can
+// hold a board until boards go to the API, so an API match sends nothing
+// and shows no sync mark rather than a tick for a board FortyMM never got.
+export function syncsBoard(match: Match): boolean {
+  return match.source === 'demo'
+}
+
 // A match the API made. Nothing on the device knows its players' names, so
 // a spectator sees Player 1 and Player 2, and a player sees You and Your
 // opponent.

@@ -200,14 +200,14 @@ export function useAppSync(): void {
 }
 
 // Syncs the match while the calling page is mounted, and returns where the
-// sync stands.
-export function useBoardSync(matchId: string): SyncStatus {
-  useEffect(() => hold(matchId), [matchId])
+// sync stands. A match that isn't `enabled` holds nothing and stays idle.
+export function useBoardSync(matchId: string, enabled: boolean): SyncStatus {
+  useEffect(() => (enabled ? hold(matchId) : undefined), [matchId, enabled])
   return useSyncExternalStore(
     (listener) => {
       statusListeners.add(listener)
       return () => statusListeners.delete(listener)
     },
-    () => syncs.get(matchId)?.status ?? IDLE,
+    () => (enabled ? (syncs.get(matchId)?.status ?? IDLE) : IDLE),
   )
 }
