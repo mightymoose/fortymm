@@ -586,6 +586,24 @@ describe('ScoreGame', () => {
       expect(page.slotSync(1)).toBe('Synced')
     })
 
+    it('refreshes the session after a 401 on a page that doesn’t read the session', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const page = await render()
+      page.goOffline()
+      await saveGame(page, 1, '11', '2')
+      const sessions = countSessions()
+      boards.answers.push({ status: 401, title: 'The request has no valid session' })
+
+      await act(() => page.router.navigate({ to: '/design-system' }))
+      // Not page.goOnline(): it waits for the sync to settle, and a 401
+      // keeps the board, so this one goes on retrying.
+      vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
+      act(() => window.dispatchEvent(new Event('online')))
+      await waitFor(() => expect(boards.pushes).toHaveLength(1))
+
+      await waitFor(() => expect(sessions.count).toBe(1))
+    })
+
     it('waits for a slow session refresh rather than starting another, and says why after a second 401', async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true })
       const page = await render()
