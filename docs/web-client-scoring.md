@@ -161,12 +161,13 @@ The scoring pages, the URL fragment, board sync and the result pages.
   result saved meanwhile ends it. The API
   taking it, or refusing it for good (any other 4xx, logged with
   `console.warn`), removes it, and the next one goes. A
-  result refused for good changes nothing on the strip. The approval
-  page queues its link's envelope when it opens, and the envelope with
-  both signatures once approved, for an account whose board would sync.
-  So every device that sees a result passes it on before anything it
-  builds on it, and a counter made from a result that hasn't reached the
-  API yet still lands after it.
+  result refused for good changes nothing on the strip. Approve result
+  queues the link's envelope, then the envelope with both signatures,
+  for an account whose board would sync. Opening a link queues nothing,
+  or a link could commit scores with the viewer's session before they
+  reviewed them. So a device sends only results it submitted or
+  approved, each before anything built on it, and a counter made from a
+  result that hasn't reached the API yet still lands after it.
 - The strip shows each game's sync while this tab has a board to send.
   A game is unsynced when its points differ from the `synced` board. It
   shows a dot while the board is on its way, a dashed grey edge and a
@@ -252,9 +253,10 @@ The scoring pages, the URL fragment, board sync and the result pages.
   `approvalCheckQuery()`, in its own `QueryBoundary`. Online, it first
   waits up to 10 seconds for this device's results queued before it to
   land (`afterEarlierResults()`), as the API would find it stale before
-  them. A stale answer for an envelope the outbox still holds shows "It
-  goes to FortyMM once the result it corrects reaches it" rather than a
-  refusal, and checks again once the outbox has sent it. Its verdict is
+  them. A refusal that the outbox counts as "not yet" (`notYet()`), for an
+  envelope the outbox still holds, shows "FortyMM can’t take it yet, so
+  this device keeps sending it" rather than a refusal, and checks again
+  once the outbox has sent it. Its verdict is
   `accepted`, or `refused` with the API's title for a 404, a 409 or a
   422. Accepted says
   "FortyMM checked the signatures and the scores". Refused shows "FortyMM

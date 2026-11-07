@@ -56,7 +56,7 @@ function Verdict({ matchId, envelope }: Props) {
     return (
       <p className="fm-notice" role="status">
         <Icon name="clock" />
-        <span>It goes to FortyMM once the result it corrects reaches it</span>
+        <span>FortyMM can’t take it yet, so this device keeps sending it</span>
       </p>
     )
   }

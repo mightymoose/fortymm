@@ -1,12 +1,9 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import type { ApiClient } from '../api/client'
-import { ApiError, ApiUnreachable, STALE_RESULT, UNKNOWN_KEY } from '../api/errors'
+import { ApiError, ApiUnreachable } from '../api/errors'
 import { pushBoard, pushResult } from './boardApi'
 import { acknowledge, boardsOf, dropBoard, matchesWithPending, subscribeBoards, type Refusal } from './boards'
-import { decodeEnvelope } from '../signing/envelope'
-import { decodePayload } from '../signing/result'
-import { fromBase64url } from '../signing/text'
-import { matchesWithResults, removeResult, resultsOf, subscribeResults } from './results'
+import { matchesWithResults, notYet, removeResult, resultsOf, staleResult, subscribeResults, unknownKey } from './results'
 
 // Sends a match's board to the API in the background, so spectators and
 // tournament directors can watch it. It's best effort: the URL keeps the
@@ -81,37 +78,9 @@ function sessionLapsed(error: unknown): boolean {
   return error instanceof ApiError && error.status === 401
 }
 
-function unknownKey(error: unknown): boolean {
-  return error instanceof ApiError && error.status === 422 && error.title === UNKNOWN_KEY
-}
-
-const NOT_YET_FOR_MS = 24 * 60 * 60 * 1000
-// How far ahead of this device's clock another phone's may run. A link's
-// signing time isn't checked against its signature here, so a later one
-// can't keep a refusal "not yet" for longer.
-const CLOCK_AHEAD_MS = 60 * 60 * 1000
 // After the backoff, a result that isn't taken yet tries this often, or
 // when the page wakes.
 const NOT_YET_RETRY_MS = 300_000
-
-// Whether a refusal of `envelope` may still change, so it is worth sending
-// again: the result it replaces may still arrive, the key may register, or
-// the next session may hold `matches.score`.
-function staleResult(error: unknown): boolean {
-  return error instanceof ApiError && error.status === 409 && error.title === STALE_RESULT
-}
-
-export function notYet(error: unknown, envelope: string, now: number): boolean {
-  if (!(error instanceof ApiError)) return false
-  if (!staleResult(error) && !unknownKey(error) && error.status !== 403) return false
-  try {
-    const { issuedAt } = decodePayload(decodeEnvelope(fromBase64url(envelope)).payload)
-    const age = now - issuedAt * 1000
-    return age > -CLOCK_AHEAD_MS && age < NOT_YET_FOR_MS
-  } catch {
-    return false
-  }
-}
 
 export function retryable(error: unknown): boolean {
   return !(error instanceof ApiError) || error.status >= 500 || rateLimited(error) || sessionLapsed(error)

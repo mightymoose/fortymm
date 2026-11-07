@@ -1,7 +1,7 @@
 import { QueryClient, queryOptions } from '@tanstack/react-query'
 import type { ApiClient } from './client'
 import type { components } from './schema'
-import { ApiError, ApiUnreachable, classifyFailure, STALE_RESULT } from './errors'
+import { ApiError, ApiUnreachable, classifyFailure } from './errors'
 import { forgetAccount, saveAccount, savedAccount, type SessionAccount } from './savedSession'
 import type {
   GameScore,
@@ -10,7 +10,7 @@ import type {
   MatchStatus,
   Side,
 } from '../pages/matches/browse/match'
-import { afterEarlierResults, resultsOf } from '../scoring/results'
+import { afterEarlierResults, notYet, resultsOf } from '../scoring/results'
 import { hex } from '../signing/bytes'
 import { registerDeviceKey, takeKey } from '../signing/deviceKey'
 import { base64url } from '../signing/text'
@@ -241,8 +241,8 @@ export function answerQuestionMutation(api: ApiClient, queryClient: QueryClient)
 const REFUSAL_STATUSES = new Set([403, 404, 409, 422])
 
 // What FortyMM said of an approved result: it checked out, it refused the
-// result, with the API's reason, or the result it corrects hasn't reached
-// it yet, and this device's outbox sends it again until it does.
+// result, with the API's reason, or it can't take it yet, and this
+// device's outbox sends it again until it does.
 export type ApprovalVerdict = { kind: 'accepted' } | { kind: 'refused'; title: string } | { kind: 'waiting' }
 
 // How long a check waits for this device's earlier results of the match
@@ -274,8 +274,8 @@ export function approvalCheckQuery(api: ApiClient, matchId: string, envelope: Ui
         )
         return { kind: 'accepted' }
       } catch (error) {
-        const stale = error instanceof ApiError && error.status === 409 && error.title === STALE_RESULT
-        if (stale && resultsOf(matchId).includes(base64url(envelope))) return { kind: 'waiting' }
+        const text = base64url(envelope)
+        if (resultsOf(matchId).includes(text) && notYet(error, text, Date.now())) return { kind: 'waiting' }
         if (error instanceof ApiError && REFUSAL_STATUSES.has(error.status) && error.title) {
           return { kind: 'refused', title: error.title }
         }

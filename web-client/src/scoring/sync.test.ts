@@ -3,7 +3,8 @@ import { ApiError, ApiUnreachable } from '../api/errors'
 import type { MatchResult } from '../signing/result'
 import { signResult } from '../signing/envelope'
 import { base64url } from '../signing/text'
-import { nextStep, notYet, retryable, retryDelay, stuckAfter } from './sync'
+import { notYet } from './results'
+import { nextStep, retryable, retryDelay, stuckAfter } from './sync'
 
 describe('nextStep', () => {
   it('sends a waiting board online, and waits while offline', () => {

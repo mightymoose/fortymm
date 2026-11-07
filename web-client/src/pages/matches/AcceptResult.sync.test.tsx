@@ -23,20 +23,33 @@ async function device(): Promise<Signer> {
 }
 
 describe('the approval page and the results outbox', () => {
-  it('queues the link’s result, then the approved one, so both go after this device’s earlier result', async () => {
+  it('sends nothing for a link that’s only opened, as the viewer hasn’t approved it', async () => {
+    grantSession('matches.score')
+    const approvals = mockApprovals()
+    const page = await renderCounter()
+    await page.waitForKey()
+    await new Promise((resolve) => setTimeout(resolve, 500))
+
+    expect(screen.getByRole('button', { name: 'Approve result' })).toBeInTheDocument()
+    expect(resultsOf(MATCH)).toEqual([])
+    expect(approvals.checks).toEqual([])
+  })
+
+  it('queues the link’s result, then the approved one, once the viewer approves', async () => {
     grantSession('matches.score')
     const approvals = mockApprovals()
     const page = await renderCounter()
     const link = page.hash
     await page.waitForKey()
-    await waitFor(() => expect(approvals.checks.map(({ envelope }) => envelope)).toEqual([hex(fromBase64url(link))]))
 
     await page.approve()
     expect(await page.findStatus()).toHaveTextContent('Approved on this device')
 
     await waitFor(() => expect(resultsOf(MATCH)).toEqual([]))
     const approved = hex(fromBase64url(page.hash))
-    expect(approvals.checks.map(({ envelope }) => envelope)).toEqual([hex(fromBase64url(link)), approved, approved])
+    await waitFor(() =>
+      expect(approvals.checks.map(({ envelope }) => envelope)).toEqual([hex(fromBase64url(link)), approved, approved]),
+    )
   })
 
   it('checks an approved counter only after the queued result it replaces lands', async () => {
@@ -108,9 +121,27 @@ describe('the approval page and the results outbox', () => {
     expect(await page.findStatus()).toHaveTextContent('Approved on this device')
     const approved = hex(fromBase64url(page.hash))
     expect(
-      await screen.findByText('It goes to FortyMM once the result it corrects reaches it', {}, { timeout: 16_000 }),
+      await screen.findByText('FortyMM can’t take it yet, so this device keeps sending it', {}, { timeout: 16_000 }),
     ).toBeInTheDocument()
     expect(approvals.checks.some(({ envelope }) => envelope === approved)).toBe(true)
+
+    approvals.answer = 'accepted'
+
+    await waitFor(() => expect(resultsOf(MATCH)).toEqual([]), { timeout: 8000 })
+    expect(await screen.findByText('FortyMM checked the signatures and the scores')).toBeInTheDocument()
+  }, 30_000)
+
+  it('says an approval waits while this device’s key registers, and checked once it lands', async () => {
+    grantSession('matches.score')
+    const approvals = mockApprovals({ refused: "A signature's key isn't registered, or was revoked", status: 422 })
+    const page = await renderCounter()
+    await page.waitForKey()
+    await page.approve()
+    expect(await page.findStatus()).toHaveTextContent('Approved on this device')
+    expect(
+      await screen.findByText('FortyMM can’t take it yet, so this device keeps sending it', {}, { timeout: 16_000 }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('FortyMM refused this result')).not.toBeInTheDocument()
 
     approvals.answer = 'accepted'
 
@@ -160,8 +191,9 @@ describe('the approval page and the results outbox', () => {
     const correction = await signedResult(await resultHash(decodeEnvelope(fromBase64url(first)).payload), 1)
     const head = mockChain(first)
     queueResult(MATCH, correction)
-
     await AcceptResultPage.render(`/matches/${MATCH}/scores/approvals/new#${first}`)
+
+    queueResult(MATCH, first)
 
     await waitFor(() => expect(resultsOf(MATCH)).toEqual([]), { timeout: 5000 })
     expect(head.order).toEqual(['correction', 'first', 'correction'])
@@ -171,10 +203,12 @@ describe('the approval page and the results outbox', () => {
   it('drops a stale result signed more than a day ago', async () => {
     grantSession('matches.score')
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const approvals = mockApprovals({ refused: "The result doesn't replace the match's newest result", status: 409 })
-    await renderCounter(Math.floor(Date.now() / 1000) - 25 * 60 * 60)
+    mockApprovals({ refused: "The result doesn't replace the match's newest result", status: 409 })
+    const page = await renderCounter(Math.floor(Date.now() / 1000) - 25 * 60 * 60)
+    await page.waitForKey()
+    await page.approve()
 
-    await waitFor(() => expect(approvals.checks).toHaveLength(1))
+    expect(await screen.findByText('FortyMM refused this result', {}, { timeout: 16_000 })).toBeInTheDocument()
     await waitFor(() => expect(resultsOf(MATCH)).toEqual([]))
   })
 

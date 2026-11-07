@@ -1,3 +1,8 @@
+import { ApiError, STALE_RESULT, UNKNOWN_KEY } from '../api/errors'
+import { decodeEnvelope } from '../signing/envelope'
+import { decodePayload } from '../signing/result'
+import { fromBase64url } from '../signing/text'
+
 // The signed results this device submitted that the server hasn't taken
 // yet, per match and oldest first, each a fragment's text: an envelope.
 // Each replaces the one before it, so the server takes them only in order,
@@ -106,4 +111,34 @@ export function afterEarlierResults(matchId: string, envelope: string, ms: numbe
 
 export function matchesWithResults(): string[] {
   return Object.keys(read())
+}
+
+export function staleResult(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409 && error.title === STALE_RESULT
+}
+
+export function unknownKey(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 422 && error.title === UNKNOWN_KEY
+}
+
+const NOT_YET_FOR_MS = 24 * 60 * 60 * 1000
+// How far ahead of this device's clock another phone's may run. A link's
+// signing time isn't checked against its signature here, so a later one
+// can't keep a refusal "not yet" for longer.
+const CLOCK_AHEAD_MS = 60 * 60 * 1000
+
+// Whether a refusal of `envelope` may still change, so the outbox sends it
+// again and the approval page says it waits: the result it replaces may
+// still arrive, the key may register, or the next session may hold
+// `matches.score`.
+export function notYet(error: unknown, envelope: string, now: number): boolean {
+  if (!(error instanceof ApiError)) return false
+  if (!staleResult(error) && !unknownKey(error) && error.status !== 403) return false
+  try {
+    const { issuedAt } = decodePayload(decodeEnvelope(fromBase64url(envelope)).payload)
+    const age = now - issuedAt * 1000
+    return age > -CLOCK_AHEAD_MS && age < NOT_YET_FOR_MS
+  } catch {
+    return false
+  }
 }
