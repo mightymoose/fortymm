@@ -107,8 +107,13 @@ submission page at a path with its envelope, and finds its link and the
 link back to the scores. It reads its QR code as a camera would
 (`readQrCode` in `src/test/`).
 `AcceptResultPage` renders a link's path and fragment, approves the
-result or goes to edit the scores, and reads the game scores table, the
-approval status, the check with FortyMM and the URL's fragment.
+result, taps Approve twice before React renders again
+(`approveTwiceAtOnce()`), or goes to edit the scores, and reads the game
+scores table, the approval status and other notices, the check with
+FortyMM, the Sign in and Edit scores links and the URL's fragment.
+`otherDevice()` (`src/test/otherDevice.ts`) is another phone's signing
+key, whose kid is its key's, so the approval page finds that its
+signatures hold.
 
 `NewMatchPage` renders `/matches/new`. It picks and changes the
 opponent, searches, sets the match length and rated, presses Start
@@ -269,14 +274,27 @@ you submit it.`, and no cell ever shows `Synced`.
 `e2e/result-chain.spec.ts` checks that a submitted result reaches the
 real API. The administrator's phone submits best-of-1 matches against a
 guest, and the guest's phone, a second browser context, approves on the
-approval page. A guest holds no `matches.score`, so the test uploads the
-approved envelope with the administrator's session, as the signatures,
-not the session, are the authority. A corrected result is approved to
-final, and the result it corrected is refused (`not_head`). An unrated
+approval page. A guest holds no `matches.score`, so its phone sends
+nothing, and the administrator's phone lands the approved result when it
+opens the approved link, as the signatures, not the session, are the
+authority. A corrected result is approved to final, and the result it
+corrected is refused, with "Newer scores replaced these." on the page. An unrated
 match is final once submitted. A result and its correction submitted
 with no route to the API (`page.route()` aborts the match requests, as
 `context.setOffline()` would also cut off the dev server) both land once
 it is back, first first, and a result still waiting goes after a reload.
+Its approval page tests open a result link on each kind of phone. The
+administrator opens its own link, which waits for the guest by name and
+offers no Approve. The guest, opening a match it doesn't play, gets Sign
+in, back to the link with its fragment. The administrator, opening a
+match between the guest and another player, is told it isn't its match.
+Neither gets Approve or Edit scores. The other player is one another
+spec made, from `GET /v1/admin/players`, as the suite's guest accounts
+are at the limit's edge, and a new guest only when there is none. A link
+with a score or a signature byte changed shows that it was changed. The
+guest's phone approves with `context.setOffline()`, and is told to send
+the link back, and the administrator's phone opens what it approved,
+which makes the match final.
 
 `e2e/matches-empty.spec.ts` checks the empty Matches page at 390 and
 1280px. Only a database with no match shows it, and the other specs make

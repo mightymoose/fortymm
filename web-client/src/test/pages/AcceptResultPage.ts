@@ -1,10 +1,11 @@
-import { cleanup, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { signWithDeviceKey } from '../../signing/deviceKey'
 import { renderRoute, type AppRouter } from '../renderRoute'
 
 // Page object for the page a result link opens, where the other player
-// submits the result or goes back to edit the scores.
+// approves the result or goes back to edit the scores, and anyone else
+// sees it read only.
 export class AcceptResultPage {
   // Renders the link's path and fragment, such as
   // `/matches/demo/scores/approvals/new#<envelope>`.
@@ -47,8 +48,35 @@ export class AcceptResultPage {
     return screen.queryByRole('form', { name: 'Approve the result' })
   }
 
+  get approveButton(): HTMLElement | null {
+    return screen.queryByRole('button', { name: 'Approve result' })
+  }
+
   async approve(): Promise<void> {
     await userEvent.click(screen.getByRole('button', { name: 'Approve result' }))
+  }
+
+  // Taps Approve twice before React renders again, as a quick double tap
+  // can, then waits for the approval.
+  async approveTwiceAtOnce(): Promise<void> {
+    const button = screen.getByRole('button', { name: 'Approve result' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    await this.findStatus()
+  }
+
+  get editScoresLink(): HTMLElement | null {
+    return screen.queryByRole('link', { name: 'Edit scores' })
+  }
+
+  get signInLink(): HTMLElement | null {
+    return screen.queryByRole('link', { name: 'Sign in' })
+  }
+
+  // A line that tells the viewer where the result stands, such as whom it
+  // waits for, found by its text.
+  notice(text: string): HTMLElement | null {
+    return screen.queryAllByRole('status').find((status) => status.textContent === text) ?? null
   }
 
   // This browser makes its signing key in the background once the session
@@ -85,14 +113,14 @@ export class AcceptResultPage {
     return screen.queryByText('Checking with FortyMM') !== null
   }
 
-  // The line that says FortyMM checked the approved result.
+  // The line that says FortyMM took the approved result.
   async findChecked(): Promise<HTMLElement> {
-    return screen.findByText('FortyMM checked the signatures and the scores')
+    return screen.findByText('Approved. FortyMM has the result.')
   }
 
   // The alert that says FortyMM refused the approved result.
   async findRefusal(): Promise<HTMLElement> {
-    const title = await screen.findByText('FortyMM refused this result')
+    const title = await screen.findByText('FortyMM didn’t accept this result')
     return title.closest<HTMLElement>('[role=alert]')!
   }
 
