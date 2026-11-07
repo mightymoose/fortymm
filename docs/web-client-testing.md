@@ -237,14 +237,34 @@ app's `encodePayload()`, which it imports from the dev server. At 390,
 players' names, opens the one with a board, and checks that neither page
 scrolls sideways.
 
-`e2e/scoring-sync.spec.ts` reuses the same sign-in at 390x844, whose
-`matches.score` makes an API match's board sync. It makes a match with
-`POST /api/v1/matches` against a new guest, opens its game 1 from a
-fragment made with the app's `draftHash()`, waits for the score inputs, goes offline with
-`context.setOffline()` and saves the game. The note reads `Offline. Saved
-on this device.`, and game 1's cell is dashed in game 3's border colour,
-with the note in the "Games" label's grey. Back online, the edge is solid
-again.
+`e2e/scoring-sync.spec.ts` checks the board sync against the real API.
+It reuses the same sign-in at 390x844, whose `matches.score` makes an
+API match's board sync, and starts a guest in `beforeAll`. Each test makes
+a match against the guest's player with `POST /api/v1/matches`.
+`ScoringPage` (`e2e/pages/`) opens its game 1 from a fragment made with
+the app's `draftHash()`, saves games, and reads the strip and the URL's
+fragment. The tests read the API's games with `GET /api/v1/matches/{match_id}`.
+
+While `page.route()` holds the board requests, games 1 and 2 save and the
+page moves on to game 3. Once released, the API has both games within 5
+seconds, and game 2's cell says `Synced`. Offline
+(`context.setOffline()`), a save sends no board request. The note reads
+`Offline. Saved on this device.`, and game 1's cell is dashed in game 3's
+border colour, with the note in the "Games" label's grey. Back online, the
+API has the game within 5 seconds, the note goes and the edge is solid
+again. Online, with a route that never answers, the save moves on at once,
+and the note says offline once the 10-second send timeout passes.
+
+Two browser contexts open one match, as two phones. A saves game 1 at
+11–5, then B at 5–11, and the API keeps B's board, the newest. Each page's
+`page.clock` then skips 12 seconds, so a pull on a timer would fire. A's
+cell and fragment don't change. Then A saves game 2, the API has A's board,
+and B's pad doesn't change. Neither phone sent any match request but its
+boards. The last test signs a result with the browser's key,
+imported from the dev server, and uploads it to
+`POST /v1/matches/{match_id}/approvals`. The match is unrated, so that one
+approval makes it final. A save then reads `Match final. Changes here don’t
+sync.`, and no cell ever shows `Synced`.
 
 `e2e/matches-empty.spec.ts` checks the empty Matches page at 390 and
 1280px. Only a database with no match shows it, and the other specs make
