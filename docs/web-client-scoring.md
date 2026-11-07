@@ -73,7 +73,9 @@ The scoring pages, the URL fragment, board sync and the result pages.
   gives scores never asks the API, so a restored tab works offline.
 - With no network (`navigator.onLine` false, the request got no
   response, or no answer came in 8 seconds, as hall Wi-Fi can claim to
-  be online and answer nothing), and for a demo match always, the edit route drops a
+  be online and answer nothing), an API match this device has read, such
+  as on its page, is rebuilt from that read, as Keep score does offline.
+  Otherwise, and for a demo match always, the edit route drops a
   fragment it can't read. It redirects to game 1 with no scores, with a
   replace. An API match's fragment keeps its details, and a demo match's
   is empty, so a reload or a share doesn't carry it, and sets

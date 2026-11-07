@@ -68,41 +68,17 @@ export const Route = createFileRoute('/_authenticated/matches/$matchId/scores/ga
 // as having no signal. Hall Wi-Fi can report online and answer nothing.
 const REBUILD_AFTER_MS = 8000
 
-// Online, redirects to the API's match as Keep score opens it, or to the
-// match's page once it is final, as #316 owns editing after that. Returns
-// only with no network, or with no answer in REBUILD_AFTER_MS.
+// Redirects to the API's match as Keep score opens it, or to the match's
+// page once it is final, as #316 owns editing after that. With no network,
+// or no answer in REBUILD_AFTER_MS, it falls back to the match as this
+// device last read it, as an offline Keep score does. Returns only when
+// there's no such read.
 async function rebuildFromApi(api: ApiClient, queryClient: QueryClient, matchId: string): Promise<void> {
-  if (!navigator.onLine) return
   const query = matchQuery(api, matchId)
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const slow = new Promise<'slow'>((resolve) => {
-    timer = setTimeout(() => resolve('slow'), REBUILD_AFTER_MS)
-  })
-  let found
-  try {
-    found = await Promise.race([
-      queryClient.fetchQuery({
-        ...query,
-        // The match page may have cached an older read than the server's.
-        staleTime: 0,
-        // The page waits on this, so a failure shows at once, with Try again.
-        // No response is a hall with no signal, which a retry won't fix.
-        retry: false,
-      }),
-      slow,
-    ])
-  } catch (error) {
-    if (error instanceof ApiUnreachable) return
-    // An account that can score but not view the match can't see it.
-    if (error instanceof ApiError && error.status === 403) throw notFound()
-    throw error
-  } finally {
-    clearTimeout(timer)
-  }
-  if (found === 'slow') {
-    void queryClient.cancelQueries({ queryKey: query.queryKey })
-    return
-  }
+  const cached = queryClient.getQueryData(query.queryKey)
+  let found = navigator.onLine ? await freshRead(queryClient, query) : undefined
+  if (found === undefined) found = cached
+  if (found === undefined) return
   if (!found) throw notFound()
   const target = keepScoreTarget(found, nowSeconds())
   if (!target) throw redirect({ to: '/matches/$matchId', params: { matchId }, replace: true })
@@ -113,4 +89,35 @@ async function rebuildFromApi(api: ApiClient, queryClient: QueryClient, matchId:
     hash: target.hash,
     replace: true,
   })
+}
+
+// The API's match, or undefined with no answer.
+async function freshRead(queryClient: QueryClient, query: ReturnType<typeof matchQuery>) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const slow = new Promise<'slow'>((resolve) => {
+    timer = setTimeout(() => resolve('slow'), REBUILD_AFTER_MS)
+  })
+  try {
+    const found = await Promise.race([
+      queryClient.fetchQuery({
+        ...query,
+        // The match page may have cached an older read than the server's.
+        staleTime: 0,
+        // The page waits on this, so a failure shows at once, with Try again.
+        // No response is a hall with no signal, which a retry won't fix.
+        retry: false,
+      }),
+      slow,
+    ])
+    if (found !== 'slow') return found
+    void queryClient.cancelQueries({ queryKey: query.queryKey })
+    return undefined
+  } catch (error) {
+    if (error instanceof ApiUnreachable) return undefined
+    // An account that can score but not view the match can't see it.
+    if (error instanceof ApiError && error.status === 403) throw notFound()
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
 }

@@ -441,6 +441,23 @@ describe('A match', () => {
       expect(scoring.slotScore(2)).toBe('9–11')
     })
 
+    it('rebuilds a scoring URL with no fragment from the read the page cached, with no network', async () => {
+      api = mockMatchReads([betweenGames])
+      const page = await MatchesPage.render(`/matches/${betweenGames.id}`)
+      await waitFor(() => expect(page.title).toHaveTextContent(name(betweenGames)))
+      page.setOnline(false)
+
+      await act(() =>
+        page.router.navigate({ href: `/matches/${betweenGames.id}/scores/game/1/edit` }),
+      )
+
+      const scoring = new ScoreGamePage(page.router)
+      await waitFor(() => expect(scoring.heading).toHaveTextContent('Game 3'))
+      expect(scoring.slotScore(1)).toBe('11–4')
+      expect(scoring.slotScore(2)).toBe('11–9')
+      page.setOnline(true)
+    })
+
     it('carries the page’s games only while the browser is offline', async () => {
       api = mockMatchReads([betweenGames])
       const page = await MatchesPage.render(`/matches/${betweenGames.id}`)
