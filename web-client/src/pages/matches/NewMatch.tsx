@@ -65,6 +65,9 @@ export function NewMatch() {
       await createMatch(api, request)
       void queryClient.invalidateQueries({ queryKey: OPPONENTS_KEY })
       if (left.current) return
+      // Back from game 1 then opens the match, not this form, whose Start
+      // would make a second match.
+      await navigate({ to: '/matches/$matchId', params: { matchId: id }, replace: true })
       // The fragment carries the match, so its scores open with no network.
       await navigate({
         to: '/matches/$matchId/scores/game/$gameNumber/edit',
