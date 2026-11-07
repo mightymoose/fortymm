@@ -119,13 +119,21 @@ The scoring pages, the URL fragment, board sync and the result pages.
 - The strip shows each game's sync while this tab has a board to send.
   A game is unsynced when its points differ from the `synced` board. It
   shows a dot while the board is on its way, a dashed amber edge and
-  label after a send that didn't get through, and green for 1.2 seconds
+  label while its sync is stuck, and green for 1.2 seconds
   once it lands. A game goes green only when `landed`, the count of
   boards the server took, went up, so a refused board's games just go
-  plain. Screen readers hear `Syncing`, `Not synced` or `Synced`. The
-  strip's header line says when the device is offline or a send is
-  stuck. Otherwise, after a refusal, it says `Match final. Changes here
-  don’t sync.` for a 409 and `Not synced. Saved on this device.` for
+  plain. Screen readers hear `Syncing`, `Not synced` or `Synced`. A
+  sync is stuck, and the strip's header line says why, in two cases.
+  `Offline. Saved on this device.` shows while the browser knows it's
+  offline, and from the first send that got no response
+  (`ApiUnreachable`). `Not synced yet. Saved on this device.` shows from
+  the second failed send in a row that got a response, such as a 5xx
+  or a 429. A 502 to 504 from Cloudflare is a failing server, not an
+  offline device. One failed send with a response changes nothing
+  while it waits to retry, so a blip doesn't flash a warning. A refusal
+  ends the run of failures. Otherwise,
+  after a refusal, it says `Match final. Changes here don’t sync.` for
+  a 409 and `Not synced. Saved on this device.` for
   any other.
   The marks never change a cell's size, and the line keeps its height.
 - When a player's press would leave a `decided` board, the button reads

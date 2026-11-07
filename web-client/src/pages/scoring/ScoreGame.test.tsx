@@ -2,7 +2,7 @@ import { act, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApiError } from '../../api/errors'
+import { ApiError, ApiUnreachable } from '../../api/errors'
 import { saveAccount } from '../../api/savedSession'
 import type { GamePoints } from '../../scoring/board'
 import { demoMatch } from '../../scoring/demoMatches'
@@ -596,20 +596,68 @@ describe('ScoreGame', () => {
       expect(page.slotSync(1)).toBe('Synced')
     })
 
-    it('tries a failed send again after a backoff', async () => {
-      vi.useFakeTimers({ shouldAdvanceTime: true })
-      const page = await ScoreGamePage.render()
-      vi.mocked(putBoard).mockRejectedValueOnce(new ApiError('PUT /v1/matches/demo/board', new Response(null, { status: 503 })))
+    describe('a send that doesn’t get through', () => {
+      const answers = (status: number) => new ApiError('POST /v1/matches/demo/boards', new Response(null, { status }))
 
-      await saveGame(page, 1, '11', '4')
+      beforeEach(() => {
+        vi.useFakeTimers({ shouldAdvanceTime: true })
+      })
 
-      expect(page.slotSync(1)).toBe('Not synced')
-      expect(ScoreGamePage.serverBoard).toBeNull()
+      it('shows nothing after one 503, and tries again after 2 seconds', async () => {
+        const page = await ScoreGamePage.render()
+        vi.mocked(putBoard).mockRejectedValueOnce(answers(503))
 
-      await act(() => vi.advanceTimersByTimeAsync(2000))
-      await page.settle()
+        await saveGame(page, 1, '11', '4')
 
-      expect(ScoreGamePage.serverBoard).toBe(page.hash)
+        expect(page.stripNote).toBeNull()
+        expect(page.slotSync(1)).toBeNull()
+        expect(ScoreGamePage.serverBoard).toBeNull()
+
+        await act(() => vi.advanceTimersByTimeAsync(2000))
+        await page.settle()
+
+        expect(ScoreGamePage.serverBoard).toBe(page.hash)
+      })
+
+      it.each([502, 503, 504])('says the server is failing, not offline, after a second %i', async (status) => {
+        const page = await ScoreGamePage.render()
+        vi.mocked(putBoard).mockRejectedValueOnce(answers(status)).mockRejectedValueOnce(answers(status))
+
+        await saveGame(page, 1, '11', '4')
+        await act(() => vi.advanceTimersByTimeAsync(2000))
+        await page.settle()
+
+        expect(putBoard).toHaveBeenCalledTimes(2)
+        expect(page.slotSync(1)).toBe('Not synced')
+        expect(page.stripNote).toBe('Not synced yet. Saved on this device.')
+      })
+
+      it('counts failures only in a row, so a refusal starts the count again', async () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const page = await ScoreGamePage.render()
+        vi.mocked(putBoard).mockRejectedValueOnce(answers(503)).mockRejectedValueOnce(answers(422))
+        await saveGame(page, 1, '11', '4')
+        await act(() => vi.advanceTimersByTimeAsync(2000))
+        await page.settle()
+        vi.mocked(putBoard).mockRejectedValueOnce(answers(503))
+
+        await saveGame(page, 2, '11', '6')
+
+        expect(putBoard).toHaveBeenCalledTimes(3)
+        expect(page.stripNote).toBe('Not synced. Saved on this device.')
+      })
+
+      it('says offline when no response came back', async () => {
+        const page = await ScoreGamePage.render()
+        vi.mocked(putBoard).mockRejectedValueOnce(
+          new ApiUnreachable('POST /v1/matches/demo/boards', { cause: new TypeError('Failed to fetch') }),
+        )
+
+        await saveGame(page, 1, '11', '4')
+
+        expect(page.slotSync(1)).toBe('Not synced')
+        expect(page.stripNote).toBe('Offline. Saved on this device.')
+      })
     })
 
     it('never changes its pad for another device’s board', async () => {

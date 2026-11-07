@@ -1,5 +1,5 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
-import { ApiError, classifyFailure } from '../api/errors'
+import { ApiError, ApiUnreachable } from '../api/errors'
 import { acknowledge, boardsOf, dropBoard, matchesWithPending, subscribeBoards, type Refusal } from './boards'
 import { putBoard } from './demoServer'
 
@@ -18,7 +18,8 @@ import { putBoard } from './demoServer'
 // again is both stuck and sending.
 export type SyncStatus = {
   sending: boolean
-  // Why the last send didn't get through, until one does.
+  // Why the sync is stuck, until a send gets through. One failed send
+  // with a response doesn't count yet.
   stuck: 'offline' | 'failed' | null
   // Why the server last refused a board, until it takes one. It outlasts
   // the sync, so a refusal sent with the scoring page closed still shows.
@@ -38,6 +39,15 @@ export function retryDelay(failures: number): number {
 
 export function retryable(error: unknown): boolean {
   return !(error instanceof ApiError) || error.status >= 500 || error.status === 429
+}
+
+// Why a sync is stuck after its `failures`th failed send in a row. No
+// response means the device is offline. A response, even a 502 to 504 from
+// Cloudflare, means the server is failing, which the strip only says from
+// the second failure, so one blip shows nothing.
+export function stuckAfter(error: unknown, failures: number, stuck: SyncStatus['stuck']): SyncStatus['stuck'] {
+  if (error instanceof ApiUnreachable) return 'offline'
+  return failures >= 2 ? 'failed' : stuck
 }
 
 export type Step = 'send' | 'waitOnline' | 'rest'
@@ -139,7 +149,7 @@ class MatchSync {
       if (retryable(error)) {
         const delay = retryDelay(this.failures)
         this.failures += 1
-        this.stuck = classifyFailure(error).kind === 'unreachable' ? 'offline' : 'failed'
+        this.stuck = stuckAfter(error, this.failures, this.stuck)
         this.enter({
           kind: 'waitingRetry',
           timer: setTimeout(() => {
@@ -170,6 +180,7 @@ class MatchSync {
     const refused = error.status === 409 ? 'final' : 'other'
     if (refused === 'other') console.warn('The server refused a board', error.status, error.title)
     if (error.status === 403) onForbidden()
+    this.failures = 0
     this.enter({ kind: 'idle' })
     dropBoard(this.matchId, board, refused)
     void this.step()
