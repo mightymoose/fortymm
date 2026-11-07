@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Tear down one worktree's dev stack and everything it created: containers
+# (including `docker compose run` leftovers), volumes and networks.
+#
+# Usage: bin/teardown-stack <slug>
+#   Removes Compose project `fortymm-<slug>` only. The main checkout's
+#   project, `fortymm`, can't be named, so its stack is never touched.
+#   Leftovers are found by the project label, never by name prefix.
+set -euo pipefail
+
+if [ "$#" -ne 1 ] || ! [[ "$1" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+  echo "usage: bin/teardown-stack <slug>   (lowercase letters, digits and dashes)" >&2
+  exit 64
+fi
+project="fortymm-$1"
+label="label=com.docker.compose.project=$project"
+
+docker compose -p "$project" down --volumes --remove-orphans
+
+# `down` can leave `docker compose run` containers and their volumes behind.
+containers=$(docker ps -aq --filter "$label")
+[ -z "$containers" ] || docker rm -f $containers >/dev/null
+volumes=$(docker volume ls -q --filter "$label")
+[ -z "$volumes" ] || docker volume rm $volumes >/dev/null
+networks=$(docker network ls -q --filter "$label")
+[ -z "$networks" ] || docker network rm $networks >/dev/null
+
+left=$(( $(docker ps -aq --filter "$label" | wc -l) + $(docker volume ls -q --filter "$label" | wc -l) + $(docker network ls -q --filter "$label" | wc -l) ))
+if [ "$left" -ne 0 ]; then
+  echo "$project: $left resources still left" >&2
+  exit 1
+fi
+echo "$project: torn down, nothing left"

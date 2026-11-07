@@ -3,21 +3,30 @@
   "permissions": {
     "allow": [
       "Bash(git push *--force-with-lease*)",
-      "Bash(gh api graphql *)",
+      "Bash(gh api graphql *resolveReviewThread*)",
+      "Bash(gh api graphql *reviewThreads*)",
       "Bash(gh pr merge *--squash*)",
       "Bash(gh pr comment *)",
       "Bash(gh pr edit *)",
       "Bash(gh issue create *)",
       "Bash(gh issue comment *)",
-      "Bash(docker compose -p fortymm-* down --volumes --remove-orphans)",
-      "Bash(docker ps -a --filter label=com.docker.compose.project=fortymm-*)",
-      "Bash(docker volume ls --filter label=com.docker.compose.project=fortymm-*)",
-      "Bash(docker network ls --filter label=com.docker.compose.project=fortymm-*)",
-      "Bash(docker rm -f fortymm-*)",
-      "Bash(docker volume rm fortymm-*)",
-      "Bash(docker network rm fortymm-*)",
+      "Bash(bin/teardown-stack *)",
+      "Bash(./bin/teardown-stack *)",
       "Bash(git worktree remove *)",
       "Bash(git branch -D *)"
+    ],
+    "ask": [
+      "Bash(git branch -D *main*)",
+      "Bash(gh api graphql *@*)",
+      "Bash(gh api graphql *--input*)",
+      "Bash(gh pr * -R*)",
+      "Bash(gh pr * --repo*)",
+      "Bash(gh pr * -F*)",
+      "Bash(gh pr * --body-file*)",
+      "Bash(gh issue * -R*)",
+      "Bash(gh issue * --repo*)",
+      "Bash(gh issue * -F*)",
+      "Bash(gh issue * --body-file*)"
     ],
     "deny": [
       "Bash(git push *-f* main)",
