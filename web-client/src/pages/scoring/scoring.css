@@ -41,7 +41,6 @@
 .score-strip__head{display:flex;align-items:baseline;justify-content:space-between;gap:var(--s-3);min-height:calc(var(--text-sm) * var(--lh-snug))}
 .score-strip__label{margin:0;flex:none;font:500 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
 .score-strip__note{margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
-.score-strip__note--waiting{color:var(--conflict)}
 .score-strip{list-style:none;margin:0;padding:0;display:grid;grid-auto-flow:column;grid-auto-columns:92px;gap:var(--s-2)}
 .score-slot{position:relative;display:flex;flex-direction:column;align-items:center;gap:var(--s-1);padding:var(--s-2);border:1px solid var(--border-subtle);border-radius:var(--r-md);background:var(--bg-group);color:var(--fg-3);text-decoration:none;transition:border-color var(--dur-change) var(--ease-out)}
 .score-slot:hover{border-color:var(--border-field-hover);color:var(--fg-2)}
@@ -51,15 +50,15 @@
 .score-slot__pts{font:700 var(--text-base)/var(--lh-snug) var(--font-num);font-variant-numeric:tabular-nums;color:var(--loser)}
 .score-slot__pts b{color:var(--winner)}
 .score-slot--after{border-style:dashed}
-/* A game's sync state: a dot in the corner while it sends, a dashed amber
-   edge while it's stuck, each on its own, and green once it lands. The
+/* A game's sync state: a dot in the corner while it sends, a dashed edge
+   while it's stuck, each on its own, and green once it lands. The
    cell never changes size. */
 .score-slot__badge{position:absolute;top:4px;right:4px;display:grid;place-items:center;width:14px;height:14px;border-radius:50%;color:var(--ink-950)}
 .score-slot__badge .fm-ic{width:10px;height:10px}
 .score-slot__badge .fm-ic svg{stroke-width:3}
 .score-slot--sending .score-slot__badge{width:6px;height:6px;top:8px;right:8px;background:var(--fg-3)}
-.score-slot--stuck{border-color:var(--conflict);border-style:dashed}
-.score-slot--stuck .score-slot__label{color:var(--conflict)}
+.score-slot--stuck{border-style:dashed}
+.score-slot--stuck .score-slot__label{color:var(--fg-2)}
 .score-slot--synced{border-color:var(--success)}
 .score-slot--synced .score-slot__badge{background:var(--success)}
 .score-slot--after,.score-slot--after .score-slot__pts,.score-slot--after .score-slot__pts b{color:var(--fg-disabled)}

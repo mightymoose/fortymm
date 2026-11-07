@@ -235,6 +235,13 @@ app's `encodePayload()`, which it imports from the dev server. At 390,
 players' names, opens the one with a board, and checks that neither page
 scrolls sideways.
 
+`e2e/scoring-sync.spec.ts` reuses the same sign-in at 390x844. It opens
+the demo match's game 1, waits for the score inputs, goes offline with
+`context.setOffline()` and saves the game. The note reads `Offline. Saved
+on this device.`, and game 1's cell is dashed in game 3's border colour,
+with the note in the "Games" label's grey. Back online, the edge is solid
+again.
+
 `e2e/matches-empty.spec.ts` checks the empty Matches page at 390 and
 1280px. Only a database with no match shows it, and the other specs make
 matches, so it is the `empty` project in `playwright.config.ts`, which

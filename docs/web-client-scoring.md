@@ -123,8 +123,8 @@ The scoring pages, the URL fragment, board sync and the result pages.
   with `putBoard()`. Each call answers after 300ms.
 - The strip shows each game's sync while this tab has a board to send.
   A game is unsynced when its points differ from the `synced` board. It
-  shows a dot while the board is on its way, a dashed amber edge and
-  label while its sync is stuck, and green for 1.2 seconds
+  shows a dot while the board is on its way, a dashed grey edge and a
+  lighter label while its sync is stuck, and green for 1.2 seconds
   once it lands. A game goes green only when `landed`, the count of
   boards the server took, went up, so a refused board's games just go
   plain. Screen readers hear `Syncing`, `Not synced` or `Synced`. A
