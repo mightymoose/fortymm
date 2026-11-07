@@ -68,12 +68,17 @@ export function matchFor(id: string, self: MatchPlayer, result: MatchResult | nu
   const ids = result.players.includes(self.id)
     ? result.players
     : result.players.map((playerId) => (id === 'demo' && playerId === OPPONENT.id ? self.id : playerId))
-  const known = [self, OPPONENT, ...SPECTATED]
   const players = ids.map((playerId, side) => ({
     id: playerId,
-    name: known.find((player) => player.id === playerId)?.name ?? `Player ${side + 1}`,
+    name: (playerId === self.id ? self.name : demoPlayerName(playerId)) ?? `Player ${side + 1}`,
   }))
   return { ...match, players: [players[0], players[1]] }
+}
+
+// The name of one of the demo matches' made-up players, or null for
+// anyone else, such as the player of the device that sent a result.
+export function demoPlayerName(playerId: string): string | null {
+  return [OPPONENT, ...SPECTATED].find((player) => player.id === playerId)?.name ?? null
 }
 
 export function viewerOf(match: Match, playerId: string): Viewer {
