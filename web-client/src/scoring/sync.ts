@@ -1,6 +1,6 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { ApiError, classifyFailure } from '../api/errors'
-import { acknowledge, boardsOf, dropBoard, matchesWithPending, subscribeBoards } from './boards'
+import { acknowledge, boardsOf, dropBoard, matchesWithPending, subscribeBoards, type Refusal } from './boards'
 import { putBoard } from './demoServer'
 
 // Sends a match's board to the server in the background, so spectators and
@@ -10,8 +10,9 @@ import { putBoard } from './demoServer'
 // can't land after a newer one. While the browser knows it's offline, it
 // sends nothing until `online`. A board the server can't take now waits,
 // with a backoff, or until `online`. One it refuses for good (a 4xx other
-// than 429) is dropped. It never reads the server's board back, so a board
-// another device sent can't change this tab's pad.
+// than 429) is dropped, and never shows as synced. It never reads the
+// server's board back, so a board another device sent can't change this
+// tab's pad.
 
 // Two separate facts about a match's sync. A stuck board that is trying
 // again is both stuck and sending.
@@ -19,9 +20,15 @@ export type SyncStatus = {
   sending: boolean
   // Why the last send didn't get through, until one does.
   stuck: 'offline' | 'failed' | null
+  // Why the server last refused a board, until it takes one. It outlasts
+  // the sync, so a refusal sent with the scoring page closed still shows.
+  refused: Refusal | null
+  // How many boards the server took while this sync lived. A game that
+  // stops being unsynced with no rise here was dropped, not synced.
+  landed: number
 }
 
-const IDLE: SyncStatus = { sending: false, stuck: null }
+const IDLE: SyncStatus = { sending: false, stuck: null, refused: null, landed: 0 }
 
 const RETRY_MS = [2000, 4000, 8000, 15000, 30000]
 
@@ -50,11 +57,14 @@ type State =
 
 const statusListeners = new Set<() => void>()
 
+let onForbidden = (): void => {}
+
 class MatchSync {
   status: SyncStatus = IDLE
   holders = 0
   private state: State = { kind: 'idle' }
   private stuck: SyncStatus['stuck'] = null
+  private landed = 0
   private failures = 0
   private readonly unsubscribe: () => void
   private readonly matchId: string
@@ -96,6 +106,8 @@ class MatchSync {
     this.status = {
       sending: state.kind === 'sending',
       stuck: this.stuck,
+      refused: boardsOf(this.matchId).refused,
+      landed: this.landed,
     }
     for (const listener of statusListeners) listener()
   }
@@ -137,16 +149,29 @@ class MatchSync {
         })
         return
       }
-      this.enter({ kind: 'idle' })
-      dropBoard(this.matchId, board)
-      void this.step()
+      if (error instanceof ApiError) this.refuse(board, error)
       return
     }
     if (!this.isIn(sending)) return
     this.failures = 0
     this.stuck = null
+    // The rise and the acknowledge must reach the strip in one render, so
+    // nothing may await between them.
+    this.landed += 1
     this.enter({ kind: 'idle' })
     acknowledge(this.matchId, board)
+    void this.step()
+  }
+
+  // Drops a board the server won't take, and never sends it again.
+  private refuse(board: string, error: ApiError): void {
+    // The boards route also answers 409 when the board's players or rules
+    // differ from the server's match, which only a hand-edited link reaches.
+    const refused = error.status === 409 ? 'final' : 'other'
+    if (refused === 'other') console.warn('The server refused a board', error.status, error.title)
+    if (error.status === 403) onForbidden()
+    this.enter({ kind: 'idle' })
+    dropBoard(this.matchId, board, refused)
     void this.step()
   }
 }
@@ -175,8 +200,15 @@ function hold(matchId: string): () => void {
 
 // Syncs every match with a board to send, whichever page is open. Root runs
 // it, so a board saved with no signal goes once the device is back online,
-// even after the scoring page has closed.
-export function useAppSync(): void {
+// even after the scoring page has closed. A refusal for want of permission
+// calls `forbidden`, so Root can refresh the session.
+export function useAppSync(forbidden: () => void): void {
+  useEffect(() => {
+    onForbidden = forbidden
+    return () => {
+      onForbidden = () => {}
+    }
+  }, [forbidden])
   const pending = useSyncExternalStore(subscribeBoards, matchesWithPending)
   const held = useRef(new Map<string, () => void>())
   useEffect(() => {
