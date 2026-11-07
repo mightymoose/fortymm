@@ -64,22 +64,40 @@ export const Route = createFileRoute('/_authenticated/matches/$matchId/scores/ga
   errorComponent: ScoresFailed,
 })
 
+// How long the page waits for the API's match before it treats the hall
+// as having no signal. Hall Wi-Fi can report online and answer nothing.
+const REBUILD_AFTER_MS = 8000
+
 // Online, redirects to the API's match as Keep score opens it, or to the
 // match's page once it is final, as #316 owns editing after that. Returns
-// only with no network.
+// only with no network, or with no answer in REBUILD_AFTER_MS.
 async function rebuildFromApi(api: ApiClient, queryClient: QueryClient, matchId: string): Promise<void> {
   if (!navigator.onLine) return
+  const query = matchQuery(api, matchId)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const slow = new Promise<'slow'>((resolve) => {
+    timer = setTimeout(() => resolve('slow'), REBUILD_AFTER_MS)
+  })
   let found
   try {
-    found = await queryClient.fetchQuery({
-      ...matchQuery(api, matchId),
-      // The page waits on this, so a failure shows at once, with Try again.
-      // No response is a hall with no signal, which a retry won't fix.
-      retry: false,
-    })
+    found = await Promise.race([
+      queryClient.fetchQuery({
+        ...query,
+        // The page waits on this, so a failure shows at once, with Try again.
+        // No response is a hall with no signal, which a retry won't fix.
+        retry: false,
+      }),
+      slow,
+    ])
   } catch (error) {
     if (error instanceof ApiUnreachable) return
     throw error
+  } finally {
+    clearTimeout(timer)
+  }
+  if (found === 'slow') {
+    void queryClient.cancelQueries({ queryKey: query.queryKey })
+    return
   }
   if (!found) throw notFound()
   const target = keepScoreTarget(found, nowSeconds())

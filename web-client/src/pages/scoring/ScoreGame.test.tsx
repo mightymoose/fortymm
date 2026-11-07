@@ -1,7 +1,7 @@
 import { act, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi, type MockInstance } from 'vitest'
 import type { components } from '../../api/schema'
 import { saveAccount } from '../../api/savedSession'
 import type { GamePoints } from '../../scoring/board'
@@ -492,6 +492,22 @@ describe('ScoreGame', () => {
           expect(page.sides).toEqual(['Player 1', 'Player 2'])
           expect(api.reads).toEqual([])
         })
+      })
+
+      it('says to open the match with signal when the API holds the request for 8 seconds', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true })
+        onTestFinished(() => vi.useRealTimers())
+        const api = mockMatchReads([served([[11, 3]])])
+        api.hold = true
+        const page = await ScoreGamePage.renderLoading(`/matches/${id}/scores/game/1/edit`)
+
+        await act(() => vi.advanceTimersByTimeAsync(7_900))
+        expect(await page.loading()).toBeInTheDocument()
+        await act(() => vi.advanceTimersByTimeAsync(100))
+        await page.settle()
+
+        expect(page.heading).toHaveTextContent('This match’s scores aren’t on this device')
+        await api.release()
       })
 
       it('says to open the match with signal when the request gets no response', async () => {
