@@ -454,6 +454,14 @@ describe('ScoreGame', () => {
         expect(page.title).toHaveTextContent('We can’t find that page')
       })
 
+      it('shows the app’s error page, not Try again, for a read the page can’t use', async () => {
+        server.use(http.get(`${API_BASE_URL}/v1/matches/:matchId`, () => HttpResponse.json({ data: {} })))
+        const page = await ErrorPage.render(`/matches/${id}/scores/game/1/edit`)
+
+        expect(page.title).toHaveTextContent('Something went wrong')
+        expect(page.homeLink).toBeInTheDocument()
+      })
+
       it('shows a skeleton while the match loads, then its scores', async () => {
         const api = mockMatchReads([served([[11, 3]])])
         api.hold = true

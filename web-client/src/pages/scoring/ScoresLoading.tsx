@@ -1,5 +1,6 @@
 import { Link, useParams, useRouter, type ErrorComponentProps } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
+import { ApiError, ApiUnreachable } from '../../api/errors'
 import { ErrorScreen } from '../../components/ErrorScreen'
 import { Icon } from '../../components/Icon'
 import { QueryError } from '../../components/QueryBoundary'
@@ -37,9 +38,10 @@ export function ScoresLoading() {
   )
 }
 
-// The API answered with an error while the route rebuilt the scores.
 export function ScoresFailed({ error }: ErrorComponentProps) {
   const router = useRouter()
+  // Try again can't fix a bug in the page, so the root error page shows it.
+  if (!(error instanceof ApiError || error instanceof ApiUnreachable)) throw error
   return (
     <ScoreFrame>
       <QueryError error={error} onRetry={() => void router.invalidate()} />
