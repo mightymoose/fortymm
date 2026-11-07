@@ -104,7 +104,7 @@ export function eventText(history: readonly MatchEvent[], index: number): string
   const event = history[index]
   switch (event.kind) {
     case 'created':
-      return 'Started the match'
+      return 'Created the match'
     case 'board': {
       const last = event.games[event.games.length - 1]
       if (!last) return 'Started keeping score'

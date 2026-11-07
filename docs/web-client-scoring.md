@@ -127,6 +127,37 @@ The scoring pages, the URL fragment, board sync and the result pages.
   page, for each match with a board to send, so it still goes after the
   person leaves the scoring page. A sync stops when its last holder lets
   go, and a response that lands after that changes nothing.
+- A submitted result goes through the same sync, after the match's
+  board, to `POST /v1/matches/{match_id}/approvals`, through
+  `pushResult()`, which records it with the submitter's signature.
+  `src/scoring/results.ts` is the outbox: per match, every envelope this
+  device submitted that the API hasn't taken, oldest first, the same one
+  once. Unlike a board, every result goes, in order, because each
+  replaces the one before, so a first result and its correction
+  submitted offline both land, first first. The outbox lives in
+  `localStorage`, read afresh on each change, so a reload keeps it and
+  `useAppSync()` sends it from any page that has loaded the session.
+  Without one, as on a public page or `/signed-out`, results wait, since
+  a 401's session refresh would start a guest account there. If a write to it fails, the
+  outbox stays in the tab's memory from then on. A result waits and
+  retries as a board does. Three refusals can mean "not yet": 409 stale,
+  when the result it replaces is still on another phone, 422 for an
+  unknown key, when this device's key hasn't registered yet, which also
+  refreshes the session so the key registers, and 403, as the next
+  session may hold `matches.score`. The API's errors carry no code, so
+  the first two are told by their titles (`src/api/errors.ts`). After
+  any of them, the result keeps trying, with the backoff and then every
+  5 minutes or when the page wakes, until a day after it was signed
+  (`notYet()`). Such a wait doesn't make the strip say the sync is
+  stuck, and a board saved meanwhile goes at once. The API
+  taking it, or refusing it for good (any other 4xx, logged with
+  `console.warn`), removes it, and the next one goes. A
+  result refused for good changes nothing on the strip. The approval
+  page queues its link's envelope when it opens, and the envelope with
+  both signatures once approved, for an account whose board would sync.
+  So every device that sees a result passes it on before anything it
+  builds on it, and a counter made from a result that hasn't reached the
+  API yet still lands after it.
 - The strip shows each game's sync while this tab has a board to send.
   A game is unsynced when its points differ from the `synced` board. It
   shows a dot while the board is on its way, a dashed grey edge and a
@@ -144,15 +175,20 @@ The scoring pages, the URL fragment, board sync and the result pages.
   one failed send with a response changes nothing while it waits to
   retry, so a blip doesn't flash a warning. A refusal
   ends the run of failures. Otherwise,
-  after a refusal, it says `Match final. Changes here don’t sync.` for
+  after a refusal, it says `Match final. A correction syncs once you submit it.` for
   a 409 and `Not synced. Saved on this device.` for
   any other.
   The marks never change a cell's size, and the line keeps its height.
 - When a player's press would leave a `decided` board, the button reads
   Submit result, and the line beside it says who wins. Submit drops any
   signatures, signs the games with the typed score with this browser's
-  key (`signResult()`, for the viewer's side), and goes to the
-  submission page with the envelope as its hash. With no key, it says
+  key (`signResult()`, for the viewer's side), puts the envelope in the
+  pad's URL too, so the phone's Back button opens a pad that corrects
+  it, and goes to the submission page with the envelope as its hash. When the board syncs,
+  it also queues the envelope for the API (see the results outbox above),
+  so the server holds the submitter's signed result. A correction can then
+  replace it, a result it replaced can't be approved, and an unrated match
+  is final as soon as it lands. With no key, it says
   under the button that the browser can't sign yet. On an `overrun`
   board, the strip tells a player which games to clear. A spectator's
   button only saves, and the page says who submits instead
@@ -185,7 +221,7 @@ The scoring pages, the URL fragment, board sync and the result pages.
   A demo match has a fixed `uuid` for the result, and is unrated.
 - `matches/$matchId/scores/approvals/new.tsx`: the page `AcceptResult`
   (`src/pages/matches/`), which the link opens, with the score page's
-  frame. It works offline and makes no request of its own. Its loader
+  frame. It works offline, and its loader sends no request. The loader
   takes only a signed result that the match's scores could hold, by the
   same zod check, so a retirement or another best of shows "This link
   isn’t a FortyMM result" too. Until matches come from the API, every
@@ -204,7 +240,12 @@ The scoring pages, the URL fragment, board sync and the result pages.
   alone, after a reload too. The approval never waits on the network.
   Then `ServerCheck` sends the envelope to `POST
   /v1/matches/{match_id}/approvals`, with the payload's match id, through
-  `approvalCheckQuery()`, in its own `QueryBoundary`. Its verdict is
+  `approvalCheckQuery()`, in its own `QueryBoundary`. Online, it first
+  waits up to 10 seconds for this device's results queued before it to
+  land (`afterEarlierResults()`), as the API would find it stale before
+  them. A stale answer for an envelope the outbox still holds shows "It
+  goes to FortyMM once the result it corrects reaches it" rather than a
+  refusal. Its verdict is
   `accepted`, or `refused` with the API's title for a 404, a 409 or a
   422. Accepted says
   "FortyMM checked the signatures and the scores". Refused shows "FortyMM

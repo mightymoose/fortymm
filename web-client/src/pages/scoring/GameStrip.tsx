@@ -46,7 +46,7 @@ export function GameStrip({
           </p>
         ) : sync.refused ? (
           <p className="score-strip__note" role="status">
-            {sync.refused === 'final' ? 'Match final. Changes here don’t sync.' : 'Not synced. Saved on this device.'}
+            {sync.refused === 'final' ? 'Match final. A correction syncs once you submit it.' : 'Not synced. Saved on this device.'}
           </p>
         ) : (
           decider !== null &&

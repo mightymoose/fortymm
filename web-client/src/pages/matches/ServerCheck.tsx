@@ -36,6 +36,14 @@ function Verdict({ matchId, envelope }: Props) {
       </div>
     )
   }
+  if (verdict.kind === 'waiting') {
+    return (
+      <p className="fm-notice" role="status">
+        <Icon name="clock" />
+        <span>It goes to FortyMM once the result it corrects reaches it</span>
+      </p>
+    )
+  }
   return (
     <p className="fm-notice" role="status">
       <Icon name="check" />

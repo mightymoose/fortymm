@@ -223,6 +223,6 @@ test('a final match refuses the board, and no game shows synced', async ({ page 
   await phone.watchSyncedMarks()
   await phone.save(1, [11, 7])
 
-  await expect(phone.stripNote).toHaveText('Match final. Changes here don’t sync.')
+  await expect(phone.stripNote).toHaveText('Match final. A correction syncs once you submit it.')
   expect(await phone.everSynced(), 'no cell showed Synced').toBe(false)
 })

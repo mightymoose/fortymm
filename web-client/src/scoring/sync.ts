@@ -1,8 +1,12 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import type { ApiClient } from '../api/client'
-import { ApiError, ApiUnreachable } from '../api/errors'
-import { pushBoard } from './boardApi'
+import { ApiError, ApiUnreachable, STALE_RESULT, UNKNOWN_KEY } from '../api/errors'
+import { pushBoard, pushResult } from './boardApi'
 import { acknowledge, boardsOf, dropBoard, matchesWithPending, subscribeBoards, type Refusal } from './boards'
+import { decodeEnvelope } from '../signing/envelope'
+import { decodePayload } from '../signing/result'
+import { fromBase64url } from '../signing/text'
+import { matchesWithResults, resultsOf, subscribeResults, removeResult } from './results'
 
 // Sends a match's board to the API in the background, so spectators and
 // tournament directors can watch it. It's best effort: the URL keeps the
@@ -16,6 +20,15 @@ import { acknowledge, boardsOf, dropBoard, matchesWithPending, subscribeBoards, 
 // other 4xx) is dropped, and never shows as synced. It
 // never reads the server's board back, so a board another device sent
 // can't change this tab's pad.
+//
+// A submitted result goes the same way, after the board, to the approvals
+// route, which records it with the submitter's signature. The server's
+// chain then has a head, so a correction can replace it. Every result goes,
+// oldest first, because each replaces the one before. One the server
+// refuses for good is dropped, and the next one goes. Two refusals can
+// mean "not yet", so a result keeps trying after them for a day from its
+// signing: a stale one, whose first result is still on another phone, and
+// an unknown key, which this device registers on its next session answer.
 
 // Two separate facts about a match's sync. A stuck board that is trying
 // again is both stuck and sending.
@@ -68,6 +81,30 @@ function sessionLapsed(error: unknown): boolean {
   return error instanceof ApiError && error.status === 401
 }
 
+function unknownKey(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 422 && error.title === UNKNOWN_KEY
+}
+
+const NOT_YET_FOR_MS = 24 * 60 * 60 * 1000
+// After the backoff, a result that isn't taken yet tries this often, or
+// when the page wakes.
+const NOT_YET_RETRY_MS = 300_000
+
+// Whether a refusal of `envelope` may still change, so it is worth sending
+// again: the result it replaces may still arrive, the key may register, or
+// the next session may hold `matches.score`.
+export function notYet(error: unknown, envelope: string, now: number): boolean {
+  if (!(error instanceof ApiError)) return false
+  const stale = error.status === 409 && error.title === STALE_RESULT
+  if (!stale && !unknownKey(error) && error.status !== 403) return false
+  try {
+    const { issuedAt } = decodePayload(decodeEnvelope(fromBase64url(envelope)).payload)
+    return now - issuedAt * 1000 < NOT_YET_FOR_MS
+  } catch {
+    return false
+  }
+}
+
 export function retryable(error: unknown): boolean {
   return !(error instanceof ApiError) || error.status >= 500 || rateLimited(error) || sessionLapsed(error)
 }
@@ -83,24 +120,40 @@ export function stuckAfter(error: unknown, failures: number, stuck: SyncStatus['
   return failures >= 2 ? 'failed' : stuck
 }
 
-export type Step = 'send' | 'waitOnline' | 'rest'
+export type Step = 'sendBoard' | 'sendResult' | 'waitOnline' | 'rest'
 
-// What an idle sync does next.
-export function nextStep({ pending, offline }: { pending: string | null; offline: boolean }): Step {
-  if (pending === null) return 'rest'
-  return offline ? 'waitOnline' : 'send'
+// What an idle sync does next. The board goes before a result, so the
+// board that shows the result's scores lands while the match can still
+// take it.
+export function nextStep({
+  pending,
+  result,
+  offline,
+}: {
+  pending: string | null
+  result: string | null
+  offline: boolean
+}): Step {
+  if (pending === null && result === null) return 'rest'
+  if (offline) return 'waitOnline'
+  return pending === null ? 'sendResult' : 'sendBoard'
 }
+
+type Sent = { kind: 'board' | 'result'; text: string }
 
 type State =
   | { kind: 'idle' }
-  | { kind: 'sending'; board: string }
-  | { kind: 'waitingRetry'; timer: ReturnType<typeof setTimeout>; rateLimited: boolean }
+  | { kind: 'sending'; sent: Sent }
+  | { kind: 'waitingRetry'; timer: ReturnType<typeof setTimeout>; rateLimited: boolean; notYet: boolean }
   | { kind: 'waitingOnline' }
   | { kind: 'stopped' }
 
 const statusListeners = new Set<() => void>()
 
 let refreshSession = (): void => {}
+// Results go only while a session is loaded. Elsewhere a 401 would make
+// the refresh start a guest account, as on /signed-out.
+let resultsEnabled = false
 
 class MatchSync {
   status: SyncStatus = IDLE
@@ -110,6 +163,7 @@ class MatchSync {
   private landed = 0
   private failures = 0
   private readonly unsubscribe: () => void
+  private readonly unsubscribeResults: () => void
   private readonly matchId: string
   private readonly api: ApiClient
 
@@ -118,10 +172,20 @@ class MatchSync {
     this.api = api
     // A save, here or in another component. A waiting retry keeps its
     // backoff.
-    this.unsubscribe = subscribeBoards(() => {
+    const saved = () => {
       if (this.state.kind === 'waitingOnline') this.enter({ kind: 'idle' })
       void this.step()
+    }
+    // A result that isn't taken yet waits minutes, which a board, sent
+    // first, doesn't wait out.
+    this.unsubscribe = subscribeBoards(() => {
+      if (this.state.kind === 'waitingRetry' && this.state.notYet) {
+        clearTimeout(this.state.timer)
+        this.enter({ kind: 'idle' })
+      }
+      saved()
     })
+    this.unsubscribeResults = subscribeResults(saved)
     window.addEventListener('online', this.kick)
     document.addEventListener('visibilitychange', this.resume)
     window.addEventListener('pageshow', this.kick)
@@ -146,6 +210,7 @@ class MatchSync {
     if (this.state.kind === 'waitingRetry') clearTimeout(this.state.timer)
     this.state = { kind: 'stopped' }
     this.unsubscribe()
+    this.unsubscribeResults()
     window.removeEventListener('online', this.kick)
     document.removeEventListener('visibilitychange', this.resume)
     window.removeEventListener('pageshow', this.kick)
@@ -171,7 +236,8 @@ class MatchSync {
   private async step(): Promise<void> {
     if (this.state.kind !== 'idle') return
     const { pending } = boardsOf(this.matchId)
-    switch (nextStep({ pending, offline: !navigator.onLine })) {
+    const result = resultsOf(this.matchId)[0] ?? null
+    switch (nextStep({ pending, result: resultsEnabled ? result : null, offline: !navigator.onLine })) {
       case 'rest':
         this.stuck = null
         this.enter({ kind: 'idle' })
@@ -180,28 +246,35 @@ class MatchSync {
         this.stuck = 'offline'
         this.enter({ kind: 'waitingOnline' })
         return
-      case 'send':
-        return this.send(pending!)
+      case 'sendBoard':
+        return this.send({ kind: 'board', text: pending! })
+      case 'sendResult':
+        return this.send({ kind: 'result', text: result! })
     }
   }
 
-  private async send(board: string): Promise<void> {
-    const sending: State = { kind: 'sending', board }
+  private async send(sent: Sent): Promise<void> {
+    const sending: State = { kind: 'sending', sent }
     this.enter(sending)
     try {
-      await pushBoard(this.api, this.matchId, board)
+      if (sent.kind === 'board') await pushBoard(this.api, this.matchId, sent.text)
+      else await pushResult(this.api, this.matchId, sent.text)
     } catch (error) {
       if (!this.isIn(sending)) return
-      if (sessionLapsed(error) || (error instanceof ApiError && error.status === 403)) refreshSession()
-      if (retryable(error)) {
-        const backoff = retryDelay(this.failures)
+      if (sessionLapsed(error) || (error instanceof ApiError && error.status === 403) || unknownKey(error)) {
+        refreshSession()
+      }
+      const later = sent.kind === 'result' && notYet(error, sent.text, Date.now())
+      if (retryable(error) || later) {
+        const delay = this.retryDelayFor(error, later)
         const limited = rateLimited(error)
-        const delay = limited ? rateLimitDelay(error.retryAt, backoff, Date.now()) : backoff
         this.failures += 1
-        this.stuck = stuckAfter(error, this.failures, this.stuck)
+        // A result that isn't taken yet is no sign that the sync is stuck.
+        if (!later) this.stuck = stuckAfter(error, this.failures, this.stuck)
         this.enter({
           kind: 'waitingRetry',
           rateLimited: limited,
+          notYet: later,
           timer: setTimeout(() => {
             this.enter({ kind: 'idle' })
             void this.step()
@@ -209,34 +282,71 @@ class MatchSync {
         })
         return
       }
-      if (error instanceof ApiError) this.refuse(board, error)
+      if (error instanceof ApiError) this.refuse(sent, error)
       return
     }
     if (!this.isIn(sending)) return
     this.failures = 0
     this.stuck = null
+    if (sent.kind === 'result') return this.settle(sent.text)
     // The rise and the acknowledge must reach the strip in one render, so
     // nothing may await between them.
     this.landed += 1
     this.enter({ kind: 'idle' })
-    acknowledge(this.matchId, board)
+    acknowledge(this.matchId, sent.text)
     void this.step()
   }
 
-  // Drops a board the server won't take, and never sends it again.
-  private refuse(board: string, error: ApiError): void {
+  // A 429 waits out its Retry-After. A result that isn't taken yet tries
+  // less often once the backoff runs out.
+  private retryDelayFor(error: unknown, notYet: boolean): number {
+    const backoff = retryDelay(this.failures)
+    if (rateLimited(error)) return rateLimitDelay(error.retryAt, backoff, Date.now())
+    return notYet && this.failures >= RETRY_MS.length ? NOT_YET_RETRY_MS : backoff
+  }
+
+  // The server took the result, or refused it for good, so the next goes.
+  private settle(result: string): void {
+    this.enter({ kind: 'idle' })
+    removeResult(this.matchId, result)
+    void this.step()
+  }
+
+  // Drops a board or a result the server won't take, and never sends it
+  // again.
+  private refuse(sent: Sent, error: ApiError): void {
+    this.failures = 0
+    if (sent.kind === 'result') {
+      console.warn('The server refused a result', error.status, error.title)
+      return this.settle(sent.text)
+    }
     // The boards route also answers 409 when the board's players or rules
     // differ from the server's match, which only a hand-edited link reaches.
     const refused = error.status === 409 ? 'final' : 'other'
     if (refused === 'other') console.warn('The server refused a board', error.status, error.title)
-    this.failures = 0
     this.enter({ kind: 'idle' })
-    dropBoard(this.matchId, board, refused)
+    dropBoard(this.matchId, sent.text, refused)
     void this.step()
   }
 }
 
 const syncs = new Map<string, MatchSync>()
+
+function subscribeToSend(listener: () => void): () => void {
+  const unsubscribeBoards = subscribeBoards(listener)
+  const unsubscribeResults = subscribeResults(listener)
+  return () => {
+    unsubscribeBoards()
+    unsubscribeResults()
+  }
+}
+
+// The matches with a board or a result to send, as one string, so a React
+// store can compare it.
+function matchesToSend(): string {
+  const boards = matchesWithPending()
+  return [...new Set([...(boards === '' ? [] : boards.split(' ')), ...matchesWithResults()])].sort().join(' ')
+}
 
 // Syncs the match until the returned release is called. Root and the
 // scoring page each hold a match, and its sync stops when the last lets go.
@@ -258,18 +368,26 @@ function hold(matchId: string, api: ApiClient): () => void {
   }
 }
 
-// Syncs every match with a board to send, whichever page is open. Root runs
-// it, so a board saved with no signal goes once the device is back online,
-// even after the scoring page has closed. A 401, or a refusal for want of
+// Syncs every match with a board or a result to send, whichever page is
+// open. Root runs it, so a board saved with no signal goes once the device
+// is back online, even after the scoring page has closed, and a result
+// after a reload too. A 401, or a refusal for want of
 // permission, calls `refresh`, so Root can refresh the session.
-export function useAppSync(api: ApiClient, refresh: () => void): void {
+export function useAppSync(api: ApiClient, refresh: () => void, signedIn: boolean): void {
   useEffect(() => {
     refreshSession = refresh
     return () => {
       refreshSession = () => {}
     }
   }, [refresh])
-  const pending = useSyncExternalStore(subscribeBoards, matchesWithPending)
+  useEffect(() => {
+    resultsEnabled = signedIn
+    if (signedIn) for (const sync of syncs.values()) sync.kick()
+    return () => {
+      resultsEnabled = false
+    }
+  }, [signedIn])
+  const pending = useSyncExternalStore(subscribeToSend, signedIn ? matchesToSend : matchesWithPending)
   const held = useRef(new Map<string, () => void>())
   useEffect(() => {
     const ids = new Set(pending === '' ? [] : pending.split(' '))

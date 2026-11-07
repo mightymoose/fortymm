@@ -1,7 +1,7 @@
 import { QueryClient, queryOptions } from '@tanstack/react-query'
 import type { ApiClient } from './client'
 import type { components } from './schema'
-import { ApiError, ApiUnreachable, classifyFailure } from './errors'
+import { ApiError, ApiUnreachable, classifyFailure, STALE_RESULT } from './errors'
 import { forgetAccount, saveAccount, savedAccount, type SessionAccount } from './savedSession'
 import type {
   GameScore,
@@ -10,8 +10,10 @@ import type {
   MatchStatus,
   Side,
 } from '../pages/matches/browse/match'
+import { afterEarlierResults, resultsOf } from '../scoring/results'
 import { hex } from '../signing/bytes'
 import { registerDeviceKey, takeKey } from '../signing/deviceKey'
+import { base64url } from '../signing/text'
 
 // Retries a network error or a 5xx only, which can pass. A 4xx comes back the
 // same. A retry after a lost POST /v1/session response can leave one unused
@@ -238,9 +240,14 @@ export function answerQuestionMutation(api: ApiClient, queryClient: QueryClient)
 // A 403 is an account without `matches.score`, which more tries won't fix.
 const REFUSAL_STATUSES = new Set([403, 404, 409, 422])
 
-// What FortyMM said of an approved result: it checked out, or it refused
-// the result, with the API's reason.
-export type ApprovalVerdict = { kind: 'accepted' } | { kind: 'refused'; title: string }
+// What FortyMM said of an approved result: it checked out, it refused the
+// result, with the API's reason, or the result it corrects hasn't reached
+// it yet, and this device's outbox sends it again until it does.
+export type ApprovalVerdict = { kind: 'accepted' } | { kind: 'refused'; title: string } | { kind: 'waiting' }
+
+// How long a check waits for this device's earlier results of the match
+// to land first, as one the API hasn't taken yet would make it stale.
+const WAIT_FOR_EARLIER_RESULTS_MS = 10_000
 
 // Sends an approved result to FortyMM, which checks it and records it. The
 // same envelope again is a retry that FortyMM answers the same, so it is a
@@ -256,6 +263,7 @@ export function approvalCheckQuery(api: ApiClient, matchId: string, envelope: Ui
     // Offline, the check fails and shows Try again rather than pausing.
     networkMode: 'always',
     queryFn: async (): Promise<ApprovalVerdict> => {
+      if (navigator.onLine) await afterEarlierResults(matchId, base64url(envelope), WAIT_FOR_EARLIER_RESULTS_MS)
       try {
         await send(
           'POST /v1/matches/{match_id}/approvals',
@@ -266,6 +274,8 @@ export function approvalCheckQuery(api: ApiClient, matchId: string, envelope: Ui
         )
         return { kind: 'accepted' }
       } catch (error) {
+        const stale = error instanceof ApiError && error.status === 409 && error.title === STALE_RESULT
+        if (stale && resultsOf(matchId).includes(base64url(envelope))) return { kind: 'waiting' }
         if (error instanceof ApiError && REFUSAL_STATUSES.has(error.status) && error.title) {
           return { kind: 'refused', title: error.title }
         }

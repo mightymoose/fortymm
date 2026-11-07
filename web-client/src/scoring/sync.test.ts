@@ -4,13 +4,19 @@ import { nextStep, retryable, retryDelay, stuckAfter } from './sync'
 
 describe('nextStep', () => {
   it('sends a waiting board online, and waits while offline', () => {
-    expect(nextStep({ pending: 'a', offline: false })).toBe('send')
-    expect(nextStep({ pending: 'a', offline: true })).toBe('waitOnline')
+    expect(nextStep({ pending: 'a', result: null, offline: false })).toBe('sendBoard')
+    expect(nextStep({ pending: 'a', result: null, offline: true })).toBe('waitOnline')
   })
 
   it('rests with nothing to send, online or offline', () => {
-    expect(nextStep({ pending: null, offline: false })).toBe('rest')
-    expect(nextStep({ pending: null, offline: true })).toBe('rest')
+    expect(nextStep({ pending: null, result: null, offline: false })).toBe('rest')
+    expect(nextStep({ pending: null, result: null, offline: true })).toBe('rest')
+  })
+
+  it('sends the board before a result, and waits with either while offline', () => {
+    expect(nextStep({ pending: 'a', result: 'r', offline: false })).toBe('sendBoard')
+    expect(nextStep({ pending: null, result: 'r', offline: false })).toBe('sendResult')
+    expect(nextStep({ pending: null, result: 'r', offline: true })).toBe('waitOnline')
   })
 })
 

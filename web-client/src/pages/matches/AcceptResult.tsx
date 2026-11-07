@@ -1,6 +1,6 @@
 import { useMutation, useSuspenseQuery } from '@tanstack/react-query'
 import { Link, useLoaderData, useLocation, useNavigate, useParams, useRouteContext } from '@tanstack/react-router'
-import type { FormEvent } from 'react'
+import { useEffect, type FormEvent } from 'react'
 import { classifyFailure, failureMessages, NoSigningKey } from '../../api/errors'
 import { sessionQuery } from '../../api/queries'
 import { Button } from '../../components/Button'
@@ -9,6 +9,7 @@ import { Icon } from '../../components/Icon'
 import { Wordmark } from '../../components/Wordmark'
 import { checkGame, tally, type Side } from '../../scoring/board'
 import type { Fragment } from '../../scoring/fragment'
+import { queueResult } from '../../scoring/results'
 import { appendSignature } from '../../signing/envelope'
 import { signWithDeviceKey } from '../../signing/deviceKey'
 import type { MatchResult } from '../../signing/result'
@@ -42,7 +43,14 @@ export function AcceptResult() {
   const { matchId } = useParams({ from: ROUTE })
   const { api } = useRouteContext({ from: '__root__' })
   const { data: account } = useSuspenseQuery(sessionQuery(api))
-  const { fragment } = useLoaderData({ from: ROUTE })
+  const { fragment, syncs } = useLoaderData({ from: ROUTE })
+  // The result this link holds, and once approved the result with both
+  // signatures, go to the server after anything this device queued before.
+  // So a counter built on a result that hasn't reached the server yet, here
+  // or on the phone that made it, lands after it, not before it.
+  useEffect(() => {
+    if (fragment && syncs) queueResult(matchId, hash)
+  }, [fragment, syncs, matchId, hash])
   if (!fragment) {
     return (
       <ErrorScreen
