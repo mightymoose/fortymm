@@ -2,6 +2,7 @@
 tests/services/test_opponents.py cover the rules. The board and read tests
 insert their match with make()."""
 
+import hashlib
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -333,13 +334,35 @@ def test_a_match_answers_with_its_history(
     assert response.status_code == 200
     detail = response.json()["data"]
     listed = client.get("/v1/matches").json()["data"][0]
-    assert {k: v for k, v in detail.items() if k != "history"} == listed
+    assert {
+        k: v for k, v in detail.items() if k not in {"history", "result_hash"}
+    } == listed
     assert [
         {k: v for k, v in event.items() if k != "at"} for event in detail["history"]
     ] == [
         {"kind": "created", "by": None, "side": None, "games": None},
         {"kind": "override", "by": None, "side": None, "games": [[11, 5], [11, 7]]},
     ]
+
+
+@pytest.mark.usefixtures("creator")
+def test_a_match_answers_its_result_hash_in_lowercase_hex_or_null(
+    client: TestClient, migrated_database: Engine, players: list[dict[str, str]]
+) -> None:
+    other = MatchId(uuid.uuid4())
+    first, second = (PlayerId(uuid.UUID(player["id"])) for player in players)
+    with sessionmaker(migrated_database).begin() as session:
+        add_match(session, other, MatchDetails(3, True, (first, second)))
+    overridden_match(migrated_database, players)
+    with migrated_database.begin() as connection:
+        payload = connection.execute(
+            text("SELECT payload FROM match_results WHERE match_id = :id"),
+            {"id": MATCH},
+        ).scalar_one()
+
+    assert client.get(f"/v1/matches/{other}").json()["data"]["result_hash"] is None
+    hashed = client.get(PATH).json()["data"]["result_hash"]
+    assert hashed == hashlib.sha256(payload).hexdigest()
 
 
 @pytest.mark.parametrize("path", ["/v1/matches", PATH])

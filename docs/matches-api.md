@@ -118,7 +118,10 @@ routes, under `/v1/matches`.
   need `matches.view`. The list gives every match, newest first by
   `created_at`, then id, at most 50 (`MATCH_PAGE_SIZE`), with
   `meta.has_more`. It loads them in a fixed number of queries. The detail
-  adds `history`, and an unknown id answers 404 (`MatchNotFound`). The
+  adds `history` and `result_hash`, the lowercase hex SHA-256 of the head's
+  payload (an override's too), or null before any result. A device that
+  corrects the head without its envelope names it in `replaces` with this
+  hash. An unknown id answers 404 (`MatchNotFound`). The
   route is declared after `opponents`, so that still routes.
 - A match shows its sides' players as they survive `merged_into`, and
   `viewer_side`, the side of the session account's `self` player. No

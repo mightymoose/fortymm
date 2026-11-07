@@ -41,9 +41,11 @@ from fortymm_api.services.matches import (
 from fortymm_api.signed_results import (
     GamePoints,
     MatchResult,
+    ResultHash,
     Retired,
     Side,
     decode_payload,
+    result_hash,
 )
 
 MATCH_PAGE_SIZE = 50
@@ -154,6 +156,9 @@ class MatchDetail:
     match: MatchView
     # Oldest first.
     history: tuple[MatchEvent, ...]
+    # The head's hash, which a correction names as `replaces`. None until
+    # the match has a result.
+    result_hash: ResultHash | None
 
 
 @dataclass(frozen=True)
@@ -161,6 +166,7 @@ class ChainResult:
     """A result of the match, with what its state depends on."""
 
     id: MatchResultId
+    hash: ResultHash
     replaces: MatchResultId | None
     result: MatchResult
     accepted_at: datetime | None
@@ -238,8 +244,11 @@ def get_match(session: Session, match_id: MatchId, viewer: AccountId) -> MatchDe
     if not rows:
         raise MatchNotFound
     (match,) = _load(session, rows)
+    head = _head(match)
     return MatchDetail(
-        _view(match, _self_player(session, viewer)), _history(session, match)
+        _view(match, _self_player(session, viewer)),
+        _history(session, match),
+        None if head is None else head.hash,
     )
 
 
@@ -332,6 +341,7 @@ def _load(session: Session, rows: Sequence[_MatchRow]) -> list[_Loaded]:
         submission, sent_at = first_sent[stored.id]
         results[stored.match_id][stored.id] = ChainResult(
             stored.id,
+            result_hash(stored.payload),
             stored.replaces_id,
             decode_payload(stored.payload).result,
             stored.accepted_at,
@@ -367,9 +377,14 @@ def _load(session: Session, rows: Sequence[_MatchRow]) -> list[_Loaded]:
     ]
 
 
-def _view(match: _Loaded, you: PlayerId | None) -> MatchView:
+def _head(match: _Loaded) -> ChainResult | None:
+    """The result nothing replaces, None until the match has one."""
     replaced_ids = {result.replaces for result in match.results.values()}
-    head = next((r for r in match.results.values() if r.id not in replaced_ids), None)
+    return next((r for r in match.results.values() if r.id not in replaced_ids), None)
+
+
+def _view(match: _Loaded, you: PlayerId | None) -> MatchView:
+    head = _head(match)
     replaced = (
         None if head is None or head.replaces is None else match.results[head.replaces]
     )
