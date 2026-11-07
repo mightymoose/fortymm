@@ -3,24 +3,16 @@ import { http, HttpResponse } from 'msw'
 import { describe, expect, it, vi } from 'vitest'
 import { queueResult, resultsOf } from '../../scoring/results'
 import { hex } from '../../signing/bytes'
-import { decodeEnvelope, signResult, type Signer } from '../../signing/envelope'
+import { decodeEnvelope, signResult } from '../../signing/envelope'
 import { resultHash, type MatchResult } from '../../signing/result'
 import { base64url, fromBase64url } from '../../signing/text'
+import { otherDevice as device } from '../../test/otherDevice'
 import { AcceptResultPage } from '../../test/pages/AcceptResultPage'
 import { API_BASE_URL, grantSession, mockApprovals, server, sessionResponse } from '../../test/server'
 
 const player = sessionResponse.data.account.player
 const GECKO = 'a4d8f0e6-1b2c-4e3d-8f5a-9c7b6e1d2f08'
 const MATCH = '01970000-0000-7000-8000-0000000000c8'
-
-async function device(): Promise<Signer> {
-  const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign'])
-  return {
-    kid: crypto.getRandomValues(new Uint8Array(32)),
-    sign: async (bytes) =>
-      new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey, bytes)),
-  }
-}
 
 describe('the approval page and the results outbox', () => {
   it('sends nothing for a link that’s only opened, as the viewer hasn’t approved it', async () => {
@@ -103,7 +95,7 @@ describe('the approval page and the results outbox', () => {
     await page.waitForKey()
     await page.approve()
     expect(await page.findStatus()).toHaveTextContent('Approved on this device')
-    await waitFor(() => expect(screen.getByText(/FortyMM checked the signatures/)).toBeInTheDocument(), {
+    await waitFor(() => expect(screen.getByText(/FortyMM has the result/)).toBeInTheDocument(), {
       timeout: 6000,
     })
     await waitFor(() => expect(resultsOf(MATCH)).toEqual([]), { timeout: 6000 })
@@ -128,7 +120,7 @@ describe('the approval page and the results outbox', () => {
     approvals.answer = 'accepted'
 
     await waitFor(() => expect(resultsOf(MATCH)).toEqual([]), { timeout: 8000 })
-    expect(await screen.findByText('FortyMM checked the signatures and the scores')).toBeInTheDocument()
+    expect(await screen.findByText('Approved. FortyMM has the result.')).toBeInTheDocument()
   }, 30_000)
 
   it('says an approval waits while this device’s key registers, and checked once it lands', async () => {
@@ -141,12 +133,12 @@ describe('the approval page and the results outbox', () => {
     expect(
       await screen.findByText('FortyMM can’t take it yet, so this device keeps sending it', {}, { timeout: 16_000 }),
     ).toBeInTheDocument()
-    expect(screen.queryByText('FortyMM refused this result')).not.toBeInTheDocument()
+    expect(screen.queryByText('FortyMM didn’t accept this result')).not.toBeInTheDocument()
 
     approvals.answer = 'accepted'
 
     await waitFor(() => expect(resultsOf(MATCH)).toEqual([]), { timeout: 8000 })
-    expect(await screen.findByText('FortyMM checked the signatures and the scores')).toBeInTheDocument()
+    expect(await screen.findByText('Approved. FortyMM has the result.')).toBeInTheDocument()
   }, 30_000)
 
   it('tries every queued result again on the next pass, once the result they replace lands from another phone', async () => {
@@ -208,7 +200,7 @@ describe('the approval page and the results outbox', () => {
     await page.waitForKey()
     await page.approve()
 
-    expect(await screen.findByText('FortyMM refused this result', {}, { timeout: 16_000 })).toBeInTheDocument()
+    expect(await screen.findByText('FortyMM didn’t accept this result', {}, { timeout: 16_000 })).toBeInTheDocument()
     await waitFor(() => expect(resultsOf(MATCH)).toEqual([]))
   })
 

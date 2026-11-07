@@ -6,7 +6,6 @@ import { expect } from './fixtures.ts'
 type MatchRequest = components['schemas']['MatchRequest']
 type MatchDetailResponse = components['schemas']['MatchDetailResponse']
 type MatchesResponse = components['schemas']['MatchesResponse']
-type ErrorResponse = components['schemas']['ErrorsResponse']
 
 // The real API's matches, as the specs make and read them with a phone's
 // session.
@@ -38,13 +37,4 @@ export async function matchesOf(request: APIRequestContext, players: readonly st
   return data
     .filter((match) => match.sides.map((side) => side.players[0].id).join() === players.join())
     .map((match) => match.id)
-}
-
-// Uploads a result link's envelope, base64url as the link holds it, to the
-// match's approvals.
-export async function uploadResult(request: APIRequestContext, matchId: string, envelope: string) {
-  const response = await request.post(`/api/v1/matches/${matchId}/approvals`, {
-    data: { envelope: Buffer.from(envelope, 'base64url').toString('hex') },
-  })
-  return { status: response.status(), body: (await response.json()) as ErrorResponse }
 }

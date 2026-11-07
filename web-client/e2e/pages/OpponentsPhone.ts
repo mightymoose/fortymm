@@ -10,9 +10,9 @@ const PHONE = { width: 390, height: 844 }
 
 // A guest's phone, the opponent of the administrator's. A spec keeps one
 // for the whole file, because the suite stays under the guest account
-// limit. A guest holds no `matches.score`, so the administrator's session
-// uploads what this phone approved: the signatures, not the session, are
-// the authority.
+// limit. A guest holds no `matches.score`, so this phone sends nothing.
+// The administrator's phone lands what it approved when it opens the
+// approved link: the signatures, not the session, are the authority.
 export class OpponentsPhone {
   readonly context: BrowserContext
   readonly player: SessionPlayer
@@ -28,8 +28,8 @@ export class OpponentsPhone {
     return new OpponentsPhone(context, ((await session.json()) as SessionResponse).data.account.player)
   }
 
-  // Approves the result `link` holds, which works with no request of its
-  // own, and gives the envelope with both signatures.
+  // Approves the result `link` holds, which sends no request of its own,
+  // and gives the link with both signatures.
   async approve(link: string): Promise<string> {
     const page = await this.context.newPage()
     try {
@@ -39,7 +39,8 @@ export class OpponentsPhone {
       const before = new URL(page.url()).hash
       await page.getByRole('button', { name: 'Approve result' }).click()
       await expect.poll(() => new URL(page.url()).hash).not.toBe(before)
-      return new URL(page.url()).hash.slice(1)
+      const { pathname, hash } = new URL(page.url())
+      return `${pathname}${hash}`
     } finally {
       await page.close()
     }

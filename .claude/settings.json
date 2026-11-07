@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(~/.claude/skills/ship-it/review-threads.sh *)",
+      "Bash(/Users/ryan/.claude/skills/ship-it/review-threads.sh *)",
+      "Bash(bin/teardown-stack *)",
+      "Bash(./bin/teardown-stack *)"
+    ],
+    "deny": [
+      "Bash(git push *-f* main)",
+      "Bash(git push *-f* main *)",
+      "Bash(git push *-f*:main)",
+      "Bash(git push *-f*:main *)",
+      "Bash(git push * main *-f*)",
+      "Bash(git push *:main *-f*)",
+      "Bash(git push *+main)",
+      "Bash(git push *+main *)",
+      "Bash(git push *+*:main)",
+      "Bash(git push *+*:main *)",
+      "Bash(git branch -D main)",
+      "Bash(gh pr merge *--admin*)",
+      "Bash(gh api graphql *mergePullRequest*)"
+    ]
+  }
+}

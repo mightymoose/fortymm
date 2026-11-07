@@ -262,37 +262,77 @@ The scoring pages, the URL fragment, board sync and the result pages.
   frame. It works offline, and its loader sends no request. The loader
   takes only a signed result that the match's scores could hold, by the
   same zod check, so a retirement or another best of shows "This link
-  isn’t a FortyMM result" too. Until matches come from the API, every
-  viewer stands in as the player whose side hasn't signed, or once both
-  have, the side that signed last. "Review match score" heads it, then
-  the outcome for the viewer, such as "Your opponent reported that you
+  isn’t a FortyMM result" too. It builds the match from the link's
+  result, so a demo match stands the viewer in for its made-up opponent
+  by matchFor()'s rule. Then it checks every signature on the device
+  (`signaturesHold()`, `src/signing/verify.ts`). A signer header holds
+  only its kid, the hash of a key that only FortyMM holds, so it recovers
+  the P-256 key from the signature and the hash of the Sig_structure, and
+  takes it only if its COSE_Key hashes to the kid. A link whose scores or
+  signatures changed shows "This link has been changed and can’t be
+  trusted", before anything else. The check proves only that each
+  signature matches the key its kid names, so it catches changed bytes.
+  It can't tell whether a key is a player's: a result re-signed with
+  another key holds here, and FortyMM refuses it, as it does a key it
+  doesn't know.
+  `approvalFor()` (`src/scoring/approval.ts`) says what the viewer may do,
+  from the signed sides, the result's players and the session's player.
+  Online, with `matches.view`, the page also reads the match
+  (`matchQuery()`) without suspending, as approving never waits on it.
+  Its `viewer_side` counts too, which knows merged players. The player
+  of the side that hasn't approved gets Approve result and Edit scores.
+  The player whose side approved and the other hasn't, the submitter,
+  sees "Waiting for <name> to approve", with Edit scores and no Approve,
+  so they can never add a second signature. Once FortyMM's read says the
+  match is final, a link still waiting for an approval shows read only,
+  with "This match is final, so there’s nothing left to approve." and no
+  Approve, Edit scores or waiting line. A verified account that plays
+  neither side is told it isn't their match, with no actions, and a
+  guest that plays neither side, which a signed-out visitor is too, gets
+  Sign in, which comes back to the link with its fragment. The page
+  names the opponent from the match read, a demo match's made-up
+  player, or else "Your opponent". "Review match score" heads it, then
+  the outcome for the viewer, such as "epic elk 558 reported that you
   lost 3–1. Do these scores look right?" One `.fm-games` table follows:
   a row for You, then one for Your opponent, each game's points, then
-  Won. A row shows the session's own username beside its role. Nothing
-  fetches another one. Below 880px the username drops under the role, so
-  a best of 7 fits a phone. Under the table are best of, rated, when the
-  opponent reported it and whether it corrects another. The page never
-  says "sign". Approve result appends this browser's signature
-  (`appendSignature()`) and replaces the URL's fragment with the new
-  envelope, so the page says "Approved on this device" from the link
-  alone, after a reload too. The approval never waits on the network.
-  Then `ServerCheck` sends the envelope to `POST
-  /v1/matches/{match_id}/approvals`, with the payload's match id, through
-  `approvalCheckQuery()`, in its own `QueryBoundary`. Online, it first
-  waits up to 10 seconds for this device's results queued before it to
-  land (`afterEarlierResults()`), as the API would find it stale before
-  them. A refusal that the outbox counts as "not yet" (`notYet()`), for an
-  envelope the outbox still holds, shows "FortyMM can’t take it yet, so
-  this device keeps sending it" rather than a refusal, and checks again
-  once the outbox has sent it. Its verdict is
-  `accepted`, or `refused` with the API's title for a 404, a 409 or a
-  422. Accepted says
-  "FortyMM checked the signatures and the scores". Refused shows "FortyMM
-  refused this result" with the title. No network shows the boundary's
-  error with Try again, under "Approved on this device". The query is
-  keyed by the envelope, so a reload sends it again, which the API
-  answers as a retry. The API never makes a demo match, so a demo
-  approval gets its 404, "No match has this id", as a refusal. Edit scores opens the match's game 1
-  with the page's fragment, unchanged. After an approval, that is the envelope
-  with both signatures. It checks no signature. With no key, it says the
-  browser can't sign yet.
+  Won, with each player's name beside its role. Anyone else sees the
+  players' names, or Player 1 and Player 2. Below 880px the name drops
+  under the role, so a best of 7 fits a phone. Under the table are best
+  of, rated, when the opponent reported it and whether it replaces
+  earlier scores. Once the match read says the match is final, Edit
+  scores goes. The page never says "sign", except to sign in. Approve result appends this
+  browser's signature (`appendSignature()`) and replaces the URL's
+  fragment with the new envelope, so the page shows the result approved
+  from the link alone, after a reload too. A second tap before the page
+  renders does nothing. The approval never waits on the network.
+  Once both sides approved, a player whose device sends the match's
+  results (an API match, and `matches.score`, `syncsBoard()`) gets
+  `ServerCheck`, whichever side approved last, so the submitter who
+  reopens the approved link lands it too. It sends the envelope to
+  `POST /v1/matches/{match_id}/approvals`, with the payload's match id,
+  through `approvalCheckQuery()`, in its own `QueryBoundary`. A player
+  who approved here but can't send, such as a new guest, sees "Approved
+  on this device" and "Send this link back to <name>, so their phone
+  sends it to FortyMM.", and the page sends nothing. A player who can't
+  send and opens a result the other side approved last sees "Approved by
+  both players", and the page sends nothing. FortyMM has no demo match,
+  so a demo approval sends nothing either, and shows "Approved on this
+  device" with no line about sending it back.
+  Online, the check first waits up to 10 seconds for this device's
+  results queued before it to land (`afterEarlierResults()`), as the API
+  would find it stale before them. A refusal that the outbox counts as
+  "not yet" (`notYet()`), for an envelope the outbox still holds, shows
+  "FortyMM can’t take it yet, so this device keeps sending it" rather
+  than a refusal, and checks again once the outbox has sent it. Its
+  verdict is `accepted`, or `refused` with the API's title for a 403, a
+  404, a 409 or a 422. Accepted says "Approved. FortyMM has the result."
+  Refused shows "FortyMM didn’t accept this result", with a sentence for
+  the title (`resultRefusal()` in `src/api/errors.ts`) and a general one
+  for a title it doesn't know, and nothing says approved above it. While
+  the check loads, waits, or fails with no network, "Approved on this
+  device" shows under it, or "Approved by both players" for a link the
+  viewer didn't approve last, with the boundary's Try again for the
+  failure. The query is keyed by the envelope, so a reload sends it
+  again, which the API answers as a retry. Edit scores opens the match's game 1 with the page's
+  fragment, unchanged. After an approval, that is the envelope with both
+  signatures. With no key, it says the browser can't sign yet.

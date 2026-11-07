@@ -101,3 +101,26 @@ export const failureMessages: Record<Failure['kind'], { title: string; sentence:
 // isn't registered yet. The API's errors carry no code to match instead.
 export const STALE_RESULT = "The result doesn't replace the match's newest result"
 export const UNKNOWN_KEY = "A signature's key isn't registered, or was revoked"
+
+// What each of the API's refusals of a result means for the player who
+// approved it, in plain words. The API's errors carry no code, so the
+// titles are the keys, with any curly apostrophe read as a straight one.
+const RESULT_REFUSALS: Record<string, string> = {
+  "A signature's account doesn't play as or manage the player it signs for":
+    'The approval came from an account that doesn’t play this match.',
+  "A signature doesn't match the result": 'The scores were changed after they were sent. Ask for the link again.',
+  [UNKNOWN_KEY]: 'FortyMM doesn’t know one of the phones this result came from. Ask for the link again.',
+  [STALE_RESULT]: 'FortyMM has newer scores for this match. Ask for the latest link.',
+  "Another result replaced this one, so it can't be approved":
+    'Newer scores replaced these. Ask for the latest link.',
+  "The scores aren't a legal ending to the match": 'These scores can’t end the match.',
+  "Both sides of the match are now the same player": 'Both sides of this match are now the same player.',
+  "The envelope isn't a FortyMM signed result": 'FortyMM can’t read this result.',
+  'The result is for another match': 'This result is for another match.',
+  'No match has this id': 'FortyMM has no record of this match.',
+  "You don't have permission to do this": 'This account can’t send results to FortyMM yet.',
+}
+
+export function resultRefusal(title: string): string {
+  return RESULT_REFUSALS[title.replaceAll('’', "'")] ?? 'Ask your opponent for the link again.'
+}

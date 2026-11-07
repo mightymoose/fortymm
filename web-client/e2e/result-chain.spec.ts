@@ -1,11 +1,16 @@
-import type { Page } from '@playwright/test'
+import type { APIRequestContext, BrowserContext, Page } from '@playwright/test'
+import type { components } from '../src/api/schema.d.ts'
 import { administratorState, expect, test } from './fixtures.ts'
-import { makeMatch, matchesOf, matchState, readMatch, uploadResult } from './matchApi.ts'
+import { makeMatch, matchesOf, matchState, readMatch } from './matchApi.ts'
+import { ApprovalPage, tamper } from './pages/ApprovalPage.ts'
 import { HomePage } from './pages/HomePage.ts'
 import { NewMatchPage } from './pages/NewMatchPage.ts'
 import { OpponentsPhone } from './pages/OpponentsPhone.ts'
 import { ScoringPage } from './pages/ScoringPage.ts'
 import { SignInPage } from './pages/SignInPage.ts'
+
+type SessionResponse = components['schemas']['SessionResponse']
+type AdminPlayersResponse = components['schemas']['AdminPlayersResponse']
 
 const PHONE = { width: 390, height: 844 }
 
@@ -15,17 +20,34 @@ test.use({ storageState: administratorState, viewport: PHONE })
 
 let opponent: OpponentsPhone
 let players: [string, string]
+// A player who plays none of the other matches, for a match that the
+// guest or the administrator doesn't play.
+let otherPlayer: string
 // "A vs B", as the Matches page names the matches.
 let vs = ''
+
+async function newGuest(request: APIRequestContext) {
+  const session = await request.post('/api/v1/session', { headers: { 'Content-Type': 'application/json' } })
+  return ((await session.json()) as SessionResponse).data.account.player
+}
 
 test.beforeAll(async ({ browser, baseURL }) => {
   const page = await browser.newPage({ baseURL, storageState: administratorState })
   await page.goto('/design-system')
   const me = (await new SignInPage(page).account()).player
-  await page.close()
   opponent = await OpponentsPhone.open(browser, baseURL)
   players = [me.id, opponent.player.id]
   vs = `${me.display_name} vs ${opponent.player.display_name}`
+  // The suite's guest accounts are at the limit's edge, so this takes a
+  // player another spec made, and makes one only when there is none.
+  const listed = (await (await page.request.get('/api/v1/admin/players')).json()) as AdminPlayersResponse
+  otherPlayer = listed.data.find((player) => !players.includes(player.id))?.id ?? ''
+  if (!otherPlayer) {
+    const context = await browser.newContext({ baseURL })
+    otherPlayer = (await newGuest(context.request)).id
+    await context.close()
+  }
+  await page.close()
 })
 
 test.afterAll(async () => {
@@ -35,6 +57,14 @@ test.afterAll(async () => {
 async function backToTheScores(page: Page): Promise<void> {
   await page.getByRole('link', { name: 'Back to the scores' }).click()
   await page.getByRole('textbox').nth(1).waitFor()
+}
+
+// Opens the approved link on the submitter's phone, which sends it to
+// FortyMM, as the guest's phone can't.
+async function openApproved(page: Page, link: string): Promise<ApprovalPage> {
+  const approval = new ApprovalPage(page)
+  await approval.open(link)
+  return approval
 }
 
 test('a corrected result can be approved, and the result it corrected can’t', async ({ page }) => {
@@ -48,13 +78,13 @@ test('a corrected result can be approved, and the result it corrected can’t', 
   const corrected = await phone.submit([11, 6])
   await expect.poll(() => matchState(page.request, match.id), { timeout: 10_000 }).toBe('awaiting 11-6')
 
-  const approved = await uploadResult(page.request, match.id, await opponent.approve(corrected))
-  expect(approved.status, `the API took the corrected result: ${JSON.stringify(approved.body)}`).toBe(201)
+  const approved = await openApproved(page, await opponent.approve(corrected))
+  await expect(approved.status('Approved. FortyMM has the result.')).toBeVisible()
   expect(await matchState(page.request, match.id)).toBe('final 11-6')
 
-  const stale = await uploadResult(page.request, match.id, await opponent.approve(first))
-  expect(stale.status, 'the API refused the result the correction replaced').toBe(409)
-  expect(stale.body.errors[0].title).toBe("Another result replaced this one, so it can't be approved")
+  const stale = await openApproved(page, await opponent.approve(first))
+  await expect(stale.refusal).toContainText('Newer scores replaced these.')
+  await expect(stale.main).not.toContainText('Approved')
   expect(await matchState(page.request, match.id)).toBe('final 11-6')
 })
 
@@ -165,8 +195,8 @@ test('a match whose scoring tab was lost carries on from the match page to final
   await expect(phone.heading).toHaveText('Game 3')
   await expect(phone.points(2)).toHaveText('7–11')
   const link = await phone.submit([11, 7])
-  const approved = await uploadResult(page.request, id, await opponent.approve(link))
-  expect(approved.status, `the API took the result: ${JSON.stringify(approved.body)}`).toBe(201)
+  const approved = await openApproved(page, await opponent.approve(link))
+  await expect(approved.status('Approved. FortyMM has the result.')).toBeVisible()
   expect(await matchState(page.request, id)).toBe('final 11-5 7-11 11-7')
 })
 
@@ -183,8 +213,8 @@ test('a correction made from the match page is approved, not refused as stale', 
   const corrected = await phone.submit([11, 6])
   await expect.poll(() => matchState(page.request, match.id), { timeout: 10_000 }).toBe('awaiting 11-6')
 
-  const approved = await uploadResult(page.request, match.id, await opponent.approve(corrected))
-  expect(approved.status, `the API took the correction: ${JSON.stringify(approved.body)}`).toBe(201)
+  const approved = await openApproved(page, await opponent.approve(corrected))
+  await expect(approved.status('Approved. FortyMM has the result.')).toBeVisible()
   expect(await matchState(page.request, match.id)).toBe('final 11-6')
 })
 
@@ -213,4 +243,108 @@ test('Back right after Start opens the match, so a second Start can’t make ano
   await expect(page.getByRole('button', { name: 'Start match' })).toHaveCount(0)
   const made = (await matchesOf(page.request, players)).filter((other) => !before.includes(other))
   expect(made).toEqual([id])
+})
+
+// The administrator's phone submits a rated 11–5, and the link goes round.
+async function submittedLink(
+  page: Page,
+  between: [string, string] = players,
+): Promise<{ id: string; link: string }> {
+  const match = await makeMatch(page.request, between, { rated: true })
+  const phone = new ScoringPage(page)
+  await phone.open(match)
+  const link = await phone.submit([11, 5])
+  await expect.poll(() => matchState(page.request, match.id), { timeout: 10_000 }).toBe('awaiting 11-5')
+  return { id: match.id, link }
+}
+
+async function openOn(context: BrowserContext, link: string): Promise<ApprovalPage> {
+  const approval = new ApprovalPage(await context.newPage())
+  await approval.open(link)
+  return approval
+}
+
+test.describe('the approval page', () => {
+  test('shows the submitter whom the result waits for, with no Approve', async ({ page }) => {
+    const { link } = await submittedLink(page)
+
+    const approval = new ApprovalPage(page)
+    await approval.open(link)
+
+    await expect(approval.status(`Waiting for ${opponent.player.display_name} to approve`)).toBeVisible()
+    await expect(approval.main).toContainText('You reported that you won 1–0.')
+    await expect(approval.approveButton).toHaveCount(0)
+  })
+
+  test('asks a guest who doesn’t play the match to sign in, with no Approve', async ({ page }) => {
+    const { link } = await submittedLink(page, [players[0], otherPlayer])
+
+    const approval = await openOn(opponent.context, link)
+
+    await expect(approval.signIn).toHaveAttribute('href', `/api/v1/auth/login?return_to=${encodeURIComponent(link)}`)
+    await expect(approval.approveButton).toHaveCount(0)
+    await expect(approval.editScores).toHaveCount(0)
+    await approval.page.close()
+  })
+
+  test('tells a signed-in account that doesn’t play the match it isn’t theirs', async ({ page }) => {
+    // The guests play, and the guest's phone submits, so the administrator
+    // is the stranger.
+    const match = await makeMatch(page.request, [opponent.player.id, otherPlayer], { rated: true })
+    const guestsPhone = await opponent.context.newPage()
+    const keyRegistered = new HomePage(guestsPhone).keyRegistered()
+    const phone = new ScoringPage(guestsPhone)
+    await phone.open(match)
+    await keyRegistered
+    const link = await phone.submit([11, 5])
+    await guestsPhone.close()
+
+    const approval = new ApprovalPage(page)
+    await approval.open(link)
+
+    await expect(approval.main).toContainText('This isn’t your match, so you can’t approve it.')
+    await expect(approval.approveButton).toHaveCount(0)
+    await expect(approval.editScores).toHaveCount(0)
+  })
+
+  // Game 1's 11–5 is the CBOR array 0x82 0x0b 0x05. 11–6 is a legal score
+  // too, so only the signature can tell.
+  const changedScore = (bytes: Buffer): [number, number] => [bytes.indexOf(Buffer.from([0x82, 0x0b, 0x05])) + 2, 0x06]
+  const changedSignature = (bytes: Buffer): [number, number] => [bytes.length - 1, bytes[bytes.length - 1] ^ 0x01]
+
+  for (const [what, change] of [
+    ['a score', changedScore],
+    ['a signature', changedSignature],
+  ] as const) {
+    test(`refuses a link with ${what} changed before any Approve`, async ({ page }) => {
+      const { link } = await submittedLink(page)
+
+      const approval = await openOn(opponent.context, tamper(link, change))
+
+      await expect(approval.heading).toHaveText('This link has been changed and can’t be trusted')
+      await expect(approval.approveButton).toHaveCount(0)
+      await approval.page.close()
+    })
+  }
+
+  test('lets the opponent approve with no signal, and the approval holds', async ({ page }) => {
+    const { id, link } = await submittedLink(page)
+    const approval = new ApprovalPage(await opponent.context.newPage())
+    const keyRegistered = new HomePage(approval.page).keyRegistered()
+    await approval.open(link)
+    await keyRegistered
+
+    await opponent.context.setOffline(true)
+    await approval.approveButton.click()
+    await expect(approval.status('Approved on this device')).toBeVisible()
+    await expect(approval.main).toContainText('Send this link back to your opponent, so their phone sends it to FortyMM.')
+    const approved = approval.link
+    await opponent.context.setOffline(false)
+    await approval.page.close()
+    expect(await matchState(page.request, id)).toBe('awaiting 11-5')
+
+    const landed = await openApproved(page, approved)
+    await expect(landed.status('Approved. FortyMM has the result.')).toBeVisible()
+    expect(await matchState(page.request, id)).toBe('final 11-5')
+  })
 })
