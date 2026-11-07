@@ -5,12 +5,7 @@
       "Bash(~/.claude/skills/ship-it/review-threads.sh *)",
       "Bash(/Users/ryan/.claude/skills/ship-it/review-threads.sh *)",
       "Bash(bin/teardown-stack *)",
-      "Bash(./bin/teardown-stack *)",
-      "Bash(git worktree remove *)",
-      "Bash(git branch -D *)"
-    ],
-    "ask": [
-      "Bash(git branch -D *main*)"
+      "Bash(./bin/teardown-stack *)"
     ],
     "deny": [
       "Bash(git push *-f* main)",
