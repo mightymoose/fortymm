@@ -66,6 +66,16 @@ export class ScoringPage {
     await this.page.getByRole('button', { name: `Save game ${game}` }).click()
   }
 
+  // Submits the open game's score, left side first, and gives the approval
+  // link.
+  async submit([left, right]: [number, number]): Promise<string> {
+    await this.inputs.nth(0).fill(String(left))
+    await this.inputs.nth(1).fill(String(right))
+    await this.page.getByRole('button', { name: 'Submit result' }).click()
+    const link = this.page.getByRole('link', { name: /\/scores\/approvals\/new#/ })
+    return (await link.getAttribute('href'))!
+  }
+
   // Starts noting whether any cell shows green `Synced`, however briefly.
   // `everSynced()` reads it.
   async watchSyncedMarks(): Promise<void> {
