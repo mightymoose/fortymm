@@ -3,8 +3,8 @@
   "permissions": {
     "allow": [
       "Bash(git push *--force-with-lease*)",
-      "Bash(gh api graphql *resolveReviewThread*)",
-      "Bash(gh api graphql *reviewThreads*)",
+      "Bash(~/.claude/skills/ship-it/review-threads.sh *)",
+      "Bash(/Users/ryan/.claude/skills/ship-it/review-threads.sh *)",
       "Bash(gh pr merge *--squash*)",
       "Bash(gh pr comment *)",
       "Bash(gh pr edit *)",
@@ -16,9 +16,9 @@
       "Bash(git branch -D *)"
     ],
     "ask": [
+      "Bash(git push *--receive-pack*)",
+      "Bash(git push *--exec*)",
       "Bash(git branch -D *main*)",
-      "Bash(gh api graphql *@*)",
-      "Bash(gh api graphql *--input*)",
       "Bash(gh pr * -R*)",
       "Bash(gh pr * --repo*)",
       "Bash(gh pr * -F*)",
