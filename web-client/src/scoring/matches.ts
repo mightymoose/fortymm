@@ -34,9 +34,9 @@ export function matchOf(scoring: ScoringMatch, self: MatchPlayer, result: MatchR
   return matchFor(scoring.id, self, result) ?? demoMatch(scoring.id, self)
 }
 
-// Whether the scoring page sends the match's board. Only an API match has a
-// board on FortyMM, and only for an account that may score, as the API
-// refuses anyone else's.
+// Whether this device sends the match's board and its results. Only an API
+// match has them on FortyMM, and only for an account that may score, as
+// the API refuses anyone else's.
 export function syncsBoard(match: Match, account: SessionAccount): boolean {
   return match.source === 'api' && can(account, Permission.matchesScore)
 }

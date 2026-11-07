@@ -20,3 +20,17 @@ export async function pushBoard(api: ApiClient, matchId: string, board: string):
     }),
   )
 }
+
+// Sends a submitted result, the envelope's text, to the API, which records
+// it with its signatures.
+export async function pushResult(api: ApiClient, matchId: string, envelope: string): Promise<void> {
+  await send(
+    `POST /v1/matches/${matchId}/approvals`,
+    api.POST('/v1/matches/{match_id}/approvals', {
+      params: { path: { match_id: matchId } },
+      body: { envelope: hex(fromBase64url(envelope)) },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      keepalive: true,
+    }),
+  )
+}

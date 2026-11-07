@@ -372,7 +372,7 @@ describe('A match', () => {
     await waitFor(() => expect(page.title).toHaveTextContent(name(disputed)))
 
     expect(page.history()).toEqual([
-      'Rashid Ali started the match',
+      'Rashid Ali created the match',
       'Thanh Nguyen saved game 2, 11–7',
       'Thanh Nguyen signed the result, 2–0',
       'Rashid Ali signed different scores, 1–2',
@@ -396,7 +396,7 @@ describe('A match', () => {
     expect(page.text(/^Both players approved this result on /)).toBeInTheDocument()
     expect(page.signatures()).toEqual(['Approved', 'Approved'])
     expect(page.history()).toEqual([
-      'Alex Rivera started the match',
+      'Alex Rivera created the match',
       'Alex Rivera signed the result, 3–1',
       'Annika Johansen-Whitfield approved the result',
     ])
@@ -419,7 +419,7 @@ describe('A match', () => {
     ).toBeInTheDocument()
     expect(page.signatures()).toEqual(['Set by an administrator', 'Set by an administrator'])
     expect(page.history()).toEqual([
-      'Erik Lindqvist started the match',
+      'Erik Lindqvist created the match',
       'Camille Dubois started keeping score',
       'Sam Referee set the result, 3–1',
     ])

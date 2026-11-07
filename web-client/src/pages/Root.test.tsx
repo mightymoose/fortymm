@@ -3,7 +3,8 @@ import { HttpResponse } from 'msw'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MIN_SHOWN_MS, SHOW_AFTER_MS } from '../components/LoadingScreen'
 import { DesignSystemPage } from '../test/pages/DesignSystemPage'
-import { sessionResponse, holdSession } from '../test/server'
+import { queueResult } from '../scoring/results'
+import { sessionResponse, holdSession, mockApprovals } from '../test/server'
 
 describe('Root', () => {
   beforeEach(() => {
@@ -28,6 +29,20 @@ describe('Root', () => {
 
     expect(designSystemPage.title).toHaveTextContent('Design System')
     expect(designSystemPage.loadingScreen).not.toBeInTheDocument()
+    expect(session.requests).toHaveLength(0)
+  })
+
+  it('sends no queued result from a public page, which has no session', async () => {
+    const session = holdSession()
+    const approvals = mockApprovals()
+    queueResult('01970000-0000-7000-8000-0000000000c8', 'AA')
+    await DesignSystemPage.render()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SHOW_AFTER_MS + MIN_SHOWN_MS)
+    })
+
+    expect(approvals.checks).toHaveLength(0)
     expect(session.requests).toHaveLength(0)
   })
 

@@ -7,6 +7,7 @@ import type { GamePoints } from '../../scoring/board'
 import { demoMatch } from '../../scoring/demoMatches'
 import { draftHash, nowSeconds, resultOf } from '../../scoring/fragment'
 import { apiMatch } from '../../scoring/matches'
+import { resultsOf } from '../../scoring/results'
 import { hex } from '../../signing/bytes'
 import { takeKey } from '../../signing/deviceKey'
 import { appendSignature, decodeEnvelope, signResult, type Signer } from '../../signing/envelope'
@@ -14,7 +15,7 @@ import { decodePayload, encodePayload, resultHash, type MatchResult } from '../.
 import { base64url, fromBase64url } from '../../signing/text'
 import { ErrorPage } from '../../test/pages/ErrorPage'
 import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
-import { API_BASE_URL, grantSession, holdSession, mockBoards, server, sessionResponse } from '../../test/server'
+import { API_BASE_URL, grantSession, holdSession, mockApprovals, mockBoards, server, sessionResponse } from '../../test/server'
 
 // The pad names the players to a player as You and Your opponent.
 const ME = 'You'
@@ -482,7 +483,7 @@ describe('ScoreGame', () => {
       it.each([
         [403, 'Not synced. Saved on this device.'],
         [404, 'Not synced. Saved on this device.'],
-        [409, 'Match final. Changes here don’t sync.'],
+        [409, 'Match final. A correction syncs once you submit it.'],
         [422, 'Not synced. Saved on this device.'],
       ])('never shows a %i as synced, and says why', async (status, note) => {
         vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -551,7 +552,7 @@ describe('ScoreGame', () => {
         await act(() => page.router.navigate({ href: `${edit}/1/edit#${saved}` }))
         await page.settle()
 
-        expect(page.stripNote).toBe('Match final. Changes here don’t sync.')
+        expect(page.stripNote).toBe('Match final. A correction syncs once you submit it.')
       })
 
       it('says why a board refused with the scoring page closed', async () => {
@@ -576,7 +577,7 @@ describe('ScoreGame', () => {
         boards.answers.push({ status: 409 })
         const page = await render()
         await saveGame(page, 1, '11', '5')
-        expect(page.stripNote).toBe('Match final. Changes here don’t sync.')
+        expect(page.stripNote).toBe('Match final. A correction syncs once you submit it.')
 
         await saveGame(page, 2, '11', '9')
 
@@ -881,6 +882,124 @@ describe('ScoreGame', () => {
 
       await waitFor(() => expect(landed()).toBe(page.hash))
       expect(decodeEnvelope(fromBase64url(page.hash)).signatures).toHaveLength(1)
+    })
+
+    it('records the submitted result on the API, with the submitter’s signature', async () => {
+      const approvals = mockApprovals()
+      const page = await render([[11, 5], [11, 9]], 3)
+      await page.waitForKey()
+      await page.enter({ [ME]: '11', [OPPONENT]: '2' })
+
+      await page.click('Submit result')
+      await page.waitForPath(`/matches/${scored.id}/scores/submission`)
+
+      await waitFor(() =>
+        expect(approvals.checks).toEqual([{ matchId: scored.id, envelope: hex(fromBase64url(page.hash)) }]),
+      )
+      await waitFor(() => expect(resultsOf(scored.id)).toEqual([]))
+    })
+
+    it('holds a result and its correction submitted offline, and sends both in order once online', async () => {
+      const approvals = mockApprovals()
+      const page = await render([[11, 5], [11, 9]], 3)
+      await page.waitForKey()
+      page.goOffline()
+      await page.enter({ [ME]: '11', [OPPONENT]: '2' })
+      await page.click('Submit result')
+      await page.waitForPath(`/matches/${scored.id}/scores/submission`)
+      const first = page.hash
+      await act(() => page.router.navigate({ to: '/matches/$matchId/scores/game/$gameNumber/edit', params: { matchId: scored.id, gameNumber: '3' }, hash: first }))
+      await page.enter({ [ME]: '11', [OPPONENT]: '4' })
+      await page.click('Submit result')
+      await page.waitForPath(`/matches/${scored.id}/scores/submission`)
+      const corrected = page.hash
+      expect(approvals.checks).toEqual([])
+
+      await page.goOnline()
+
+      await waitFor(() =>
+        expect(approvals.checks.map(({ envelope }) => envelope)).toEqual([
+          hex(fromBase64url(first)),
+          hex(fromBase64url(corrected)),
+        ]),
+      )
+    })
+
+    it('corrects the submitted result from the pad the phone’s Back button opens', async () => {
+      const approvals = mockApprovals()
+      const page = await render([[11, 5], [11, 9]], 3)
+      await page.waitForKey()
+      await page.enter({ [ME]: '11', [OPPONENT]: '2' })
+      await page.click('Submit result')
+      await page.waitForPath(`/matches/${scored.id}/scores/submission`)
+      const first = page.hash
+
+      await act(async () => page.router.history.back())
+      await page.waitForPath(`${edit}/3/edit`)
+      await page.enter({ [ME]: '11', [OPPONENT]: '4' })
+      await page.click('Submit result')
+      await page.waitForPath(`/matches/${scored.id}/scores/submission`)
+
+      const { replaces } = decodePayload(decodeEnvelope(fromBase64url(page.hash)).payload).result
+      expect(replaces && hex(replaces)).toBe(hex(await resultHash(decodeEnvelope(fromBase64url(first)).payload)))
+      await waitFor(() => expect(approvals.checks).toHaveLength(2))
+    })
+
+    it('sends a result again after an unknown key, once the session registers it', async () => {
+      const approvals = mockApprovals({ refused: "A signature's key isn't registered, or was revoked" })
+      const sessions = countSessions()
+      const page = await render([[11, 5], [11, 9]], 3)
+      await page.waitForKey()
+      const before = sessions.count
+      await page.enter({ [ME]: '11', [OPPONENT]: '2' })
+      await page.click('Submit result')
+      await page.waitForPath(`/matches/${scored.id}/scores/submission`)
+      await waitFor(() => expect(approvals.checks).toHaveLength(1))
+
+      approvals.answer = 'accepted'
+
+      await waitFor(() => expect(resultsOf(scored.id)).toEqual([]), { timeout: 5000 })
+      expect(approvals.checks).toHaveLength(2)
+      expect(sessions.count, "the session refreshed, which registers the key").toBeGreaterThan(before)
+    })
+
+    it('sends a board at once while a result waits for the result it replaces, and shows nothing stuck', async () => {
+      const approvals = mockApprovals({ refused: "The result doesn't replace the match's newest result", status: 409 })
+      const page = await render([[11, 5], [11, 9]], 3)
+      await page.waitForKey()
+      await page.enter({ [ME]: '11', [OPPONENT]: '2' })
+      await page.click('Submit result')
+      await page.waitForPath(`/matches/${scored.id}/scores/submission`)
+      await waitFor(() => expect(approvals.checks).toHaveLength(2), { timeout: 5000 })
+      const pushed = boards.pushes.length
+
+      await act(() =>
+        page.router.navigate({
+          to: '/matches/$matchId/scores/game/$gameNumber/edit',
+          params: { matchId: scored.id, gameNumber: '1' },
+          hash: page.hash,
+        }),
+      )
+      await saveGame(page, 1, '5', '11')
+
+      expect(boards.pushes.length).toBeGreaterThan(pushed)
+      expect(page.stripNote).toBeNull()
+      expect(resultsOf(scored.id)).toHaveLength(1)
+    })
+
+    it('drops a result the API refuses, and never sends it again', async () => {
+      const approvals = mockApprovals({ refused: "Another result replaced this one, so it can't be approved", status: 409 })
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const page = await render([[11, 5], [11, 9]], 3)
+      await page.waitForKey()
+      await page.enter({ [ME]: '11', [OPPONENT]: '2' })
+
+      await page.click('Submit result')
+      await page.waitForPath(`/matches/${scored.id}/scores/submission`)
+
+      await waitFor(() => expect(resultsOf(scored.id)).toEqual([]))
+      await page.goOnline()
+      expect(approvals.checks).toHaveLength(1)
     })
   })
 })

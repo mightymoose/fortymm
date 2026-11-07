@@ -263,8 +263,20 @@ and B's pad doesn't change. Neither phone sent any match request but its
 boards. The last test signs a result with the browser's key,
 imported from the dev server, and uploads it to
 `POST /v1/matches/{match_id}/approvals`. The match is unrated, so that one
-approval makes it final. A save then reads `Match final. Changes here don’t
-sync.`, and no cell ever shows `Synced`.
+approval makes it final. A save then reads `Match final. A correction syncs once
+you submit it.`, and no cell ever shows `Synced`.
+
+`e2e/result-chain.spec.ts` checks that a submitted result reaches the
+real API. The administrator's phone submits best-of-1 matches against a
+guest, and the guest's phone, a second browser context, approves on the
+approval page. A guest holds no `matches.score`, so the test uploads the
+approved envelope with the administrator's session, as the signatures,
+not the session, are the authority. A corrected result is approved to
+final, and the result it corrected is refused (`not_head`). An unrated
+match is final once submitted. A result and its correction submitted
+with no route to the API (`page.route()` aborts the match requests, as
+`context.setOffline()` would also cut off the dev server) both land once
+it is back, first first, and a result still waiting goes after a reload.
 
 `e2e/matches-empty.spec.ts` checks the empty Matches page at 390 and
 1280px. Only a database with no match shows it, and the other specs make
