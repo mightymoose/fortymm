@@ -8,8 +8,7 @@ starts the mock API, and cleans up rendered components and `localStorage`
 after each test, so a saved session doesn't leak into the next test. It
 loads `fake-indexeddb`, and gives each test a new `IDBFactory`, so a
 signing key, or a registration still in flight, doesn't leak either. It
-also drops the demo server's requests in flight and forgets every unsent
-board. Tests live next to the code as `*.test.tsx`.
+also forgets every unsent board. Tests live next to the code as `*.test.tsx`.
 
 Tests go through page objects in `web-client/src/test/pages/`. A static async
 `render()` renders the app's router at the page's path (via
@@ -96,9 +95,12 @@ renders `href` again as a reload does. `waitForKey()` waits for this
 browser's signing key before a submit. `settle()` also waits until the
 strip isn't `aria-busy`, so the sync has stopped sending.
 `goOffline()` and `goOnline()` take the browser offline and back.
-`otherDeviceSyncs()` puts another device's board on the demo server,
-`serverBoard` reads it, and `slotSync()` reads what a screen reader
-hears about a game's sync.
+`renderApiMatch()` opens an API match from its fragment, the only kind
+whose board syncs. `mockBoards()` in `src/test/server.ts` is the API's
+board store. It records each push, answers with queued statuses or no
+response, holds answers until `release()`, and reads a match's board
+back as fragment text. `store()` puts another device's board there.
+`slotSync()` reads what a screen reader hears about a game's sync.
 `gameCount` is how many games the strip shows, the match's best of.
 `AwaitingValidationPage` wraps the router after a submit, or renders the
 submission page at a path with its envelope, and finds its link and the
@@ -235,8 +237,10 @@ app's `encodePayload()`, which it imports from the dev server. At 390,
 players' names, opens the one with a board, and checks that neither page
 scrolls sideways.
 
-`e2e/scoring-sync.spec.ts` reuses the same sign-in at 390x844. It opens
-the demo match's game 1, waits for the score inputs, goes offline with
+`e2e/scoring-sync.spec.ts` reuses the same sign-in at 390x844, whose
+`matches.score` makes an API match's board sync. It makes a match with
+`POST /api/v1/matches` against a new guest, opens its game 1 from a
+fragment made with the app's `draftHash()`, waits for the score inputs, goes offline with
 `context.setOffline()` and saves the game. The note reads `Offline. Saved
 on this device.`, and game 1's cell is dashed in game 3's border colour,
 with the note in the "Games" label's grey. Back online, the edge is solid

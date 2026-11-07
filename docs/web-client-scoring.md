@@ -21,10 +21,10 @@ The scoring pages, the URL fragment, board sync and the result pages.
   `Player 2`. For an id that isn't a demo match, a fragment that is
   empty, can't be read or names another match throws `notFound()`. So
   the edit route's redirect after an unreadable fragment of the match
-  ends on the not-found page too. Only a demo match syncs its board, to
-  the demo server (`syncsBoard()` in `src/scoring/matches.ts`). An API
-  match sends nothing and shows no sync mark until boards go to the API,
-  rather than a tick for a board FortyMM never got.
+  ends on the not-found page too. Only an API match syncs its board,
+  and only for an account with `matches.score`, as the API refuses
+  anyone else's (`syncsBoard()` in `src/scoring/matches.ts`). A demo
+  match, or an account without it, sends nothing and shows no sync mark.
   One pad holds a big score input per player and the games tally
   between them, the viewer's player on the left, then the actions
   (`ScoreEntry.tsx`). To a player, the page names the players You and
@@ -84,9 +84,12 @@ The scoring pages, the URL fragment, board sync and the result pages.
   moves on at once. It pushes when the game number changes and replaces
   when it stays. Nothing about saving waits on the network. Clear game
   shows only on the last game with a score, and removes it.
-- On a demo match, each save and each submit also syncs the board in
-  the background (`src/scoring/sync.ts`), so spectators and tournament
-  directors can watch the match. Sync is best effort. It never holds up
+- When the board syncs, each save and each submit also sends it in the
+  background (`src/scoring/sync.ts`), so spectators and tournament
+  directors can watch the match. `pushBoard()` (`src/scoring/boardApi.ts`)
+  sends it to `POST /v1/matches/{match_id}/boards` as the hex of the
+  fragment's bytes, with `keepalive`, and gives up with no response after
+  10 seconds, which counts as offline. Sync is best effort. It never holds up
   or fails a save. The board is a snapshot, the fragment's text, with no
   outbox of changes. `src/scoring/boards.ts` keeps, per match and in memory only,
   the newest board this tab saved that the server hasn't taken
@@ -108,8 +111,12 @@ The scoring pages, the URL fragment, board sync and the result pages.
   page fires `pageshow` or turns visible, as iOS Safari can resume a
   page without `online`. A 429 waits out its `Retry-After` instead, if
   that is longer than the backoff, but never more than 5 minutes, and
-  nothing wakes it early. A 4xx
-  other than 429 is a refusal. It drops the board, which is never sent
+  nothing wakes it early. A 401 means the session lapsed. It refreshes
+  the session through the callback `Root` gives `useAppSync()`, keeps
+  the board and waits the backoff, so the board goes once the session
+  is back. Each 401 refreshes again, and a refresh while a session
+  request is still on its way joins it (`sessionQuery()`), so two never
+  go at once and start a second guest account. Any other 4xx is a refusal. It drops the board, which is never sent
   again and never shows as synced, and keeps why in `refused` until a
   later board lands, even after the sync stops. A 409 reads as a final
   match. Any other refusal is logged with `console.warn`, and a 403
@@ -118,9 +125,6 @@ The scoring pages, the URL fragment, board sync and the result pages.
   page, for each match with a board to send, so it still goes after the
   person leaves the scoring page. A sync stops when its last holder lets
   go, and a response that lands after that changes nothing.
-- `src/scoring/demoServer.ts` stands in for the API's match routes. It
-  keeps the latest board per match under `fortymm-demo-server:<matchId>`,
-  with `putBoard()`. Each call answers after 300ms.
 - The strip shows each game's sync while this tab has a board to send.
   A game is unsynced when its points differ from the `synced` board. It
   shows a dot while the board is on its way, a dashed grey edge and a

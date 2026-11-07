@@ -1,17 +1,19 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
+import type { ApiClient } from '../api/client'
 import { ApiError, ApiUnreachable } from '../api/errors'
+import { pushBoard } from './boardApi'
 import { acknowledge, boardsOf, dropBoard, matchesWithPending, subscribeBoards, type Refusal } from './boards'
-import { putBoard } from './demoServer'
 
-// Sends a match's board to the server in the background, so spectators and
+// Sends a match's board to the API in the background, so spectators and
 // tournament directors can watch it. It's best effort: the URL keeps the
 // scores, and nothing waits on a send or fails with it. Only the newest
 // board saved goes, one send at a time, so a late older copy from this tab
 // can't land after a newer one. While the browser knows it's offline, it
 // sends nothing until `online` or the page resumes. A board the server
 // can't take now waits, with a backoff, or until the same. A 429 waits out
-// its Retry-After instead, which nothing cuts short. One it refuses for
-// good (a 4xx other than 429) is dropped, and never shows as synced. It
+// its Retry-After instead, which nothing cuts short. A 401 waits the same
+// backoff while the session is refreshed. One it refuses for good (any
+// other 4xx) is dropped, and never shows as synced. It
 // never reads the server's board back, so a board another device sent
 // can't change this tab's pad.
 
@@ -49,8 +51,14 @@ function rateLimited(error: unknown): error is ApiError {
   return error instanceof ApiError && error.status === 429
 }
 
+// The session lapsed, or another account adopted this one. A refreshed
+// session can send the board.
+function sessionLapsed(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 401
+}
+
 export function retryable(error: unknown): boolean {
-  return !(error instanceof ApiError) || error.status >= 500 || rateLimited(error)
+  return !(error instanceof ApiError) || error.status >= 500 || rateLimited(error) || sessionLapsed(error)
 }
 
 // Why a sync is stuck after its `failures`th failed send in a row. No
@@ -81,7 +89,7 @@ type State =
 
 const statusListeners = new Set<() => void>()
 
-let onForbidden = (): void => {}
+let refreshSession = (): void => {}
 
 class MatchSync {
   status: SyncStatus = IDLE
@@ -92,9 +100,11 @@ class MatchSync {
   private failures = 0
   private readonly unsubscribe: () => void
   private readonly matchId: string
+  private readonly api: ApiClient
 
-  constructor(matchId: string) {
+  constructor(matchId: string, api: ApiClient) {
     this.matchId = matchId
+    this.api = api
     // A save, here or in another component. A waiting retry keeps its
     // backoff.
     this.unsubscribe = subscribeBoards(() => {
@@ -168,9 +178,10 @@ class MatchSync {
     const sending: State = { kind: 'sending', board }
     this.enter(sending)
     try {
-      await putBoard(this.matchId, board)
+      await pushBoard(this.api, this.matchId, board)
     } catch (error) {
       if (!this.isIn(sending)) return
+      if (sessionLapsed(error) || (error instanceof ApiError && error.status === 403)) refreshSession()
       if (retryable(error)) {
         const backoff = retryDelay(this.failures)
         const limited = rateLimited(error)
@@ -207,7 +218,6 @@ class MatchSync {
     // differ from the server's match, which only a hand-edited link reaches.
     const refused = error.status === 409 ? 'final' : 'other'
     if (refused === 'other') console.warn('The server refused a board', error.status, error.title)
-    if (error.status === 403) onForbidden()
     this.failures = 0
     this.enter({ kind: 'idle' })
     dropBoard(this.matchId, board, refused)
@@ -220,10 +230,10 @@ const syncs = new Map<string, MatchSync>()
 // Syncs the match until the returned release is called. Root and the
 // scoring page each hold a match, and its sync stops when the last lets go.
 // A response that lands after that changes nothing.
-function hold(matchId: string): () => void {
+function hold(matchId: string, api: ApiClient): () => void {
   let sync = syncs.get(matchId)
   if (!sync) {
-    sync = new MatchSync(matchId)
+    sync = new MatchSync(matchId, api)
     syncs.set(matchId, sync)
   }
   const held = sync
@@ -239,15 +249,15 @@ function hold(matchId: string): () => void {
 
 // Syncs every match with a board to send, whichever page is open. Root runs
 // it, so a board saved with no signal goes once the device is back online,
-// even after the scoring page has closed. A refusal for want of permission
-// calls `forbidden`, so Root can refresh the session.
-export function useAppSync(forbidden: () => void): void {
+// even after the scoring page has closed. A 401, or a refusal for want of
+// permission, calls `refresh`, so Root can refresh the session.
+export function useAppSync(api: ApiClient, refresh: () => void): void {
   useEffect(() => {
-    onForbidden = forbidden
+    refreshSession = refresh
     return () => {
-      onForbidden = () => {}
+      refreshSession = () => {}
     }
-  }, [forbidden])
+  }, [refresh])
   const pending = useSyncExternalStore(subscribeBoards, matchesWithPending)
   const held = useRef(new Map<string, () => void>())
   useEffect(() => {
@@ -258,9 +268,9 @@ export function useAppSync(forbidden: () => void): void {
       held.current.delete(id)
     }
     for (const id of ids) {
-      if (!held.current.has(id)) held.current.set(id, hold(id))
+      if (!held.current.has(id)) held.current.set(id, hold(id, api))
     }
-  }, [pending])
+  }, [pending, api])
   useEffect(() => {
     const releases = held.current
     return () => {
@@ -272,8 +282,8 @@ export function useAppSync(forbidden: () => void): void {
 
 // Syncs the match while the calling page is mounted, and returns where the
 // sync stands. A match that isn't `enabled` holds nothing and stays idle.
-export function useBoardSync(matchId: string, enabled: boolean): SyncStatus {
-  useEffect(() => (enabled ? hold(matchId) : undefined), [matchId, enabled])
+export function useBoardSync(matchId: string, enabled: boolean, api: ApiClient): SyncStatus {
+  useEffect(() => (enabled ? hold(matchId, api) : undefined), [matchId, enabled, api])
   return useSyncExternalStore(
     (listener) => {
       statusListeners.add(listener)

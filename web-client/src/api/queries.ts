@@ -27,7 +27,7 @@ const JSON_HEADERS = { 'Content-Type': 'application/json' }
 
 // Sends `request` and returns its body. Throws ApiUnreachable when no
 // response came back, and ApiError when the API answered with an error.
-async function send<Data>(
+export async function send<Data>(
   request: string,
   sent: Promise<{ data?: Data; error?: unknown; response: Response }>,
 ): Promise<Data> {
@@ -55,6 +55,28 @@ type SessionOutcome =
   | { kind: 'failed'; error: unknown }
   | { kind: 'slow' }
 
+// Each client's session request on its way. A run that ended as `slow`
+// leaves its request going, and a refetch joins it rather than sending
+// another, which could start a second guest account.
+const sessionsInFlight = new WeakMap<ApiClient, Promise<SessionAccount>>()
+
+function startSession(api: ApiClient): Promise<SessionAccount> {
+  const inFlight = sessionsInFlight.get(api)
+  if (inFlight) return inFlight
+  const request = send('POST /v1/session', api.POST('/v1/session', { headers: JSON_HEADERS })).then(({ data }) => {
+    saveAccount(data.account)
+    // Not awaited, so the key never holds up the loading screen.
+    void registerDeviceKey(api, data.account.id)
+    return data.account
+  })
+  sessionsInFlight.set(api, request)
+  const settle = () => {
+    if (sessionsInFlight.get(api) === request) sessionsInFlight.delete(api)
+  }
+  request.then(settle, settle)
+  return request
+}
+
 // The visitor's account, from resuming their session or starting a guest
 // account. The `_authenticated` route's loader waits on it before showing a
 // page. It runs once per page load: it never goes stale, so revisiting those
@@ -77,15 +99,7 @@ export function sessionQuery(api: ApiClient) {
     // account, but it drops the response and its cookie. The query would
     // then start another account, e.g. when StrictMode remounts the layout.
     queryFn: async ({ client }) => {
-      const request = send(
-        'POST /v1/session',
-        api.POST('/v1/session', { headers: JSON_HEADERS }),
-      ).then(({ data }) => {
-        saveAccount(data.account)
-        // Not awaited, so the key never holds up the loading screen.
-        void registerDeviceKey(api, data.account.id)
-        return data.account
-      })
+      const request = startSession(api)
       const saved = savedAccount()
       if (!saved) return request
 
