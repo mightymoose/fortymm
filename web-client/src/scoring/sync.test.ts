@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ApiError, ApiUnreachable } from '../api/errors'
-import { nextStep, retryable, retryDelay } from './sync'
+import { nextStep, retryable, retryDelay, stuckAfter } from './sync'
 
 describe('nextStep', () => {
   it('sends a waiting board online, and waits while offline', () => {
@@ -25,5 +25,24 @@ describe('retries', () => {
     expect(retryable(answer(429))).toBe(true)
     expect(retryable(answer(503))).toBe(true)
     expect(retryable(new ApiUnreachable('PUT', { cause: new TypeError('Failed to fetch') }))).toBe(true)
+  })
+})
+
+describe('stuckAfter', () => {
+  const answer = (status: number) => new ApiError('PUT', new Response(null, { status }))
+  const unreachable = new ApiUnreachable('PUT', { cause: new TypeError('Failed to fetch') })
+
+  it('is offline when no response came back, from the first failure', () => {
+    expect(stuckAfter(unreachable, 1, null)).toBe('offline')
+  })
+
+  it.each([502, 503, 504, 500, 429])('is failing from the second %i in a row, never offline', (status) => {
+    expect(stuckAfter(answer(status), 1, null)).toBeNull()
+    expect(stuckAfter(answer(status), 2, null)).toBe('failed')
+    expect(stuckAfter(answer(status), 2, 'offline')).toBe('failed')
+  })
+
+  it('keeps why it was stuck after one failure with a response', () => {
+    expect(stuckAfter(answer(503), 1, 'offline')).toBe('offline')
   })
 })
