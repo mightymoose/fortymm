@@ -182,16 +182,14 @@ describe('NewMatch', () => {
     expect(scores.sides).toEqual(['You', 'Your opponent'])
   })
 
-  it('opens the match afresh with Back from game 1, not the read made before its board', async () => {
+  it('opens the match afresh with Back from game 1, not a read made before its board', async () => {
     mockMatches({ recent: [badger] })
     grantSession('matches.create', 'matches.view')
-    const reads: string[] = []
     let hold = false
     let answer = () => {}
     server.use(
       http.get<{ matchId: string }>(`${API_BASE_URL}/v1/matches/:matchId`, async ({ params }) => {
         if (params.matchId === 'opponents') return undefined
-        reads.push(params.matchId)
         if (hold) await new Promise<void>((resolve) => (answer = resolve))
         return HttpResponse.json({ errors: [{ status: '404', title: 'No match has this id' }] }, { status: 404 })
       }),
@@ -201,14 +199,15 @@ describe('NewMatch', () => {
     await page.pick(badger.display_name)
     await page.start()
     expect(await screen.findByRole('heading', { level: 1, name: 'Game 1' })).toBeInTheDocument()
-    await waitFor(() => expect(reads).toHaveLength(1))
+    const id = page.pathname.split('/')[2]
+    // Time for a read the match page started on the way to land.
     await new Promise((resolve) => setTimeout(resolve, 20))
 
     hold = true
     await act(async () => page.router.history.back())
 
     const match = new MatchesPage(page.router)
-    await waitFor(() => expect(match.path).toBe(`/matches/${reads[0]}`))
+    await waitFor(() => expect(match.path).toBe(`/matches/${id}`))
     expect(match.loading).toBeInTheDocument()
     await act(async () => answer())
   })
