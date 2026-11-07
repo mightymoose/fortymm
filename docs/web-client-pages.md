@@ -87,6 +87,9 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   loader prefetches its query without waiting for it, so a link's preload
   (hover, focus or touch) loads the data, and the page's own boundary
   shows the skeleton.
+  `matchQuery()` refetches every 10 seconds while the match isn't final
+  and the tab is visible. The page says when it last read the match
+  ("Updated 19:32"). A failed refetch keeps the last score and its time.
 - `_shell/matches/new.tsx`: the page `NewMatch`
   (`src/pages/matches/NewMatch.tsx`, with its parts in `newMatch/`),
   which sets up a match. Its loader waits for the session, and sends an
