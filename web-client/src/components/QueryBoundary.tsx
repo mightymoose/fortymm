@@ -35,7 +35,9 @@ export function QueryBoundary({
   )
 }
 
-function QueryError({
+// The alert a failed request shows, with Try again. Also for a route whose
+// loader failed.
+export function QueryError({
   error,
   onRetry,
   actions,

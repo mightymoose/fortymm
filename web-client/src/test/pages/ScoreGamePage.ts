@@ -21,6 +21,18 @@ export class ScoreGamePage {
     return page
   }
 
+  // Renders `path` without waiting for the route's loader, which may wait
+  // on the API.
+  static async renderLoading(path: string): Promise<ScoreGamePage> {
+    return new ScoreGamePage(await renderRoute(path, { waitForLoad: false }))
+  }
+
+  // The skeleton the route shows while it loads the match from the API.
+  loading(): Promise<HTMLElement> {
+    // The router shows it once the load has taken a second.
+    return screen.findByText('Loading scores', {}, { timeout: 3000 })
+  }
+
   // An API match's game `game`, opened from a fragment that holds `games`,
   // as New match's link opens it.
   static async renderApiMatch(match: Match, games: GamePoints[] = [], game = 1): Promise<ScoreGamePage> {

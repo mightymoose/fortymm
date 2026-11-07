@@ -5,7 +5,7 @@ import { sessionQuery } from '../../api/queries'
 import { Icon } from '../../components/Icon'
 import { Wordmark } from '../../components/Wordmark'
 import { viewerOf, type Match, type Viewer } from '../../scoring/demoMatches'
-import { matchOf, syncsBoard } from '../../scoring/matches'
+import { matchOf, syncsBoard, type ScoringMatch } from '../../scoring/matches'
 import { boardsOf, subscribeBoards, unsyncedGames } from '../../scoring/boards'
 import { gamesOf, readFragment, type Fragment } from '../../scoring/fragment'
 import { slotsOf } from '../../scoring/planPress'
@@ -13,6 +13,7 @@ import { useBoardSync } from '../../scoring/sync'
 import { GameStrip } from './GameStrip'
 import { ResultPanel } from './ResultPanel'
 import { ScoreEntry } from './ScoreEntry'
+import { ScoresUnreachable } from './ScoresLoading'
 import { useSubmitResult } from './useSubmitResult'
 import { midSentence, playerLabel, ROUTE, sidesFor } from './sides'
 import './scoring.css'
@@ -26,7 +27,23 @@ import './scoring.css'
 // Anyone who can open the match can enter or change a game, as long as its
 // score is legal. The match rules apply only when a player submits.
 export function ScoreGame() {
-  const { scoring, fragment, gameNumber, last } = useLoaderData({ from: ROUTE })
+  const loaded = useLoaderData({ from: ROUTE })
+  if (loaded.kind === 'unreachable') return <ScoresUnreachable />
+  return <Scores loaded={loaded} />
+}
+
+// What the route's loader gives the page: the match's scores, open at one
+// game, or `unreachable` when the URL carries no match and nothing could
+// load it.
+export type ScoreGameData =
+  | { kind: 'scores'; scoring: ScoringMatch; fragment: Fragment; gameNumber: number; last: number }
+  | { kind: 'unreachable' }
+
+function Scores({
+  loaded: { scoring, fragment, gameNumber, last },
+}: {
+  loaded: Extract<ScoreGameData, { kind: 'scores' }>
+}) {
   const { hash, state } = useLocation()
   const { api } = useRouteContext({ from: '__root__' })
   const { data: account } = useSuspenseQuery(sessionQuery(api))
