@@ -62,13 +62,17 @@ The scoring pages, the URL fragment, board sync and the result pages.
   `docs/web-client-pages.md`): the first game with no score, with the
   API's finished games and, for a pending result, its `result_hash` in
   `replaces`. A final match goes to its page instead, as editing after
-  final is #316's. No match is `notFound()`. While it loads, the route's
+  final is #316's. No match, or a 403 for an account that can score but
+  not view matches, is `notFound()`. While it loads, the route's
   `pendingComponent` (`ScoresLoading`) shows the score page's frame with
   a skeleton, and an error answer shows the boundary's alert with Try
-  again (`ScoresFailed`), which runs the loader again. A fragment that
+  again (`ScoresFailed`), which runs the loader again. `ScoresFailed`
+  rethrows any error that isn't the API's, such as a bug in the page,
+  to the root error page. A fragment that
   gives scores never asks the API, so a restored tab works offline.
-- With no network (`navigator.onLine` false, or the request got no
-  response), and for a demo match always, the edit route drops a
+- With no network (`navigator.onLine` false, the request got no
+  response, or no answer came in 8 seconds, as hall Wi-Fi can claim to
+  be online and answer nothing), and for a demo match always, the edit route drops a
   fragment it can't read. It redirects to game 1 with no scores, with a
   replace. An API match's fragment keeps its details, and a demo match's
   is empty, so a reload or a share doesn't carry it, and sets
