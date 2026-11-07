@@ -41,7 +41,7 @@ export function GameStrip({
       <div className="score-strip__head">
         <p className="score-strip__label">Games</p>
         {sync.stuck && unsynced.size > 0 ? (
-          <p className="score-strip__note score-strip__note--waiting" role="status">
+          <p className="score-strip__note" role="status">
             {sync.stuck === 'offline' ? 'Offline. Saved on this device.' : 'Not synced yet. Saved on this device.'}
           </p>
         ) : sync.refused ? (
@@ -84,7 +84,7 @@ export function GameStrip({
 }
 
 // One game, with where its sync stands: a dot while its board is on its
-// way to the server, a dashed amber edge while its sync is stuck, both
+// way to the server, a dashed edge while its sync is stuck, both
 // while a stuck game tries again, and a moment of green once it lands. A
 // game whose board the server refused stops being unsynced with no rise in
 // `landed`, and shows nothing. None of them changes the cell's size.
