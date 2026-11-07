@@ -12,6 +12,14 @@ export function isTestMode(): boolean {
   return new URLSearchParams(window.location.search).has('test')
 }
 
+// Loads the UI font in test mode, so the page renders only once it can lay
+// out in Space Grotesk. In Chromium a <select> laid out before its font
+// loads keeps the fallback font's line layout after the font swaps in, so
+// a late font leaves the select's text a pixel off in every screenshot.
+export async function loadTestModeFonts(): Promise<void> {
+  if (isTestMode()) await document.fonts.load('16px "Space Grotesk"')
+}
+
 // Turns test mode on for the page while it's mounted, and sets
 // `<html data-fm-ready="true">` once the fonts have loaded and two frames
 // have painted, as the gallery does. Without `?test` it does nothing.
