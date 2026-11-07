@@ -33,6 +33,7 @@ function match(
     retired_by: null,
     state: { kind: 'not_started' },
     history: [],
+    result_hash: null,
     ...rest,
   }
 }
@@ -385,8 +386,50 @@ describe('A match', () => {
 
     expect(page.text('Not started')).toBeInTheDocument()
     expect(page.text('No scores yet.')).toBeInTheDocument()
-    expect(page.button('Keep score')).toBeInTheDocument()
+    expect(page.link('Keep score').getAttribute('href')).toMatch(
+      new RegExp(`^/matches/${notStarted.id}/scores/game/1/edit#.+`),
+    )
     expect(page.signatures()).toEqual(['Signs when the match ends', 'Signs when the match ends'])
+  })
+
+  const scoredAwaiting = (you: 0 | 1) =>
+    match(['Meera Okafor', ALEX], {
+      you,
+      best_of: 3,
+      games: [[11, 6], [8, 11]],
+      state: { kind: 'awaiting', signed_by: 0, signed_at: '2026-11-05T18:41:00Z' },
+      result_hash: '07'.repeat(32),
+    })
+  const disputedFor = (you?: 0 | 1) =>
+    match(['Thanh Nguyen', 'Rashid Ali'], {
+      you,
+      best_of: 3,
+      games: [[11, 9], [7, 11]],
+      state: { kind: 'disputed', signed_by: 1, signed_at: '2026-11-03T19:40:00Z', their_games: [[11, 9], [11, 7]] },
+      result_hash: '07'.repeat(32),
+    })
+
+  it.each([
+    ['the player who hasn’t signed corrects an awaiting result', scoredAwaiting(1), 'Enter different scores'],
+    ['the player who signed keeps score of an awaiting result', scoredAwaiting(0), 'Keep score'],
+    ['a player of a disputed match corrects it', disputedFor(0), 'Correct and sign again'],
+    ['a spectator keeps score of a disputed match', disputedFor(), 'Keep score'],
+  ])('%s from the match page, at the first game with no score', async (_, shown, label) => {
+    api = mockMatchReads([shown])
+    const page = await MatchesPage.render(`/matches/${shown.id}`)
+    await waitFor(() => expect(page.title).toHaveTextContent(name(shown)))
+
+    expect(page.link(label).getAttribute('href')).toMatch(
+      new RegExp(`^/matches/${shown.id}/scores/game/${shown.games.length + 1}/edit#.+`),
+    )
+  })
+
+  it('offers no Keep score once the result is final', async () => {
+    const page = await MatchesPage.render(`/matches/${approved.id}`)
+    await waitFor(() => expect(page.title).toHaveTextContent(name(approved)))
+
+    expect(page.text('Keep score')).toBeNull()
+    expect(page.button('Share result')).toBeInTheDocument()
   })
 
   it('says both players approved a final result', async () => {

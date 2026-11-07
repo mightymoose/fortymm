@@ -9,8 +9,8 @@ function record(fields: Partial<MatchRecord>): MatchRecord {
     bestOf: 5,
     rated: true,
     players: [
-      { name: 'Wei Chen', you: false },
-      { name: 'Meera Okafor', you: false },
+      { id: '0193f1a2-0000-7000-8000-0000000000a0', name: 'Wei Chen', you: false },
+      { id: '0193f1a2-0000-7000-8000-0000000000a1', name: 'Meera Okafor', you: false },
     ],
     games: [],
     retiredBy: null,
