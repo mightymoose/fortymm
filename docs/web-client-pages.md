@@ -81,9 +81,10 @@ What each page outside scoring does. `web-client/CLAUDE.md` holds the routing co
   that replaces the other side's pending one reads "Signed different
   scores". An id that isn't a uuid, or one the API answers 404 to, shows
   "No such match". The first sends no request.
-- Until the match is final, the page links to its scores: Keep score for
-  anyone, or Enter different scores and Correct and sign again for the
-  player a result waits on. `keepScoreTarget()` (`src/scoring/keepScore.ts`)
+- Until the match is final, the page links to its scores. The link is
+  Keep score, except Enter different scores for the player an awaiting
+  result waits on, and Correct and sign again for either player of a
+  disputed match. `keepScoreTarget()` (`src/scoring/keepScore.ts`)
   builds the link from the match the page loaded: the first game with no
   score, and a draft of the API's finished games, which names the head's
   `result_hash` in `replaces` once a result is pending. So a player who
