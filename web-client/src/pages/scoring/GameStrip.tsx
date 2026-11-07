@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { reviewBoard, winnerOf, type GamePoints, type Side, type Slots } from '../../scoring/board'
 import type { Match } from '../../scoring/demoMatches'
@@ -36,13 +36,17 @@ export function GameStrip({
   const review = reviewBoard(slots, match.bestOf)
   const decider = review.kind === 'undecided' ? null : review.decidedAtGame
   return (
-    <nav className="score-strip-wrap" aria-label="Games" aria-busy={sync.sending || sync.pulling || undefined}>
+    <nav className="score-strip-wrap" aria-label="Games" aria-busy={sync.sending || undefined}>
       {/* A line that keeps its height, so a note never moves the page. */}
       <div className="score-strip__head">
         <p className="score-strip__label">Games</p>
         {sync.stuck && unsynced.size > 0 ? (
-          <p className="score-strip__note score-strip__note--waiting" role="status">
+          <p className="score-strip__note" role="status">
             {sync.stuck === 'offline' ? 'Offline. Saved on this device.' : 'Not synced yet. Saved on this device.'}
+          </p>
+        ) : sync.refused ? (
+          <p className="score-strip__note" role="status">
+            {sync.refused === 'final' ? 'Match final. Changes here don’t sync.' : 'Not synced. Saved on this device.'}
           </p>
         ) : (
           decider !== null &&
@@ -71,6 +75,7 @@ export function GameStrip({
             unsynced={unsynced.has(index + 1)}
             sending={sync.sending}
             stuck={sync.stuck !== null}
+            landed={sync.landed}
           />
         ))}
       </ol>
@@ -79,9 +84,10 @@ export function GameStrip({
 }
 
 // One game, with where its sync stands: a dot while its board is on its
-// way to the server, a dashed amber edge while its sync is stuck, both
-// while a stuck game tries again, and a moment of green once it lands.
-// None of them changes the cell's size.
+// way to the server, a dashed edge while its sync is stuck, both
+// while a stuck game tries again, and a moment of green once it lands. A
+// game whose board the server refused stops being unsynced with no rise in
+// `landed`, and shows nothing. None of them changes the cell's size.
 function GameSlot({
   match,
   game,
@@ -94,6 +100,7 @@ function GameSlot({
   unsynced,
   sending,
   stuck,
+  landed,
 }: {
   match: Match
   game: number
@@ -106,17 +113,20 @@ function GameSlot({
   unsynced: boolean
   sending: boolean
   stuck: boolean
+  landed: number
 }) {
   const [justSynced, setJustSynced] = useState(false)
-  const wasUnsynced = useRef(unsynced)
+  const [before, setBefore] = useState({ unsynced, landed })
+  if (unsynced !== before.unsynced || landed !== before.landed) {
+    setBefore({ unsynced, landed })
+    if (unsynced) setJustSynced(false)
+    else if (before.unsynced && landed > before.landed) setJustSynced(true)
+  }
   useEffect(() => {
-    const landed = wasUnsynced.current && !unsynced
-    wasUnsynced.current = unsynced
-    if (!landed) return
-    setJustSynced(true)
+    if (!justSynced) return
     const timer = setTimeout(() => setJustSynced(false), SYNCED_MS)
     return () => clearTimeout(timer)
-  }, [unsynced])
+  }, [justSynced])
 
   const isSending = unsynced && sending
   const isStuck = unsynced && stuck

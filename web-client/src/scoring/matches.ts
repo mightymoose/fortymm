@@ -1,8 +1,12 @@
 import { notFound } from '@tanstack/react-router'
+import { can, Permission } from '../api/permissions'
+import type { components } from '../api/schema'
 import type { MatchResult } from '../signing/result'
 import type { BestOf } from './board'
 import { demoMatch, matchFor, type Match, type MatchPlayer } from './demoMatches'
 import { fragmentResult } from './fragment'
+
+type SessionAccount = components['schemas']['SessionAccount']
 
 // The match a scoring page opens. A demo match is the session's own, so a
 // page works it out from the session on each render: a saved account can
@@ -28,6 +32,13 @@ export function scoringMatch(matchId: string, hash: string): ScoringMatch {
 export function matchOf(scoring: ScoringMatch, self: MatchPlayer, result: MatchResult | null): Match {
   if (scoring.kind === 'api') return scoring.match
   return matchFor(scoring.id, self, result) ?? demoMatch(scoring.id, self)
+}
+
+// Whether the scoring page sends the match's board. Only an API match has a
+// board on FortyMM, and only for an account that may score, as the API
+// refuses anyone else's.
+export function syncsBoard(match: Match, account: SessionAccount): boolean {
+  return match.source === 'api' && can(account, Permission.matchesScore)
 }
 
 // A match the API made. Nothing on the device knows its players' names, so

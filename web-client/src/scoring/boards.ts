@@ -1,15 +1,16 @@
 import type { GamePoints } from './board'
-import type { Fragment } from './fragment'
 
 // What this tab knows about each match's board on the server. A board is a
 // fragment's text: empty, a draft payload or an envelope. `pending` is the
 // newest board this tab saved that the server hasn't taken yet, and
-// `synced` the last one the server took from this tab or this tab pulled.
-// Both stay in memory, because sync is best effort and the URL keeps the
+// `synced` the last board the server took from this tab. `refused` is why
+// the server last refused one, until it takes one.
+// All stay in memory, because sync is best effort and the URL keeps the
 // scores: a reload forgets an unsent board.
-export type Boards = { pending: string | null; synced: string | null }
+export type Refusal = 'final' | 'other'
+export type Boards = { pending: string | null; synced: string | null; refused: Refusal | null }
 
-const NOTHING: Boards = { pending: null, synced: null }
+const NOTHING: Boards = { pending: null, synced: null, refused: null }
 
 const boards = new Map<string, Boards>()
 const listeners = new Set<() => void>()
@@ -36,16 +37,13 @@ export function saveBoard(matchId: string, text: string): void {
 // The server took `text`. A board saved after it still waits.
 export function acknowledge(matchId: string, text: string): void {
   const { pending } = boardsOf(matchId)
-  update(matchId, { synced: text, pending: pending === text ? null : pending })
+  update(matchId, { synced: text, pending: pending === text ? null : pending, refused: null })
 }
 
 // The server refused `text` for good, so sending it again can't help.
-export function dropBoard(matchId: string, text: string): void {
-  if (boardsOf(matchId).pending === text) update(matchId, { pending: null })
-}
-
-export function learnBoard(matchId: string, text: string): void {
-  update(matchId, { synced: text })
+export function dropBoard(matchId: string, text: string, refused: Refusal): void {
+  const { pending } = boardsOf(matchId)
+  update(matchId, { pending: pending === text ? null : pending, refused })
 }
 
 export function forgetBoards(): void {
@@ -70,20 +68,4 @@ export function unsyncedGames(shown: GamePoints[], synced: GamePoints[]): Set<nu
     if (shown[index]?.join('-') !== synced[index]?.join('-')) games.add(index + 1)
   }
   return games
-}
-
-export type Shown = { text: string; fragment: Fragment }
-
-// Whether a tab with nothing to send replaces the board on screen with one
-// it pulled. It follows the server while it shows what it last synced, or
-// nothing. A board from a link, such as a result under review, gives way
-// only to a newer one, so opening an older board never undoes it.
-export function adopts(shown: Shown, pulled: Shown, synced: string | null): boolean {
-  if (pulled.text === shown.text) return false
-  if (shown.fragment.kind === 'empty' || shown.text === synced) return true
-  return issuedAtOf(pulled.fragment) > issuedAtOf(shown.fragment)
-}
-
-function issuedAtOf(fragment: Fragment): number {
-  return fragment.kind === 'empty' ? -Infinity : fragment.issuedAt
 }

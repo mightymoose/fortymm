@@ -2,6 +2,8 @@ import { act } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import type { components } from '../api/schema'
+import { fromHex, hex } from '../signing/bytes'
+import { base64url, fromBase64url } from '../signing/text'
 
 // The API's base URL in unit tests. Node's Request rejects the app's
 // relative `/api`.
@@ -889,6 +891,66 @@ export function mockMatchReads(matches: MatchDetail[], { hasMore = false } = {})
             ),
       )
     }),
+  )
+  return mock
+}
+
+type BoardRequest = components['schemas']['BoardRequest']
+
+// How the mock API answers a board push: it takes it, it refuses it with
+// this status, title and headers (such as a 429's Retry-After), or no
+// response comes back.
+export type BoardAnswer =
+  | 'accepted'
+  | { status: number; title?: string; headers?: Record<string, string> }
+  | 'unreachable'
+
+// The API's boards: each push it takes replaces the match's board, as the
+// newest wins. Records each push, by match id and hex body, in `pushes`.
+// Answers each with the next of `answers`, then 'accepted'. While `hold`
+// is set, each answer waits until the test calls release().
+export function mockBoards() {
+  const stored = new Map<string, string>()
+  const pending: (() => void)[] = []
+  const mock = {
+    pushes: [] as { matchId: string; board: string }[],
+    answers: [] as BoardAnswer[],
+    hold: false,
+    // The match's board as fragment text, or null when none landed.
+    board(matchId: string): string | null {
+      const board = stored.get(matchId)
+      return board === undefined ? null : base64url(fromHex(board))
+    },
+    // Another device's board, which the API took.
+    store(matchId: string, fragment: string): void {
+      stored.set(matchId, hex(fromBase64url(fragment)))
+    },
+    async release(): Promise<void> {
+      await act(async () => pending.splice(0).forEach((resolve) => resolve()))
+    },
+  }
+  server.use(
+    http.post<{ matchId: string }, BoardRequest>(
+      `${API_BASE_URL}/v1/matches/:matchId/boards`,
+      async ({ params, request }) => {
+        const { board } = await request.json()
+        mock.pushes.push({ matchId: params.matchId, board })
+        if (mock.hold) await new Promise<void>((resolve) => pending.push(resolve))
+        const answer = mock.answers.shift() ?? 'accepted'
+        if (answer === 'unreachable') return HttpResponse.error()
+        if (answer !== 'accepted') {
+          return HttpResponse.json(
+            { errors: [{ status: String(answer.status), title: answer.title ?? 'Refused' }] },
+            { status: answer.status, headers: answer.headers },
+          )
+        }
+        stored.set(params.matchId, board)
+        return HttpResponse.json<components['schemas']['BoardResponse']>(
+          { data: { match_id: params.matchId, received_at: new Date().toISOString() } },
+          { status: 201 },
+        )
+      },
+    ),
   )
   return mock
 }

@@ -15,7 +15,7 @@ export type SubmitResult = ReturnType<typeof useSubmitResult>
 // Submit puts the submitted games in the URL as a draft before it signs,
 // so a failed signing keeps the deciding score. The pad remounts on that
 // save, so its parent holds the mutation and its error.
-export function useSubmitResult(match: Match, fragment: Fragment) {
+export function useSubmitResult(match: Match, fragment: Fragment, syncs: boolean) {
   const navigate = useNavigate()
   return useMutation({
     networkMode: 'always',
@@ -30,7 +30,7 @@ export function useSubmitResult(match: Match, fragment: Fragment) {
     }) => {
       const replaces = await replacesOf(fragment)
       const draft = draftHash(match, submitted, replaces, nowSeconds())
-      saveBoard(match.id, draft)
+      if (syncs) saveBoard(match.id, draft)
       await navigate({
         to: PATH,
         params: { matchId: match.id, gameNumber: String(gameNumber) },
@@ -44,7 +44,7 @@ export function useSubmitResult(match: Match, fragment: Fragment) {
     },
     onSuccess: (envelope) => {
       const hash = base64url(envelope)
-      saveBoard(match.id, hash)
+      if (syncs) saveBoard(match.id, hash)
       return navigate({ to: '/matches/$matchId/scores/submission', params: { matchId: match.id }, search: true, hash })
     },
   })

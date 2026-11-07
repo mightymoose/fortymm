@@ -8,6 +8,7 @@ export const Permission = {
   accountRolesManage: 'account_roles.manage',
   signingKeysRevoke: 'signing_keys.revoke',
   matchesCreate: 'matches.create',
+  matchesScore: 'matches.score',
   matchesView: 'matches.view',
   playersView: 'players.view',
 } as const
