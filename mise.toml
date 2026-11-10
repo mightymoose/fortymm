@@ -14,6 +14,7 @@ depends_post = ["ports"]
 
 [tasks.ports]
 description = "Print every published port of the stack as a URL"
+quiet = true
 run = "{% raw %}docker compose ps --format '{{range .Publishers}}{{if .PublishedPort}}{{$.Service}}  {{.TargetPort}}/{{.Protocol}} -> http://{{.URL}}:{{.PublishedPort}}{{println}}{{end}}{{end}}'{% endraw %}"
 
 [tasks.logs]
