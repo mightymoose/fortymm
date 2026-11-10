@@ -38,7 +38,7 @@ Stack-wide tasks act on every app in the stack:
 How `web-client` code and tests are laid out (details in `web-client/README.md`):
 
 - Screens are TanStack Router file routes: one file per route in `web-client/src/routes/` (`__root.tsx` is the shared layout and the not-found page, `index.tsx` is `/`). To add a screen, add a route file; the Vite plugin regenerates `web-client/src/routeTree.gen.ts` (committed, never hand-edited). Generator options go in `web-client/tsr.config.json`.
-- A screen's component test goes next to its route, `web-client/src/routes/<route>.test.tsx`. It mounts the screen with `renderRoute(path)` from `web-client/src/test/render-route.tsx` and drives it through a page object in `web-client/src/routes/<route>.page.ts`.
+- A screen's component test goes next to its route, `web-client/src/routes/<route>.test.tsx`. It uses a page object in `web-client/src/routes/<route>.page.ts` whose `render()` mounts the whole app at that screen's URL (through `renderRoute(path)` in `web-client/src/test/render-route.tsx`), and whose other methods only find elements, by role and accessible name. The test performs every interaction itself with user-event: `const user = userEvent.setup()`, then `await user.click(await page.counter())`. Page objects have no action methods.
 - Type-level tests go in `*.test-d.tsx`, checked by `tsc -b`.
 - `web-client` has no browser suite of its own: anything the router or a screen decides, such as which page a URL shows, is a component test. What depends on how the build is hosted (a deep path gets the app; the bundle loads and mounts in a real browser) is in the cross-app suite, `e2e/`.
 

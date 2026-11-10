@@ -25,6 +25,21 @@ To add a screen, add a route file that exports `Route = createFileRoute('/path')
 
 web-client has no browser suite of its own. The production build is checked by `web-client:build`, the last step of `web-client:validate`. The hosting the cross-app suite drives today is `web-client-hosting`, an nginx stand-in (`dev/web-client-hosting/`) for the production hosting, Cloudflare Workers, which is not in this repository yet. When it lands, point the suite at it (for example the Workers runtime run locally) and remove the stand-in.
 
-A screen test mounts the whole app at a URL with `renderRoute(path)` from `src/test/render-route.tsx`: the real route tree and router configuration, with an in-memory history. Find controls by role and accessible name, inside the page object. The route generator ignores `*.test.*` and `*.page.*` files in `src/routes/` (`tsr.config.json`).
+A screen's page object has two kinds of method:
+
+- `render()` mounts the whole app at the screen's URL, through `renderRoute(path)` in `src/test/render-route.tsx`: the real route tree and router configuration, with an in-memory history. (`NotFoundPage.render(path)` takes any URL with no route, defaulting to `/no/such/page`.)
+- The rest only find elements, by role and accessible name (`heading()`, `counter()`).
+
+The test does the interactions itself, with user-event, so they read in its body:
+
+```tsx
+const user = userEvent.setup()
+const start = new StartPage()
+await start.render()
+await user.click(await start.counter())
+expect(await start.counter()).toHaveAccessibleName('Count is 1')
+```
+
+Don't add action methods (`clickCounter()`) to a page object. The route generator ignores `*.test.*` and `*.page.*` files in `src/routes/` (`tsr.config.json`).
 
 Lint's fast-refresh rule (`react/only-export-components`) is off in `src/routes/`: a route file exports `Route` next to its components by design, and the router plugin handles hot reload for it.
