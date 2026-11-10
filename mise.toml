@@ -87,6 +87,10 @@ run = "docker compose run --rm web-client npm install"
 description = "Lint web-client (oxlint)"
 run = "docker compose run --rm web-client npm run lint"
 
+[tasks."web-client:routes-check"]
+description = "Fail if web-client's generated route tree (src/routeTree.gen.ts) is stale against src/routes"
+run = "docker compose run --rm web-client npm run routes:check"
+
 [tasks."web-client:typecheck"]
 description = "Typecheck web-client (tsc -b)"
 run = "docker compose run --rm web-client npx tsc -b"
@@ -97,9 +101,11 @@ run = "docker compose run --rm web-client npm run build"
 
 # The one entry point CI calls for this app. One step at a time: the steps
 # share the node_modules volume, which the first one may still be filling.
+# The route tree check goes first: the build regenerates the tree in place.
 [tasks."web-client:validate"]
-description = "Validate web-client: lint, typecheck and production build"
+description = "Validate web-client: route tree check, lint, typecheck and production build"
 run = [
+  { task = "web-client:routes-check" },
   { task = "web-client:lint" },
   { task = "web-client:typecheck" },
   { task = "web-client:build" },
