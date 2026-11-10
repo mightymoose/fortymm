@@ -1,9 +1,8 @@
 import asyncio
 import logging
-from typing import Literal
+from dataclasses import dataclass
 
 import asyncpg
-from pydantic import BaseModel, ConfigDict
 
 logger = logging.getLogger(__name__)
 
@@ -11,22 +10,14 @@ logger = logging.getLogger(__name__)
 DATABASE_TIMEOUT_SECONDS = 2.0
 
 
-class HealthOk(BaseModel):
-    # The database answered SELECT 1 in time.
-
-    model_config = ConfigDict(extra="forbid", json_schema_serialization_defaults_required=True)
-
-    status: Literal["ok"] = "ok"
-    database: Literal["ok"] = "ok"
+@dataclass(frozen=True)
+class HealthOk:
+    """The database answered SELECT 1 in time."""
 
 
-class HealthUnavailable(BaseModel):
-    # The database did not answer SELECT 1 in time. Carries no detail, by design.
-
-    model_config = ConfigDict(extra="forbid", json_schema_serialization_defaults_required=True)
-
-    status: Literal["unavailable"] = "unavailable"
-    database: Literal["unavailable"] = "unavailable"
+@dataclass(frozen=True)
+class HealthUnavailable:
+    """The database did not answer SELECT 1 in time. The cause is logged, not carried."""
 
 
 class HealthCheck:

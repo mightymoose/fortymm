@@ -1,50 +1,99 @@
 {
   "components": {
     "schemas": {
-      "HealthOk": {
+      "ErrorDocument": {
         "additionalProperties": false,
         "properties": {
-          "database": {
-            "const": "ok",
-            "default": "ok",
-            "title": "Database",
-            "type": "string"
-          },
-          "status": {
-            "const": "ok",
-            "default": "ok",
-            "title": "Status",
-            "type": "string"
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/ErrorObject"
+            },
+            "minItems": 1,
+            "title": "Errors",
+            "type": "array"
           }
         },
         "required": [
-          "status",
-          "database"
+          "errors"
         ],
-        "title": "HealthOk",
+        "title": "ErrorDocument",
         "type": "object"
       },
-      "HealthUnavailable": {
+      "ErrorObject": {
         "additionalProperties": false,
         "properties": {
-          "database": {
-            "const": "unavailable",
-            "default": "unavailable",
-            "title": "Database",
+          "code": {
+            "title": "Code",
             "type": "string"
           },
           "status": {
-            "const": "unavailable",
-            "default": "unavailable",
             "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
             "type": "string"
           }
         },
         "required": [
           "status",
+          "code",
+          "title"
+        ],
+        "title": "ErrorObject",
+        "type": "object"
+      },
+      "HealthAttributes": {
+        "additionalProperties": false,
+        "properties": {
+          "database": {
+            "const": "ok",
+            "title": "Database",
+            "type": "string"
+          }
+        },
+        "required": [
           "database"
         ],
-        "title": "HealthUnavailable",
+        "title": "HealthAttributes",
+        "type": "object"
+      },
+      "HealthDocument": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/HealthResource"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "HealthDocument",
+        "type": "object"
+      },
+      "HealthResource": {
+        "additionalProperties": false,
+        "properties": {
+          "attributes": {
+            "$ref": "#/components/schemas/HealthAttributes"
+          },
+          "id": {
+            "const": "api",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "health",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "attributes"
+        ],
+        "title": "HealthResource",
         "type": "object"
       }
     }
@@ -63,7 +112,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HealthOk"
+                  "$ref": "#/components/schemas/HealthDocument"
                 }
               }
             },
@@ -73,7 +122,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HealthUnavailable"
+                  "$ref": "#/components/schemas/ErrorDocument"
                 }
               }
             },

@@ -57,7 +57,8 @@ Stack-wide tasks act on every app in the stack:
 How `api` code and tests are laid out (details in `api/README.md`):
 
 - Every route is under `/v1`: a route module joins the router in `api/src/api/routes/v1.py` and writes its paths without the prefix. `/openapi.json` and `/docs` are unversioned.
-- Logic lives in a service class in `api/src/api/services/`. It returns result models and knows nothing about HTTP. A route in `api/src/api/routes/` gets the service from `api/src/api/dependencies.py` and only turns each result into a status code and body.
+- Logic lives in a service class in `api/src/api/services/`. It returns plain results and knows nothing about HTTP or the response format. A route in `api/src/api/routes/` gets the service from `api/src/api/dependencies.py` and only converts each result into a status code and a response document.
+- Responses are shaped after JSON:API, using only the members we need, and are served as `application/json`. Success is `{"data": {"type", "id", "attributes"}}`. Failure is `{"errors": [{"status", "code", "title"}]}`, with nothing occurrence-specific in it, built with `error_response()` from `api/src/api/routes/errors.py`. FastAPI's own 404, 405 and 500 use the same shape. `api/README.md` has the details.
 - A pure function's tests go in `api/tests/unit/`.
 - Every case of a service's logic is tested in `api/tests/services/`, through its public methods, with the real database and the stand-ins in `api/tests/support/database_faults.py`.
 - A route's tests go in `api/tests/http/`: one real case per outcome, nothing faked, plus a check of each response against the OpenAPI document. They prove wiring and translation, not logic.
