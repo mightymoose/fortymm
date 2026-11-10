@@ -56,13 +56,16 @@ depends = ["web-client:validate", "api:validate"]
 # the apps are served or connected. Everything an app can prove by itself runs
 # in its <app>:validate instead. Typechecks the suite, builds web-client,
 # serves the build from web-client-hosting (stand-in for its production
-# hosting), runs the suite against it, then stops what it started.
+# hosting), which forwards /api/* to api-release (api's production image) and
+# its api-db, runs the suite against it, then stops what it started (api-db
+# only if it wasn't already running).
 [tasks.e2e]
-description = "Run the cross-app end-to-end suite in e2e/: typecheck, then Playwright against the hosted web-client build"
+description = "Run the cross-app end-to-end suite in e2e/: typecheck, then Playwright against the hosted web-client build and api's production image"
 depends = ["web-client:build"]
 run = """
-trap 'docker compose --profile e2e rm --stop --force web-client-hosting' EXIT
-docker compose --profile e2e build e2e web-client-hosting
+db_was_running=$(docker compose ps --quiet --status running api-db)
+trap 'docker compose --profile e2e rm --stop --force web-client-hosting api-release; [ -n "$db_was_running" ] || docker compose rm --stop --force api-db' EXIT
+docker compose --profile e2e build e2e web-client-hosting api-release
 docker compose --profile e2e run --rm --no-deps e2e npm run typecheck
 docker compose --profile e2e run --rm e2e
 """
