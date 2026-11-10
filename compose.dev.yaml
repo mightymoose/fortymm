@@ -11,6 +11,8 @@
 #   <app>-e2e      runs the app's end-to-end suite from e2e/<app>/
 #   <app>-<role>   anything else the suite needs, e.g. web-client-preview, or
 #                  api-release (api's production image)
+#
+# Tools a task runs once, such as api-oasdiff, are in the `tools` profile.
 
 # Containers that write to the checkout run as the host user, so files they
 # create (web-client/dist, Playwright reports) are writable by the host on
@@ -160,6 +162,17 @@ services:
     depends_on:
       api-release:
         condition: service_healthy
+
+  # ---- tools ----------------------------------------------------------------
+  # Run by a task, never by `up`.
+
+  # oasdiff (api:breaking). The base document arrives on standard input.
+  api-oasdiff:
+    profiles: [tools]
+    build:
+      context: ./dev/api-oasdiff
+    volumes:
+      - ./api/openapi.json:/revision/openapi.json:ro
 
 volumes:
   web-client-node-modules:

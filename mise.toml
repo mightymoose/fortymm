@@ -175,6 +175,32 @@ run = "docker compose run --rm --no-deps api python -m api.openapi openapi.json"
 description = "Check that api/openapi.json is the document api serves"
 run = "docker compose run --rm --no-deps api python -m api.openapi openapi.json --check"
 
+# Compares the working tree's api/openapi.json with the copy committed on a base
+# git ref, and fails on a change that breaks existing clients (oasdiff level
+# ERR: a removed path or required field, a new required parameter, ...).
+# Additive changes pass. A base without the file passes: nothing to break.
+# CI passes HEAD^ (see .github/workflows/ci.yml); locally the default is
+# origin/main, so run `git fetch origin main` first.
+[tasks."api:openapi-breaking"]
+description = "Fail if api/openapi.json breaks clients of the copy on a git ref (default origin/main): ./bin/mise run api:openapi-breaking -- HEAD^"
+usage = 'arg "[base]" help="The git ref to compare with" default="origin/main"'
+run = """
+base="$usage_base"
+if ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+  echo "api:openapi-breaking: git ref '$base' not found. Fetch it first, e.g. git fetch origin main." >&2
+  exit 2
+fi
+if ! git cat-file -e "$base:api/openapi.json" 2>/dev/null; then
+  echo "api:openapi-breaking: $base has no api/openapi.json, so no client can depend on it yet. Nothing to compare; passing."
+  exit 0
+fi
+echo "api:openapi-breaking: comparing api/openapi.json with $base:api/openapi.json"
+git show "$base:api/openapi.json" \
+  | docker compose --profile tools run --rm -T api-oasdiff \
+      breaking - /revision/openapi.json --fail-on ERR --color never --allow-external-refs=false
+echo "api:openapi-breaking: no breaking changes."
+"""
+
 [tasks."api:test"]
 description = "Test api in process against a real PostgreSQL (pytest); arguments go to pytest"
 run = """

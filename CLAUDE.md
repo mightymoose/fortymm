@@ -49,12 +49,14 @@ Stack-wide tasks act on every app in the stack:
 - `api:lock-check`: check that `api/uv.lock` matches `api/pyproject.toml`.
 - `api:openapi`: write the OpenAPI document to `api/openapi.json`. Run it after changing a route or a response model, and commit the file.
 - `api:openapi-check`: fail if `api/openapi.json` is not the document the app serves.
+- `api:openapi-breaking`: fail if `api/openapi.json` would break clients of the copy on a git ref (oasdiff, in the `api-oasdiff` service; it fails on level ERR, such as a removed path or field or a new required parameter). Additive changes pass. If the ref has no copy, it passes and says so. Defaults to `origin/main` (run `git fetch origin main` first); CI passes the base commit: `./bin/mise run api:openapi-breaking -- HEAD^`.
 - `api:test`: run the in-process tests in `api/tests/` (pytest) against a real PostgreSQL, the `api_test` database. Arguments go to pytest: `./bin/mise run api:test -- -k health`.
 - `api:validate`: lock check, lint, format check, typecheck, OpenAPI check and tests, one after another. CI's stage 1 calls this.
 - `api:e2e`: build the production image (`api/Dockerfile`), run it as `api-release` against `api-db`, run the pytest suite in `e2e/api/` against it, then stop what it started.
 
 How `api` code and tests are laid out (details in `api/README.md`):
 
+- Every route is under `/v1`: a route module joins the router in `api/src/api/routes/v1.py` and writes its paths without the prefix. `/openapi.json` and `/docs` are unversioned.
 - Logic lives in a service class in `api/src/api/services/`. It returns result models and knows nothing about HTTP. A route in `api/src/api/routes/` gets the service from `api/src/api/dependencies.py` and only turns each result into a status code and body.
 - A pure function's tests go in `api/tests/unit/`.
 - Every case of a service's logic is tested in `api/tests/services/`, through its public methods, with the real database and the stand-ins in `api/tests/support/database_faults.py`.
@@ -65,7 +67,7 @@ How `api` code and tests are laid out (details in `api/README.md`):
 
 `.github/workflows/ci.yml` runs on pull requests and on pushes to `main`. Each job is a checkout plus one `./bin/mise run` command, so the same command reproduces any failure locally:
 
-1. `validate (<app>)`: `./bin/mise run <app>:validate`, one matrix job per app.
+1. `validate (<app>)`: `./bin/mise run <app>:validate`, one matrix job per app. Alongside it, `openapi-breaking (<app>)` runs `./bin/mise run <app>:openapi-breaking -- HEAD^`, one matrix job per app with an OpenAPI document. It checks out two commits: on a pull request `HEAD^` is the base branch, and on a push to `main` it is `main` before the push.
 2. `e2e (<app>)`: `./bin/mise run <app>:e2e`, one matrix job per app with an end-to-end suite, after every app validates. Each job starts its own copy of the stack. On failure the job uploads the suite's report as the `e2e-report-<app>` artifact.
 3. `ci-passed`: fails unless every job above succeeded. This is the check to require on `main`.
 
