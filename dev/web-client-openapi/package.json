@@ -1,0 +1,9 @@
+{
+  "name": "web-client-openapi",
+  "private": true,
+  "description": "openapi-typescript, which generates web-client/src/api/schema.gen.ts from api/openapi.json. It needs TypeScript 5's compiler API, which web-client's TypeScript 7 lacks, so it has its own image.",
+  "dependencies": {
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  }
+}

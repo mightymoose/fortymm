@@ -178,6 +178,18 @@ services:
   # ---- tools ----------------------------------------------------------------
   # Run by a task, never by `up`.
 
+  # openapi-typescript (web-client:api-types, web-client:api-types-check):
+  # generates web-client/src/api/schema.gen.ts from api/openapi.json. The one
+  # place web-client reads a file of another app, and read-only.
+  web-client-openapi:
+    profiles: [tools]
+    build:
+      context: ./dev/web-client-openapi
+    user: *host-user
+    volumes:
+      - ./web-client:/app
+      - ./api/openapi.json:/contracts/api/openapi.json:ro
+
   # oasdiff (api:breaking). The base document arrives on standard input.
   api-oasdiff:
     profiles: [tools]

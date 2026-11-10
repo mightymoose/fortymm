@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@tanstack/react-router": "^1.170.46",
+    "openapi-fetch": "^0.17.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
@@ -28,6 +29,8 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "jsdom": "^31.0.0",
+    "msw": "^3.0.4",
+    "openapi-msw": "^2.1.1",
     "oxlint": "^1.90.0",
     "typescript": "~7.0.2",
     "vite": "^8.3.6",
