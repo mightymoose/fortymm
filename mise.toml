@@ -95,6 +95,10 @@ run = "docker compose run --rm web-client npm run routes:check"
 description = "Typecheck web-client (tsc -b)"
 run = "docker compose run --rm web-client npx tsc -b"
 
+[tasks."web-client:test"]
+description = "Run web-client's component tests (Vitest, Testing Library, jsdom)"
+run = "docker compose run --rm web-client npm test"
+
 [tasks."web-client:build"]
 description = "Production build of web-client into web-client/dist"
 run = "docker compose run --rm web-client npm run build"
@@ -103,11 +107,12 @@ run = "docker compose run --rm web-client npm run build"
 # share the node_modules volume, which the first one may still be filling.
 # The route tree check goes first: the build regenerates the tree in place.
 [tasks."web-client:validate"]
-description = "Validate web-client: route tree check, lint, typecheck and production build"
+description = "Validate web-client: route tree check, lint, typecheck, component tests and production build"
 run = [
   { task = "web-client:routes-check" },
   { task = "web-client:lint" },
   { task = "web-client:typecheck" },
+  { task = "web-client:test" },
   { task = "web-client:build" },
 ]
 

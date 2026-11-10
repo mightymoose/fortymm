@@ -9,7 +9,7 @@ export function LinksToRoutesThatExist() {
 }
 
 // Each marked line must be a type error. If the router were not registered
-// (see `Register` in main.tsx), any string would be accepted, each
+// (see `Register` in router.ts), any string would be accepted, each
 // expect-error directive would be unused, and tsc would fail.
 export function LinksToRoutesThatDoNotExist() {
   const navigate = useNavigate()

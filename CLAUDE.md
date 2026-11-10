@@ -28,11 +28,20 @@ Stack-wide tasks act on every app in the stack:
 - `web-client:shell`: open a shell in a `web-client` container.
 - `web-client:exec`: run any command in a `web-client` container, e.g. `./bin/mise run web-client:exec -- npx vite --version`.
 - `web-client:install`: install dependencies. With arguments, add packages: `./bin/mise run web-client:install -- zod`, `./bin/mise run web-client:install -- -D vitest`.
+- `web-client:routes-check`: fail if the generated route tree `web-client/src/routeTree.gen.ts` is stale against `web-client/src/routes/`. It regenerates the file, so commit the result.
 - `web-client:lint`: lint (oxlint).
 - `web-client:typecheck`: typecheck (`tsc -b`).
+- `web-client:test`: component tests (Vitest, Testing Library, jsdom).
 - `web-client:build`: production build into `web-client/dist`.
-- `web-client:validate`: lint, typecheck and build, one after another. CI's stage 1 calls this.
+- `web-client:validate`: route tree check, lint, typecheck, component tests and build, one after another. CI's stage 1 calls this.
 - `web-client:e2e`: build, serve `web-client/dist` from the `web-client-preview` service (nginx), run the Playwright suite in `e2e/web-client/` against it, then stop the server.
+
+How `web-client` code and tests are laid out (details in `web-client/README.md`):
+
+- Screens are TanStack Router file routes: one file per route in `web-client/src/routes/` (`__root.tsx` is the shared layout and the not-found page, `index.tsx` is `/`). To add a screen, add a route file; the Vite plugin regenerates `web-client/src/routeTree.gen.ts` (committed, never hand-edited). Generator options go in `web-client/tsr.config.json`.
+- A screen's component test goes next to its route, `web-client/src/routes/<route>.test.tsx`. It mounts the screen with `renderRoute(path)` from `web-client/src/test/render-route.tsx` and drives it through a page object in `web-client/src/routes/<route>.page.ts`.
+- Type-level tests go in `*.test-d.tsx`, checked by `tsc -b`.
+- `e2e/web-client/tests/` holds only what needs the assembled stack, with page objects in `e2e/web-client/tests/pages/`.
 
 `api` tasks act on the FastAPI app in `api/` and its PostgreSQL, the `api-db` service. Tasks that need the database start `api-db` and remove it afterwards unless it was already running:
 
