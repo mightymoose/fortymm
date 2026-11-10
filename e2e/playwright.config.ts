@@ -1,18 +1,24 @@
 import { defineConfig, devices } from '@playwright/test'
 
-// The cross-app suite: only tests that need two or more apps running together.
-// A test one app can prove alone belongs in that app's own suite
-// (web-client/e2e/, api/e2e/). Run it with ./bin/mise run e2e.
+// The cross-app suite: what can fail only because of how the apps are served
+// or connected, such as the hosting in front of the web client. Anything one
+// app can prove by itself belongs in that app's own validate. Run it with
+// ./bin/mise run e2e.
 //
-// When the first cross-app journey lands, compose.dev.yaml sets BASE_URL to
-// the web client that talks to the api, and this config passes it on as
-// `use.baseURL`.
+// Set by compose.dev.yaml: web-client's production build, served by
+// web-client-hosting (a stand-in for the real hosting).
+const baseURL = process.env.BASE_URL
+if (!baseURL) {
+  throw new Error('BASE_URL is not set; run ./bin/mise run e2e')
+}
+
 export default defineConfig({
   testDir: './tests',
   forbidOnly: !!process.env.CI,
   retries: 0,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
+    baseURL,
     trace: 'retain-on-failure',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],

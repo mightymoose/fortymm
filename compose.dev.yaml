@@ -8,15 +8,17 @@
 #
 # Services that exist only for end-to-end tests are in the `e2e` profile, so
 # `up` never starts them:
-#   <app>-e2e      runs the app's own end-to-end suite, from <app>/e2e/
-#   e2e            runs the cross-app suite in e2e/ (two or more apps together)
-#   <app>-<role>   anything else the suite needs, e.g. web-client-preview, or
-#                  api-release (api's production image)
+#   <app>-e2e      runs the app's own end-to-end suite, from <app>/e2e/ (api-e2e)
+#   e2e            runs the cross-app suite in e2e/ (how the apps are served or
+#                  connected)
+#   <app>-<role>   anything else a suite needs, e.g. api-release (api's
+#                  production image), or web-client-hosting (stand-in for
+#                  web-client's production hosting)
 #
 # Tools a task runs once, such as api-oasdiff, are in the `tools` profile.
 
 # Containers that write to the checkout run as the host user, so files they
-# create (web-client/dist, Playwright reports) are writable by the host on
+# create (web-client/dist, test reports) are writable by the host on
 # Linux too, where a bind mount keeps the container's uid.
 x-host-user: &host-user "${DEV_UID:-1000}:${DEV_GID:-1000}"
 
@@ -98,12 +100,14 @@ services:
 
   # ---- e2e ------------------------------------------------------------------
 
-  # Serves the production build in web-client/dist (made by web-client:build)
-  # as static files, the way it will be served for real.
-  web-client-preview:
+  # Stands in for web-client's production hosting (Cloudflare Workers, not in
+  # this repository yet): nginx serving the production build in
+  # web-client/dist (made by web-client:build) as static files. Used by the
+  # cross-app suite. Replace it with the real hosting when that lands.
+  web-client-hosting:
     profiles: [e2e]
     build:
-      context: ./dev/web-client-preview
+      context: ./dev/web-client-hosting
     volumes:
       - ./web-client/dist:/usr/share/nginx/html:ro
     healthcheck:
@@ -113,28 +117,6 @@ services:
       retries: 3
       start_period: 30s
       start_interval: 1s
-
-  # Playwright, driving web-client-preview. Runs web-client's own suite
-  # (web-client/e2e/) with web-client's dependencies, installed into a volume
-  # of its own: this image is glibc and the dev image is Alpine (musl), so
-  # native packages can't share one node_modules.
-  web-client-e2e:
-    profiles: [e2e]
-    build:
-      context: ./dev/web-client-e2e
-    user: *host-user
-    init: true
-    # Chromium runs out of shared memory in a container without this.
-    ipc: host
-    environment:
-      BASE_URL: http://web-client-preview
-      CI: ${CI:-}
-    volumes:
-      - ./web-client:/app
-      - web-client-e2e-node-modules:/app/node_modules
-    depends_on:
-      web-client-preview:
-        condition: service_healthy
 
   # api's production image (api/Dockerfile) with its real start command,
   # configured like the dev server and using the same api-db.
@@ -171,13 +153,10 @@ services:
 
   # ---- cross-app e2e (stage 2) ------------------------------------------------
 
-  # Playwright for the cross-app suite in e2e/: tests that need two or more apps
-  # running together (the `e2e` task, CI's stage 2). Today it holds only a
-  # placeholder and needs nothing else running. When the first cross-app
-  # journey lands, add here what it drives, e.g.
-  #   environment: BASE_URL: http://web-client-preview
-  #   depends_on: web-client-preview and api-release (service_healthy)
-  # with web-client's build pointed at api-release, and stop them in the task.
+  # Playwright for the cross-app suite in e2e/ (the `e2e` task, CI's stage 2):
+  # what can fail only because of how the apps are served or connected. It
+  # drives web-client-hosting. A test that also needs the api adds
+  # api-release to depends_on (and the e2e task stops it).
   e2e:
     profiles: [e2e]
     build:
@@ -187,10 +166,14 @@ services:
     # Chromium runs out of shared memory in a container without this.
     ipc: host
     environment:
+      BASE_URL: http://web-client-hosting
       CI: ${CI:-}
     volumes:
       - ./e2e:/app
       - e2e-node-modules:/app/node_modules
+    depends_on:
+      web-client-hosting:
+        condition: service_healthy
 
   # ---- tools ----------------------------------------------------------------
   # Run by a task, never by `up`.
@@ -205,7 +188,6 @@ services:
 
 volumes:
   web-client-node-modules:
-  web-client-e2e-node-modules:
   api-venv:
   api-db-data:
   e2e-node-modules:

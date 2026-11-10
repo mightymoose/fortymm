@@ -25,8 +25,3 @@ dist-ssr
 
 # Scratch space of the TanStack Router route generator
 .tanstack
-
-# Playwright output (web-client:e2e)
-playwright-report
-test-results
-blob-report

@@ -3,14 +3,14 @@
 # on the runner; it needs only Docker and bash.
 #
 # Stage 1, validate: each app's <app>:validate, one matrix job per app:
-#                    everything the app can prove alone, including its own
-#                    end-to-end suite (web-client's build in a browser, api's
-#                    shipped image against its database); and
+#                    everything the app can prove by itself (api's includes
+#                    its shipped image against its database); and
 #   openapi-breaking: each <app>:openapi-breaking against the base commit, for
 #                    apps with an OpenAPI document.
 # Stage 2, e2e:      the stack-wide e2e task: one job for the cross-app suite in
-#                    e2e/ (tests that need two or more apps together), once
-#                    every app is valid. One suite, so no matrix.
+#                    e2e/ (what can fail only because of how the apps are
+#                    served or connected), once every app is valid. One suite,
+#                    so no matrix.
 # ci-passed:         the one check to require on main. Its name stays fixed as
 #                    apps and stages are added.
 name: CI
@@ -48,15 +48,13 @@ jobs:
         env:
           APP: ${{ matrix.app }}
         run: ./bin/mise run "$APP:validate"
-      # Reports of an app's own end-to-end suite: web-client's Playwright
-      # report, api's JUnit file.
+      # Reports of an app's own end-to-end suite (today api's JUnit file).
       - name: Upload the test reports
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: validate-report-${{ matrix.app }}
           path: |
-            ${{ matrix.app }}/playwright-report/
             ${{ matrix.app }}/test-results/
           if-no-files-found: ignore
           retention-days: 14
