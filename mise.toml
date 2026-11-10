@@ -117,7 +117,7 @@ run = [
 ]
 
 # Builds web-client, serves the build from web-client-preview, runs the
-# Playwright suite in e2e/web-client/ against it, then stops the server.
+# Playwright suite in web-client/e2e/ against it, then stops the server.
 [tasks."web-client:e2e"]
 description = "End-to-end test web-client: Playwright against its production build"
 depends = ["web-client:build"]

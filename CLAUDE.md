@@ -34,14 +34,14 @@ Stack-wide tasks act on every app in the stack:
 - `web-client:test`: component tests (Vitest, Testing Library, jsdom).
 - `web-client:build`: production build into `web-client/dist`.
 - `web-client:validate`: route tree check, lint, typecheck, component tests and build, one after another. CI's stage 1 calls this.
-- `web-client:e2e`: build, serve `web-client/dist` from the `web-client-preview` service (nginx), run the Playwright suite in `e2e/web-client/` against it, then stop the server.
+- `web-client:e2e`: build, serve `web-client/dist` from the `web-client-preview` service (nginx), run the Playwright suite in `web-client/e2e/` against it, then stop the server.
 
 How `web-client` code and tests are laid out (details in `web-client/README.md`):
 
 - Screens are TanStack Router file routes: one file per route in `web-client/src/routes/` (`__root.tsx` is the shared layout and the not-found page, `index.tsx` is `/`). To add a screen, add a route file; the Vite plugin regenerates `web-client/src/routeTree.gen.ts` (committed, never hand-edited). Generator options go in `web-client/tsr.config.json`.
 - A screen's component test goes next to its route, `web-client/src/routes/<route>.test.tsx`. It mounts the screen with `renderRoute(path)` from `web-client/src/test/render-route.tsx` and drives it through a page object in `web-client/src/routes/<route>.page.ts`.
 - Type-level tests go in `*.test-d.tsx`, checked by `tsc -b`.
-- `e2e/web-client/tests/` holds only what needs the assembled stack, with page objects in `e2e/web-client/tests/pages/`.
+- `web-client/e2e/` holds only what needs the production build as served (nginx in `web-client-preview`), with page objects in `web-client/e2e/pages/`. Playwright is one of web-client's own dev dependencies, pinned to the version of the `dev/web-client-e2e` image.
 
 `api` tasks act on the FastAPI app in `api/` and its PostgreSQL, the `api-db` service. Tasks that need the database start `api-db` and remove it afterwards unless it was already running:
 
@@ -92,7 +92,7 @@ How `api` code and tests are laid out (details in `api/README.md`):
   - a `# ---- <app>` block of `<app>:*` tasks in `mise.toml`, with the same task names where they apply;
   - an `<app>:validate` task that runs every check for the app, added to the stack-wide `validate` task's `depends` and to the `app` matrix of the `validate` job in `.github/workflows/ci.yml`.
 - An app's end-to-end suite (a client's, or a server's driven over HTTP) follows the same pattern under the `e2e` Compose profile, so `up` never starts it:
-  - the suite in `e2e/<app>/`;
+  - the suite in `e2e/<app>/` (as for `api`), or in the app itself when it tests only that app with the app's own tooling (`web-client/e2e/`);
   - its runner image in `dev/<app>-e2e/` and an `<app>-e2e` service in `compose.dev.yaml`;
   - any other service it needs, named `<app>-<role>` (e.g. `web-client-preview`, `api-release`), with its image in `dev/<app>-<role>/` (a server's production image stays in `<app>/Dockerfile`);
   - an `<app>:e2e` task that runs the suite and stops what it started, added to the stack-wide `e2e` task's `depends` and to the `app` matrix of the `e2e` job in `.github/workflows/ci.yml`.

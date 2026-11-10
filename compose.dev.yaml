@@ -8,7 +8,8 @@
 #
 # Services that exist only for end-to-end tests are in the `e2e` profile, so
 # `up` never starts them:
-#   <app>-e2e      runs the app's end-to-end suite from e2e/<app>/
+#   <app>-e2e      runs the app's end-to-end suite, from e2e/<app>/ (api) or
+#                  from the app itself (web-client/e2e/)
 #   <app>-<role>   anything else the suite needs, e.g. web-client-preview, or
 #                  api-release (api's production image)
 #
@@ -113,7 +114,10 @@ services:
       start_period: 30s
       start_interval: 1s
 
-  # Playwright, driving web-client-preview.
+  # Playwright, driving web-client-preview. Runs web-client's own suite
+  # (web-client/e2e/) with web-client's dependencies, installed into a volume
+  # of its own: this image is glibc and the dev image is Alpine (musl), so
+  # native packages can't share one node_modules.
   web-client-e2e:
     profiles: [e2e]
     build:
@@ -126,7 +130,7 @@ services:
       BASE_URL: http://web-client-preview
       CI: ${CI:-}
     volumes:
-      - ./e2e/web-client:/app
+      - ./web-client:/app
       - web-client-e2e-node-modules:/app/node_modules
     depends_on:
       web-client-preview:

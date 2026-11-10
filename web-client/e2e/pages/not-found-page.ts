@@ -3,8 +3,10 @@ import type { Locator, Page } from '@playwright/test'
 // The screen web-client shows for a URL that matches no route.
 export class NotFoundPage {
   readonly heading: Locator
+  private readonly page: Page
 
-  constructor(private readonly page: Page) {
+  constructor(page: Page) {
+    this.page = page
     this.heading = page.getByRole('heading', { name: 'Page not found' })
   }
 

@@ -21,7 +21,7 @@ To add a screen, add a route file that exports `Route = createFileRoute('/path')
 | A screen's behavior | `src/routes/<route>.test.tsx`, next to the route | `web-client:test` (Vitest, Testing Library, jsdom) |
 | Its page object | `src/routes/<route>.page.ts` | used by the test above |
 | Type-level claims | `src/**/*.test-d.tsx` | `web-client:typecheck` |
-| Wiring that needs the production build as served | `e2e/web-client/tests/`, page objects in `tests/pages/` | `web-client:e2e` (Playwright) |
+| Wiring that needs the production build as served | `e2e/`, page objects in `e2e/pages/`; config in `playwright.config.ts` | `web-client:e2e` (Playwright) |
 
 A screen test mounts the whole app at a URL with `renderRoute(path)` from `src/test/render-route.tsx`: the real route tree and router configuration, with an in-memory history. Find controls by role and accessible name, inside the page object. The route generator ignores `*.test.*` and `*.page.*` files in `src/routes/` (`tsr.config.json`).
 

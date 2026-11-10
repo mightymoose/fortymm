@@ -8,7 +8,7 @@ if (!baseURL) {
 }
 
 export default defineConfig({
-  testDir: './tests',
+  testDir: './e2e',
   forbidOnly: !!process.env.CI,
   retries: 0,
   reporter: [['list'], ['html', { open: 'never' }]],
