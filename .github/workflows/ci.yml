@@ -2,7 +2,8 @@
 # same Compose stack, that reproduces it on a laptop. Nothing else is installed
 # on the runner; it needs only Docker and bash.
 #
-# Stage 1, validate: each app's <app>:validate, one matrix job per app; and
+# Stage 1, validate: each app's <app>:validate, one matrix job per app (for
+#                    web-client this includes its Playwright suite); and
 #   openapi-breaking: each <app>:openapi-breaking against the base commit, for
 #                    apps with an OpenAPI document.
 # Stage 2, e2e:      each <app>:e2e, one matrix job per app with a suite, once
@@ -29,7 +30,7 @@ jobs:
   validate:
     name: validate (${{ matrix.app }})
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -45,6 +46,17 @@ jobs:
         env:
           APP: ${{ matrix.app }}
         run: ./bin/mise run "$APP:validate"
+      # An app whose validate runs a browser suite (web-client/e2e/).
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: validate-report-${{ matrix.app }}
+          path: |
+            ${{ matrix.app }}/playwright-report/
+            ${{ matrix.app }}/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
 
   openapi-breaking:
     name: openapi-breaking (${{ matrix.app }})
@@ -81,8 +93,8 @@ jobs:
         # One entry per app with an end-to-end suite; each must have an
         # <app>:e2e task. A client that needs another runner (iOS: macOS) moves
         # this to `include:` entries with an `os` and runs-on: ${{ matrix.os }}.
+        # web-client's suite runs in its validate job instead.
         app:
-          - web-client
           - api
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -97,11 +109,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-report-${{ matrix.app }}
-          # A suite in e2e/<app>/ (api) or in the app itself (web-client/e2e/).
           path: |
+            e2e/${{ matrix.app }}/playwright-report/
             e2e/${{ matrix.app }}/test-results/
-            ${{ matrix.app }}/playwright-report/
-            ${{ matrix.app }}/test-results/
           if-no-files-found: ignore
           retention-days: 14
 

@@ -6,7 +6,8 @@
 # service), e.g. web-client:lint. To add an app, copy the web-client block.
 #
 # CI (.github/workflows/ci.yml) calls only <app>:validate for each app, then
-# <app>:e2e for each app with a suite. Both run the same way on a laptop.
+# <app>:e2e for each app with a separate suite stage (web-client's runs inside
+# web-client:validate). Both run the same way on a laptop.
 
 [env]
 COMPOSE_FILE = "{{ config_root }}/compose.dev.yaml"
@@ -50,9 +51,10 @@ run = "docker compose logs --follow --tail 100"
 description = "Validate every app (each app's <app>:validate)"
 depends = ["web-client:validate", "api:validate"]
 
+# web-client's Playwright suite runs in web-client:validate instead.
 [tasks.e2e]
-description = "Run every end-to-end suite (each <app>:e2e)"
-depends = ["web-client:e2e", "api:e2e"]
+description = "Run every end-to-end suite (each <app>:e2e) not already in an <app>:validate"
+depends = ["api:e2e"]
 
 # ---- web-client -------------------------------------------------------------
 
@@ -106,14 +108,16 @@ run = "docker compose run --rm web-client npm run build"
 # The one entry point CI calls for this app. One step at a time: the steps
 # share the node_modules volume, which the first one may still be filling.
 # The route tree check goes first: the build regenerates the tree in place.
+# The Playwright suite is part of validating the UI; web-client:e2e runs the
+# production build first.
 [tasks."web-client:validate"]
-description = "Validate web-client: route tree check, lint, typecheck, component tests and production build"
+description = "Validate web-client: route tree check, lint, typecheck, component tests, production build and Playwright suite"
 run = [
   { task = "web-client:routes-check" },
   { task = "web-client:lint" },
   { task = "web-client:typecheck" },
   { task = "web-client:test" },
-  { task = "web-client:build" },
+  { task = "web-client:e2e" },
 ]
 
 # Builds web-client, serves the build from web-client-preview, runs the

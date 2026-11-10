@@ -18,7 +18,7 @@ Stack-wide tasks act on every app in the stack:
 - `ports`: print every published port as a URL (`postgresql://` for the database, `http://` otherwise). Host ports are random and change when an app restarts.
 - `logs`: follow the logs of every app.
 - `validate`: validate every app (runs each `<app>:validate`).
-- `e2e`: run every end-to-end suite (runs each `<app>:e2e`).
+- `e2e`: run every end-to-end suite that isn't already part of an app's validate (runs `api:e2e`; `web-client:e2e` runs inside `web-client:validate`).
 
 `web-client` tasks act on the Vite + React app in `web-client/` only:
 
@@ -33,7 +33,7 @@ Stack-wide tasks act on every app in the stack:
 - `web-client:typecheck`: typecheck (`tsc -b`).
 - `web-client:test`: component tests (Vitest, Testing Library, jsdom).
 - `web-client:build`: production build into `web-client/dist`.
-- `web-client:validate`: route tree check, lint, typecheck, component tests and build, one after another. CI's stage 1 calls this.
+- `web-client:validate`: route tree check, lint, typecheck, component tests, then `web-client:e2e` (production build and the Playwright suite), one after another. CI's stage 1 calls this.
 - `web-client:e2e`: build, serve `web-client/dist` from the `web-client-preview` service (nginx), run the Playwright suite in `web-client/e2e/` against it, then stop the server.
 
 How `web-client` code and tests are laid out (details in `web-client/README.md`):
@@ -77,8 +77,8 @@ How `api` code and tests are laid out (details in `api/README.md`):
 
 `.github/workflows/ci.yml` runs on pull requests and on pushes to `main`. Each job is a checkout plus one `./bin/mise run` command, so the same command reproduces any failure locally:
 
-1. `validate (<app>)`: `./bin/mise run <app>:validate`, one matrix job per app. Alongside it, `openapi-breaking (<app>)` runs `./bin/mise run <app>:openapi-breaking -- HEAD^`, one matrix job per app with an OpenAPI document. It checks out two commits: on a pull request `HEAD^` is the base branch, and on a push to `main` it is `main` before the push.
-2. `e2e (<app>)`: `./bin/mise run <app>:e2e`, one matrix job per app with an end-to-end suite, after every app validates. Each job starts its own copy of the stack. On failure the job uploads the suite's report as the `e2e-report-<app>` artifact.
+1. `validate (<app>)`: `./bin/mise run <app>:validate`, one matrix job per app. For `web-client` this includes its Playwright suite; on failure the job uploads its report as the `validate-report-web-client` artifact. Alongside it, `openapi-breaking (<app>)` runs `./bin/mise run <app>:openapi-breaking -- HEAD^`, one matrix job per app with an OpenAPI document. It checks out two commits: on a pull request `HEAD^` is the base branch, and on a push to `main` it is `main` before the push.
+2. `e2e (<app>)`: `./bin/mise run <app>:e2e`, one matrix job per app with an end-to-end suite outside its validate (today `api`), after every app validates. Each job starts its own copy of the stack. On failure the job uploads the suite's report as the `e2e-report-<app>` artifact.
 3. `ci-passed`: fails unless every job above succeeded. This is the check to require on `main`.
 
 ## Naming rule
@@ -95,7 +95,7 @@ How `api` code and tests are laid out (details in `api/README.md`):
   - the suite in `e2e/<app>/` (as for `api`), or in the app itself when it tests only that app with the app's own tooling (`web-client/e2e/`);
   - its runner image in `dev/<app>-e2e/` and an `<app>-e2e` service in `compose.dev.yaml`;
   - any other service it needs, named `<app>-<role>` (e.g. `web-client-preview`, `api-release`), with its image in `dev/<app>-<role>/` (a server's production image stays in `<app>/Dockerfile`);
-  - an `<app>:e2e` task that runs the suite and stops what it started, added to the stack-wide `e2e` task's `depends` and to the `app` matrix of the `e2e` job in `.github/workflows/ci.yml`.
+  - an `<app>:e2e` task that runs the suite and stops what it started, added to the stack-wide `e2e` task's `depends` and to the `app` matrix of the `e2e` job in `.github/workflows/ci.yml`. A suite that lives in the app and tests only the app (`web-client/e2e/`) runs at the end of `<app>:validate` instead, and is not added to either.
 - Don't rename the stack-wide tasks or another app's tasks.
 
 Each checkout (including each git worktree) gets its own Compose project, so stacks in different checkouts don't collide. If you add or change a task in `mise.toml`, update the lists above.
