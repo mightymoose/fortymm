@@ -7,7 +7,7 @@ WORKDIR /app
 # first mount, so the unprivileged node user can install into it.
 RUN mkdir -p /app/node_modules && chown node:node /app /app/node_modules
 
-COPY --chmod=755 web-client-entrypoint.sh /usr/local/bin/dev-entrypoint
+COPY --chmod=755 entrypoint.sh /usr/local/bin/dev-entrypoint
 
 USER node
 ENV npm_config_update_notifier=false

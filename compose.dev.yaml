@@ -1,10 +1,12 @@
 # Development-only Compose stack. Driven by the mise tasks in mise.toml,
 # which set COMPOSE_FILE and a per-checkout COMPOSE_PROJECT_NAME.
+#
+# One service per app. The service is named after the app's directory, and its
+# dev image lives in dev/<app>/.
 services:
   web-client:
     build:
-      context: ./dev
-      dockerfile: web-client.Dockerfile
+      context: ./dev/web-client
     volumes:
       - ./web-client:/app
       - web-client-node-modules:/app/node_modules

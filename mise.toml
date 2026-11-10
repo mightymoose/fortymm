@@ -1,54 +1,79 @@
 # Every task runs inside the development Compose stack (compose.dev.yaml).
-# Nothing but mise and Docker runs on the host.
+# Nothing but Docker runs on the host; run mise as ./bin/mise.
+#
+# Naming: stack-wide tasks have plain names and act on every service.
+# App tasks are prefixed with the app's name (its directory and its Compose
+# service), e.g. web-client:lint. To add an app, copy the web-client block.
 
 [env]
 COMPOSE_FILE = "{{ config_root }}/compose.dev.yaml"
 # One Compose project per checkout, so git worktrees never share containers,
 # networks or volumes: directory name plus a hash of the full path.
 COMPOSE_PROJECT_NAME = "fortymm-{{ config_root | basename | kebabcase }}-{{ config_root | hash(len=8) }}"
+# `docker compose ps` format that prints each published port as a URL.
+DEV_PORTS_FORMAT = "{% raw %}{{range .Publishers}}{{if .PublishedPort}}{{$.Service}}  {{.TargetPort}}/{{.Protocol}} -> http://{{.URL}}:{{.PublishedPort}}{{println}}{{end}}{{end}}{% endraw %}"
+
+# ---- Stack-wide -------------------------------------------------------------
 
 [tasks.up]
-description = "Start the stack (Vite dev server, hot reload) and print its URL"
+description = "Start every app in the stack and print their URLs"
 run = "docker compose up --detach --build --wait"
 depends_post = ["ports"]
 
-[tasks.ports]
-description = "Print every published port of the stack as a URL"
-quiet = true
-run = "{% raw %}docker compose ps --format '{{range .Publishers}}{{if .PublishedPort}}{{$.Service}}  {{.TargetPort}}/{{.Protocol}} -> http://{{.URL}}:{{.PublishedPort}}{{println}}{{end}}{{end}}'{% endraw %}"
-
-[tasks.logs]
-description = "Follow the stack's logs"
-run = "docker compose logs --follow --tail 100"
-
-[tasks.stop]
-description = "Stop the stack; keeps the image and installed node_modules"
+[tasks.down]
+description = "Stop the stack; keeps built images and dependency volumes"
 run = "docker compose down --remove-orphans"
 
 [tasks.teardown]
 description = "Remove everything: containers, networks, volumes and built images"
 run = "docker compose down --volumes --rmi local --remove-orphans"
 
-[tasks.shell]
+[tasks.ports]
+description = "Print every published port of the stack as a URL"
+quiet = true
+run = 'docker compose ps --format "$DEV_PORTS_FORMAT" | grep -v "^$"'
+
+[tasks.logs]
+description = "Follow the logs of every app in the stack"
+run = "docker compose logs --follow --tail 100"
+
+# ---- web-client -------------------------------------------------------------
+
+[tasks."web-client:up"]
+description = "Start only web-client (Vite dev server, hot reload) and print its URL"
+run = [
+  "docker compose up --detach --build --wait web-client",
+  'docker compose ps --format "$DEV_PORTS_FORMAT" web-client | grep -v "^$"',
+]
+
+[tasks."web-client:down"]
+description = "Stop only web-client; keeps its image and node_modules"
+run = "docker compose down web-client"
+
+[tasks."web-client:logs"]
+description = "Follow web-client's logs"
+run = "docker compose logs --follow --tail 100 web-client"
+
+[tasks."web-client:shell"]
 description = "Open a shell in a web-client container"
 run = "docker compose run --rm web-client sh"
 
-[tasks.exec]
-description = "Run a command in a web-client container: mise run exec -- npx vite --version"
+[tasks."web-client:exec"]
+description = "Run a command in a web-client container: ./bin/mise run web-client:exec -- npx vite --version"
 run = "docker compose run --rm web-client"
 
-[tasks.install]
-description = "Install dependencies; with arguments, add packages: mise run install -- zod"
+[tasks."web-client:install"]
+description = "Install web-client dependencies; with arguments, add packages: ./bin/mise run web-client:install -- zod"
 run = "docker compose run --rm web-client npm install"
 
-[tasks.lint]
+[tasks."web-client:lint"]
 description = "Lint web-client (oxlint)"
 run = "docker compose run --rm web-client npm run lint"
 
-[tasks.typecheck]
+[tasks."web-client:typecheck"]
 description = "Typecheck web-client (tsc -b)"
 run = "docker compose run --rm web-client npx tsc -b"
 
-[tasks.build]
+[tasks."web-client:build"]
 description = "Production build of web-client into web-client/dist"
 run = "docker compose run --rm web-client npm run build"
