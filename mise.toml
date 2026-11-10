@@ -5,9 +5,9 @@
 # App tasks are prefixed with the app's name (its directory and its Compose
 # service), e.g. web-client:lint. To add an app, copy the web-client block.
 #
-# CI (.github/workflows/ci.yml) calls only <app>:validate for each app, then
-# <app>:e2e for each app with a separate suite stage (web-client's runs inside
-# web-client:validate). Both run the same way on a laptop.
+# CI (.github/workflows/ci.yml) calls <app>:validate for each app (everything
+# the app can prove alone, its own end-to-end suite included), then the
+# stack-wide e2e task (the cross-app suite). Both run the same way on a laptop.
 
 [env]
 COMPOSE_FILE = "{{ config_root }}/compose.dev.yaml"
@@ -51,10 +51,14 @@ run = "docker compose logs --follow --tail 100"
 description = "Validate every app (each app's <app>:validate)"
 depends = ["web-client:validate", "api:validate"]
 
-# web-client's Playwright suite runs in web-client:validate instead.
+# The cross-app suite in e2e/ (CI's stage 2): only tests that need two or more
+# apps running together. Each app's own suite runs in its <app>:validate.
+# Today the suite needs nothing else running. When it does, start those
+# services first and stop them on exit, as web-client:e2e does:
+#   trap 'docker compose --profile e2e rm --stop --force <services>' EXIT
 [tasks.e2e]
-description = "Run every end-to-end suite (each <app>:e2e) not already in an <app>:validate"
-depends = ["api:e2e"]
+description = "Run the cross-app end-to-end suite in e2e/ (Playwright)"
+run = "docker compose --profile e2e run --rm --build e2e"
 
 # ---- web-client -------------------------------------------------------------
 
@@ -225,9 +229,11 @@ docker compose run --rm api pytest
 """
 
 # The one entry point CI calls for this app. One step at a time: the steps
-# share the venv volume, which the first one may still be filling.
+# share the venv volume, which the first one may still be filling. The suite
+# against the shipped image is part of validating the api, as web-client's
+# Playwright suite is part of validating the UI.
 [tasks."api:validate"]
-description = "Validate api: lockfile, lint, formatting, typecheck, OpenAPI drift and tests"
+description = "Validate api: lockfile, lint, formatting, typecheck, OpenAPI drift, tests, and its shipped image"
 run = [
   { task = "api:lock-check" },
   { task = "api:lint" },
@@ -235,10 +241,11 @@ run = [
   { task = "api:typecheck" },
   { task = "api:openapi-check" },
   { task = "api:test" },
+  { task = "api:e2e" },
 ]
 
 # Builds api's production image, runs it as api-release against api-db, runs
-# the pytest suite in e2e/api/ against it, then stops what it started.
+# the pytest suite in api/e2e/ against it, then stops what it started.
 [tasks."api:e2e"]
 description = "End-to-end test api: its production image against a real PostgreSQL"
 run = """

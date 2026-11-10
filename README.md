@@ -15,8 +15,8 @@ You need Docker. Everything else runs in a development Docker Compose stack, dri
 Before pushing, run what CI runs:
 
 ```sh
-./bin/mise run validate  # lint, typecheck, build and test every app (web-client's Playwright suite included)
-./bin/mise run e2e       # end-to-end suites outside validate (pytest for api)
+./bin/mise run validate  # everything each app can prove alone, its own end-to-end suite included
+./bin/mise run e2e       # the cross-app suite in e2e/ (apps running together)
 ```
 
 Tasks for one app are prefixed with its name, e.g. `./bin/mise run web-client:up` or `./bin/mise run web-client:lint`. `./bin/mise tasks` lists every task. `CLAUDE.md` describes each one.

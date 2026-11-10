@@ -8,8 +8,8 @@
 #
 # Services that exist only for end-to-end tests are in the `e2e` profile, so
 # `up` never starts them:
-#   <app>-e2e      runs the app's end-to-end suite, from e2e/<app>/ (api) or
-#                  from the app itself (web-client/e2e/)
+#   <app>-e2e      runs the app's own end-to-end suite, from <app>/e2e/
+#   e2e            runs the cross-app suite in e2e/ (two or more apps together)
 #   <app>-<role>   anything else the suite needs, e.g. web-client-preview, or
 #                  api-release (api's production image)
 #
@@ -152,20 +152,45 @@ services:
       start_period: 30s
       start_interval: 1s
 
-  # pytest, driving api-release over the stack's network.
+  # pytest, driving api-release over the stack's network: api's own suite
+  # (api/e2e/), run with api's dev image and its venv, like api:test.
   api-e2e:
     profiles: [e2e]
     build:
-      context: ./dev/api-e2e
+      context: ./dev/api
     user: *host-user
     environment:
       BASE_URL: http://api-release:8000
     volumes:
-      - ./e2e/api:/app
-      - api-e2e-venv:/opt/venvs
+      - ./api:/app
+      - api-venv:/opt/venvs
+    command: ["pytest", "e2e", "--junitxml=test-results/junit.xml"]
     depends_on:
       api-release:
         condition: service_healthy
+
+  # ---- cross-app e2e (stage 2) ------------------------------------------------
+
+  # Playwright for the cross-app suite in e2e/: tests that need two or more apps
+  # running together (the `e2e` task, CI's stage 2). Today it holds only a
+  # placeholder and needs nothing else running. When the first cross-app
+  # journey lands, add here what it drives, e.g.
+  #   environment: BASE_URL: http://web-client-preview
+  #   depends_on: web-client-preview and api-release (service_healthy)
+  # with web-client's build pointed at api-release, and stop them in the task.
+  e2e:
+    profiles: [e2e]
+    build:
+      context: ./dev/e2e
+    user: *host-user
+    init: true
+    # Chromium runs out of shared memory in a container without this.
+    ipc: host
+    environment:
+      CI: ${CI:-}
+    volumes:
+      - ./e2e:/app
+      - e2e-node-modules:/app/node_modules
 
   # ---- tools ----------------------------------------------------------------
   # Run by a task, never by `up`.
@@ -183,4 +208,4 @@ volumes:
   web-client-e2e-node-modules:
   api-venv:
   api-db-data:
-  api-e2e-venv:
+  e2e-node-modules:
