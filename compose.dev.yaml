@@ -1,12 +1,25 @@
 # Development-only Compose stack. Driven by the mise tasks in mise.toml,
-# which set COMPOSE_FILE and a per-checkout COMPOSE_PROJECT_NAME.
+# which set COMPOSE_FILE, a per-checkout COMPOSE_PROJECT_NAME, and DEV_UID and
+# DEV_GID (the host user).
 #
 # One service per app. The service is named after the app's directory, and its
 # dev image lives in dev/<app>/.
+#
+# Services that exist only for end-to-end tests are in the `e2e` profile, so
+# `up` never starts them:
+#   <app>-e2e      runs the app's end-to-end suite from e2e/<app>/
+#   <app>-<role>   anything else the suite needs, e.g. web-client-preview
+
+# Containers that write to the checkout run as the host user, so files they
+# create (web-client/dist, Playwright reports) are writable by the host on
+# Linux too, where a bind mount keeps the container's uid.
+x-host-user: &host-user "${DEV_UID:-1000}:${DEV_GID:-1000}"
+
 services:
   web-client:
     build:
       context: ./dev/web-client
+    user: *host-user
     volumes:
       - ./web-client:/app
       - web-client-node-modules:/app/node_modules
@@ -21,5 +34,43 @@ services:
       start_period: 180s
       start_interval: 1s
 
+  # ---- e2e ------------------------------------------------------------------
+
+  # Serves the production build in web-client/dist (made by web-client:build)
+  # as static files, the way it will be served for real.
+  web-client-preview:
+    profiles: [e2e]
+    build:
+      context: ./dev/web-client-preview
+    volumes:
+      - ./web-client/dist:/usr/share/nginx/html:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 30s
+      start_interval: 1s
+
+  # Playwright, driving web-client-preview.
+  web-client-e2e:
+    profiles: [e2e]
+    build:
+      context: ./dev/web-client-e2e
+    user: *host-user
+    init: true
+    # Chromium runs out of shared memory in a container without this.
+    ipc: host
+    environment:
+      BASE_URL: http://web-client-preview
+      CI: ${CI:-}
+    volumes:
+      - ./e2e/web-client:/app
+      - web-client-e2e-node-modules:/app/node_modules
+    depends_on:
+      web-client-preview:
+        condition: service_healthy
+
 volumes:
   web-client-node-modules:
+  web-client-e2e-node-modules:

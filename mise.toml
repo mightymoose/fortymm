@@ -4,6 +4,9 @@
 # Naming: stack-wide tasks have plain names and act on every service.
 # App tasks are prefixed with the app's name (its directory and its Compose
 # service), e.g. web-client:lint. To add an app, copy the web-client block.
+#
+# CI (.github/workflows/ci.yml) calls only <app>:validate for each app, then
+# the stack-wide e2e task. Both run the same way on a laptop.
 
 [env]
 COMPOSE_FILE = "{{ config_root }}/compose.dev.yaml"
@@ -11,6 +14,10 @@ COMPOSE_FILE = "{{ config_root }}/compose.dev.yaml"
 # networks or volumes: directory name plus a hash of the full path.
 COMPOSE_PROJECT_NAME = "fortymm-{{ config_root | basename | kebabcase }}-{{ config_root | hash(len=8) }}"
 # `docker compose ps` format that prints each published port as a URL.
+# The host user. Containers that write to the checkout run as this user, so the
+# files they create stay writable on Linux hosts (CI runners included).
+DEV_UID = "{{ exec(command='id -u') }}"
+DEV_GID = "{{ exec(command='id -g') }}"
 DEV_PORTS_FORMAT = "{% raw %}{{range .Publishers}}{{if .PublishedPort}}{{$.Service}}  {{.TargetPort}}/{{.Protocol}} -> http://{{.URL}}:{{.PublishedPort}}{{println}}{{end}}{{end}}{% endraw %}"
 
 # ---- Stack-wide -------------------------------------------------------------
@@ -20,13 +27,14 @@ description = "Start every app in the stack and print their URLs"
 run = "docker compose up --detach --build --wait"
 depends_post = ["ports"]
 
+# `--profile "*"` includes the e2e-only services, so nothing is left behind.
 [tasks.down]
 description = "Stop the stack; keeps built images and dependency volumes"
-run = "docker compose down --remove-orphans"
+run = 'docker compose --profile "*" down --remove-orphans'
 
 [tasks.teardown]
 description = "Remove everything: containers, networks, volumes and built images"
-run = "docker compose down --volumes --rmi local --remove-orphans"
+run = 'docker compose --profile "*" down --volumes --rmi local --remove-orphans'
 
 [tasks.ports]
 description = "Print every published port of the stack as a URL"
@@ -36,6 +44,14 @@ run = 'docker compose ps --format "$DEV_PORTS_FORMAT" | grep -v "^$"'
 [tasks.logs]
 description = "Follow the logs of every app in the stack"
 run = "docker compose logs --follow --tail 100"
+
+[tasks.validate]
+description = "Validate every app (each app's <app>:validate)"
+depends = ["web-client:validate"]
+
+[tasks.e2e]
+description = "Run every end-to-end suite (each client's <app>:e2e)"
+depends = ["web-client:e2e"]
 
 # ---- web-client -------------------------------------------------------------
 
@@ -77,3 +93,23 @@ run = "docker compose run --rm web-client npx tsc -b"
 [tasks."web-client:build"]
 description = "Production build of web-client into web-client/dist"
 run = "docker compose run --rm web-client npm run build"
+
+# The one entry point CI calls for this app. One step at a time: the steps
+# share the node_modules volume, which the first one may still be filling.
+[tasks."web-client:validate"]
+description = "Validate web-client: lint, typecheck and production build"
+run = [
+  { task = "web-client:lint" },
+  { task = "web-client:typecheck" },
+  { task = "web-client:build" },
+]
+
+# Builds web-client, serves the build from web-client-preview, runs the
+# Playwright suite in e2e/web-client/ against it, then stops the server.
+[tasks."web-client:e2e"]
+description = "End-to-end test web-client: Playwright against its production build"
+depends = ["web-client:build"]
+run = """
+trap 'docker compose --profile e2e rm --stop --force web-client-preview' EXIT
+docker compose --profile e2e run --rm --build web-client-e2e
+"""
