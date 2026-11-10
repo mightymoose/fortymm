@@ -1,0 +1,14 @@
+{
+  "name": "fortymm-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0",
+    "@types/node": "^24.19.2",
+    "typescript": "~7.0.2"
+  }
+}

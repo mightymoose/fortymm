@@ -18,7 +18,7 @@ Stack-wide tasks act on every app in the stack:
 - `ports`: print every published port as a URL (`postgresql://` for the database, `http://` otherwise). Host ports are random and change when an app restarts.
 - `logs`: follow the logs of every app.
 - `validate`: validate every app (runs each `<app>:validate`).
-- `e2e`: run every end-to-end suite (runs each `<app>:e2e`).
+- `e2e`: run the cross-app suite in `e2e/`: what can fail only because of how the apps are served or connected. It typechecks the suite, builds `web-client`, serves the build from `web-client-hosting`, runs the Playwright suite against it (in the `e2e` service), then stops the server. `web-client-hosting` is an nginx stand-in for the production hosting (Cloudflare Workers, not in this repository yet).
 
 `web-client` tasks act on the Vite + React app in `web-client/` only:
 
@@ -28,11 +28,19 @@ Stack-wide tasks act on every app in the stack:
 - `web-client:shell`: open a shell in a `web-client` container.
 - `web-client:exec`: run any command in a `web-client` container, e.g. `./bin/mise run web-client:exec -- npx vite --version`.
 - `web-client:install`: install dependencies. With arguments, add packages: `./bin/mise run web-client:install -- zod`, `./bin/mise run web-client:install -- -D vitest`.
+- `web-client:routes-check`: fail if the generated route tree `web-client/src/routeTree.gen.ts` is stale against `web-client/src/routes/`. It regenerates the file, so commit the result.
 - `web-client:lint`: lint (oxlint).
 - `web-client:typecheck`: typecheck (`tsc -b`).
+- `web-client:test`: component tests (Vitest, Testing Library, jsdom).
 - `web-client:build`: production build into `web-client/dist`.
-- `web-client:validate`: lint, typecheck and build, one after another. CI's stage 1 calls this.
-- `web-client:e2e`: build, serve `web-client/dist` from the `web-client-preview` service (nginx), run the Playwright suite in `e2e/web-client/` against it, then stop the server.
+- `web-client:validate`: route tree check, lint, typecheck, component tests, then the production build, one after another. CI's stage 1 calls this.
+
+How `web-client` code and tests are laid out (details in `web-client/README.md`):
+
+- Screens are TanStack Router file routes: one file per route in `web-client/src/routes/` (`__root.tsx` is the shared layout and the not-found page, `index.tsx` is `/`). To add a screen, add a route file; the Vite plugin regenerates `web-client/src/routeTree.gen.ts` (committed, never hand-edited). Generator options go in `web-client/tsr.config.json`.
+- A screen's component test goes next to its route, `web-client/src/routes/<route>.test.tsx`. It uses a page object in `web-client/src/routes/<route>.page.ts` whose `render()` mounts the whole app at that screen's URL (through `renderRoute(path)` in `web-client/src/test/render-route.tsx`), and whose other methods only find elements, by role and accessible name. The test performs every interaction itself with user-event: `const user = userEvent.setup()`, then `await user.click(await page.counter())`. Page objects have no action methods.
+- Type-level tests go in `*.test-d.tsx`, checked by `tsc -b`.
+- `web-client` has no browser suite of its own: anything the router or a screen decides, such as which page a URL shows, is a component test. What depends on how the build is hosted (a deep path gets the app; the bundle loads and mounts in a real browser) is in the cross-app suite, `e2e/`.
 
 `api` tasks act on the FastAPI app in `api/` and its PostgreSQL, the `api-db` service. Tasks that need the database start `api-db` and remove it afterwards unless it was already running:
 
@@ -51,8 +59,8 @@ Stack-wide tasks act on every app in the stack:
 - `api:openapi-check`: fail if `api/openapi.json` is not the document the app serves.
 - `api:openapi-breaking`: fail if `api/openapi.json` would break clients of the copy on a git ref (oasdiff, in the `api-oasdiff` service; it fails on level ERR, such as a removed path or field or a new required parameter). Additive changes pass. If the ref has no copy, it passes and says so. Defaults to `origin/main` (run `git fetch origin main` first); CI passes the base commit: `./bin/mise run api:openapi-breaking -- HEAD^`.
 - `api:test`: run the in-process tests in `api/tests/` (pytest) against a real PostgreSQL, the `api_test` database. Arguments go to pytest: `./bin/mise run api:test -- -k health`.
-- `api:validate`: lock check, lint, format check, typecheck, OpenAPI check and tests, one after another. CI's stage 1 calls this.
-- `api:e2e`: build the production image (`api/Dockerfile`), run it as `api-release` against `api-db`, run the pytest suite in `e2e/api/` against it, then stop what it started.
+- `api:validate`: lock check, lint, format check, typecheck, OpenAPI check, tests, then `api:e2e` (the shipped image), one after another. CI's stage 1 calls this.
+- `api:e2e`: build the production image (`api/Dockerfile`), run it as `api-release` against `api-db`, run the pytest suite in `api/e2e/` against it (from `api-e2e`, with the api's dev image and venv), then stop what it started.
 
 How `api` code and tests are laid out (details in `api/README.md`):
 
@@ -62,14 +70,14 @@ How `api` code and tests are laid out (details in `api/README.md`):
 - A pure function's tests go in `api/tests/unit/`.
 - Every case of a service's logic is tested in `api/tests/services/`, through its public methods, with the real database and the stand-ins in `api/tests/support/database_faults.py`.
 - A route's tests go in `api/tests/http/`: one real case per outcome, nothing faked, plus a check of each response against the OpenAPI document. They prove wiring and translation, not logic.
-- `e2e/api/tests/` has one end-to-end test per journey, on its happy path only.
+- `api/e2e/` drives the shipped image (`api-release`) over the network, with its real database: one test per journey, on its happy path only.
 
 ## CI
 
 `.github/workflows/ci.yml` runs on pull requests and on pushes to `main`. Each job is a checkout plus one `./bin/mise run` command, so the same command reproduces any failure locally:
 
-1. `validate (<app>)`: `./bin/mise run <app>:validate`, one matrix job per app. Alongside it, `openapi-breaking (<app>)` runs `./bin/mise run <app>:openapi-breaking -- HEAD^`, one matrix job per app with an OpenAPI document. It checks out two commits: on a pull request `HEAD^` is the base branch, and on a push to `main` it is `main` before the push.
-2. `e2e (<app>)`: `./bin/mise run <app>:e2e`, one matrix job per app with an end-to-end suite, after every app validates. Each job starts its own copy of the stack. On failure the job uploads the suite's report as the `e2e-report-<app>` artifact.
+1. `validate (<app>)`: `./bin/mise run <app>:validate`, one matrix job per app: everything the app can prove by itself, its own end-to-end suite included where it has one (api's shipped-image suite). On failure the job uploads that suite's report as the `validate-report-<app>` artifact. Alongside it, `openapi-breaking (<app>)` runs `./bin/mise run <app>:openapi-breaking -- HEAD^`, one matrix job per app with an OpenAPI document. It checks out two commits: on a pull request `HEAD^` is the base branch, and on a push to `main` it is `main` before the push.
+2. `e2e`: `./bin/mise run e2e`, one job for the cross-app suite in `e2e/`, after every app validates. It holds only what can fail because of how the apps are served or connected (today: the web client's hosting, through its stand-in). On failure the job uploads the suite's report as the `e2e-report` artifact.
 3. `ci-passed`: fails unless every job above succeeded. This is the check to require on `main`.
 
 ## Naming rule
@@ -82,11 +90,12 @@ How `api` code and tests are laid out (details in `api/README.md`):
   - a `<app>` service in `compose.dev.yaml`, and a service named `<app>-<role>` for anything else it needs to run (e.g. `api-db`), with its image in `dev/<app>-<role>/`;
   - a `# ---- <app>` block of `<app>:*` tasks in `mise.toml`, with the same task names where they apply;
   - an `<app>:validate` task that runs every check for the app, added to the stack-wide `validate` task's `depends` and to the `app` matrix of the `validate` job in `.github/workflows/ci.yml`.
-- An app's end-to-end suite (a client's, or a server's driven over HTTP) follows the same pattern under the `e2e` Compose profile, so `up` never starts it:
-  - the suite in `e2e/<app>/`;
-  - its runner image in `dev/<app>-e2e/` and an `<app>-e2e` service in `compose.dev.yaml`;
-  - any other service it needs, named `<app>-<role>` (e.g. `web-client-preview`, `api-release`), with its image in `dev/<app>-<role>/` (a server's production image stays in `<app>/Dockerfile`);
-  - an `<app>:e2e` task that runs the suite and stops what it started, added to the stack-wide `e2e` task's `depends` and to the `app` matrix of the `e2e` job in `.github/workflows/ci.yml`.
+- Everything an app can prove by itself goes in its `<app>:validate`. That includes an app's own end-to-end suite when it has one: a server's shipped image over HTTP, with what the app owns, such as its database (today `api`). It follows the same pattern under the `e2e` Compose profile, so `up` never starts it:
+  - the suite in `<app>/e2e/`, using the app's own test tooling and dependencies;
+  - an `<app>-e2e` service in `compose.dev.yaml` that runs it, with its runner image in `dev/<app>-e2e/` when the app's dev image can't run it (`api` reuses `dev/api`);
+  - any other service it needs, named `<app>-<role>` (e.g. `api-release`), with its image in `dev/<app>-<role>/` (a server's production image stays in `<app>/Dockerfile`);
+  - an `<app>:e2e` task that runs the suite and stops what it started, as the last step of `<app>:validate`.
+- The cross-app suite is the only one at the repository level: `e2e/`, run by the `e2e` service (image in `dev/e2e/`) and the stack-wide `e2e` task, which is CI's stage 2. It holds what can fail only because of how the apps are served or connected: the hosting in front of an app, and the wiring between apps. A service it needs is still named after the app it serves, `<app>-<role>` (e.g. `web-client-hosting`).
 - Don't rename the stack-wide tasks or another app's tasks.
 
 Each checkout (including each git worktree) gets its own Compose project, so stacks in different checkouts don't collide. If you add or change a task in `mise.toml`, update the lists above.

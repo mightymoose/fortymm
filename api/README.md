@@ -65,6 +65,7 @@ The example is the health check. `HealthCheck.run()` (`services/health_check.py`
 | A route is hooked up and converts each result | `tests/http/test_<resource>.py` | One case per outcome, through `api_client(database_url)` (`tests/support/api_client.py`): the whole app, the real service, the real database, nothing faked. Assert the status code and the exact document. Don't repeat the service's cases, and don't assert that the route called the service. |
 | A response matches the OpenAPI document | Same | `assert_matches_documented_response` (`tests/support/openapi.py`), once per documented status. |
 | App-wide error handling (404, 405, 500) | `tests/http/test_errors.py` | Same client. A behavior no real route triggers on demand gets a test-only route through `api_client(..., extra_routes=...)`. |
-| The shipped image is wired up | `../e2e/api/tests/` | One test per journey, happy path only, against `api-release`. |
+| The shipped image is wired up | `e2e/test_<journey>.py` | One test per journey, happy path only, against `api-release` (the production image) and its real database, over HTTP with the `api` fixture (`e2e/conftest.py`). Run by `api:e2e`, the last step of `api:validate`. |
+| The api and another app work together, or the hosting in front of the api | `../e2e/` | Only what can fail because of how the apps are served or connected; run by the stack-wide `e2e` task. |
 
-Tests are async (`pytestmark = pytest.mark.anyio`). A test that writes rows creates what it needs and is safe to run twice; the database is not reset between runs.
+`api:test` runs `tests/` only. Tests in `tests/` are async (`pytestmark = pytest.mark.anyio`). A test that writes rows creates what it needs and is safe to run twice; the database is not reset between runs.

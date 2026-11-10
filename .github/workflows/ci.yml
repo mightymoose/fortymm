@@ -2,12 +2,15 @@
 # same Compose stack, that reproduces it on a laptop. Nothing else is installed
 # on the runner; it needs only Docker and bash.
 #
-# Stage 1, validate: each app's <app>:validate, one matrix job per app; and
+# Stage 1, validate: each app's <app>:validate, one matrix job per app:
+#                    everything the app can prove by itself (api's includes
+#                    its shipped image against its database); and
 #   openapi-breaking: each <app>:openapi-breaking against the base commit, for
 #                    apps with an OpenAPI document.
-# Stage 2, e2e:      each <app>:e2e, one matrix job per app with a suite, once
-#                    every app is valid. Each job stands up its own copy of the
-#                    servers on its own runner, so suites can't share state.
+# Stage 2, e2e:      the stack-wide e2e task: one job for the cross-app suite in
+#                    e2e/ (what can fail only because of how the apps are
+#                    served or connected), once every app is valid. One suite,
+#                    so no matrix.
 # ci-passed:         the one check to require on main. Its name stays fixed as
 #                    apps and stages are added.
 name: CI
@@ -29,7 +32,7 @@ jobs:
   validate:
     name: validate (${{ matrix.app }})
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -45,6 +48,16 @@ jobs:
         env:
           APP: ${{ matrix.app }}
         run: ./bin/mise run "$APP:validate"
+      # Reports of an app's own end-to-end suite (today api's JUnit file).
+      - name: Upload the test reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: validate-report-${{ matrix.app }}
+          path: |
+            ${{ matrix.app }}/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
 
   openapi-breaking:
     name: openapi-breaking (${{ matrix.app }})
@@ -71,35 +84,24 @@ jobs:
         run: ./bin/mise run "$APP:openapi-breaking" -- "HEAD^"
 
   e2e:
-    name: e2e (${{ matrix.app }})
+    name: e2e
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        # One entry per app with an end-to-end suite; each must have an
-        # <app>:e2e task. A client that needs another runner (iOS: macOS) moves
-        # this to `include:` entries with an `os` and runs-on: ${{ matrix.os }}.
-        app:
-          - web-client
-          - api
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: ./bin/mise run ${{ matrix.app }}:e2e
-        env:
-          APP: ${{ matrix.app }}
-        run: ./bin/mise run "$APP:e2e"
+      - name: ./bin/mise run e2e
+        run: ./bin/mise run e2e
       - name: Upload the e2e report
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: e2e-report-${{ matrix.app }}
+          name: e2e-report
           path: |
-            e2e/${{ matrix.app }}/playwright-report/
-            e2e/${{ matrix.app }}/test-results/
+            e2e/playwright-report/
+            e2e/test-results/
           if-no-files-found: ignore
           retention-days: 14
 

@@ -1,3 +1,5 @@
+# api's suite against the image it ships (api-release), run by api:e2e, the
+# last step of api:validate. A bare `pytest` runs only tests/ (testpaths).
 import os
 from collections.abc import Iterator
 

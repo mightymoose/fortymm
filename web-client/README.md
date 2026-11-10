@@ -1,32 +1,45 @@
-# React + TypeScript + Vite
+# web-client
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The fortymm web client: Vite, React, TypeScript and [TanStack Router](https://tanstack.com/router) with file-based routing. Run everything through `./bin/mise run web-client:<task>` from the repository root, never with `npm` on the host; `CLAUDE.md` lists the tasks.
 
-Currently, two official plugins are available:
+## Routes
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Each screen is a file in `src/routes/`. The file name is the URL (`index.tsx` is `/`; `about.tsx` would be `/about`). See TanStack Router's [file naming conventions](https://tanstack.com/router/latest/docs/framework/react/routing/file-naming-conventions).
 
-## React Compiler
+- `src/routes/__root.tsx` is the root route: the layout every screen renders inside, and the not-found page shown for any URL that matches no route.
+- `src/routes/index.tsx` is the start page at `/`.
+- `src/router.ts` creates the router and registers it with the type checker, so a `<Link>` or `navigate()` to a path with no route file fails `web-client:typecheck`.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+To add a screen, add a route file that exports `Route = createFileRoute('/path')({ component })`. Nothing else needs registering. The Vite plugin regenerates `src/routeTree.gen.ts` when the dev server (`web-client:up`) starts, whenever a route file changes, and on build.
 
-## Expanding the Oxlint configuration
+`src/routeTree.gen.ts` is generated but committed, so the type checker and editors work on a fresh checkout. Don't edit it. If it disagrees with `src/routes/`, `web-client:routes-check` (first step of `web-client:validate`, so in CI) fails, regenerates it, and you commit the result. Generator options go in `tsr.config.json`, which both the Vite plugin and the check read. Lint skips the file.
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+## Tests
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+| What | Where | Run by |
+| --- | --- | --- |
+| A screen's behavior | `src/routes/<route>.test.tsx`, next to the route | `web-client:test` (Vitest, Testing Library, jsdom) |
+| Its page object | `src/routes/<route>.page.ts` | used by the test above |
+| Type-level claims | `src/**/*.test-d.tsx` | `web-client:typecheck` |
+| How the build is hosted (a deep path gets the app; the bundle loads and mounts in a real browser), and wiring to another app | `../e2e/` | the stack-wide `e2e` task (CI's stage 2) |
+
+web-client has no browser suite of its own. The production build is checked by `web-client:build`, the last step of `web-client:validate`. The hosting the cross-app suite drives today is `web-client-hosting`, an nginx stand-in (`dev/web-client-hosting/`) for the production hosting, Cloudflare Workers, which is not in this repository yet. When it lands, point the suite at it (for example the Workers runtime run locally) and remove the stand-in.
+
+A screen's page object has two kinds of method:
+
+- `render()` mounts the whole app at the screen's URL, through `renderRoute(path)` in `src/test/render-route.tsx`: the real route tree and router configuration, with an in-memory history. (`NotFoundPage.render(path)` takes any URL with no route, defaulting to `/no/such/page`.)
+- The rest only find elements, by role and accessible name (`heading()`, `counter()`).
+
+The test does the interactions itself, with user-event, so they read in its body:
+
+```tsx
+const user = userEvent.setup()
+const start = new StartPage()
+await start.render()
+await user.click(await start.counter())
+expect(await start.counter()).toHaveAccessibleName('Count is 1')
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Don't add action methods (`clickCounter()`) to a page object. The route generator ignores `*.test.*` and `*.page.*` files in `src/routes/` (`tsr.config.json`).
+
+Lint's fast-refresh rule (`react/only-export-components`) is off in `src/routes/`: a route file exports `Route` next to its components by design, and the router plugin handles hot reload for it.
