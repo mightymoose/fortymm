@@ -2,8 +2,10 @@
 # same Compose stack, that reproduces it on a laptop. Nothing else is installed
 # on the runner; it needs only Docker and bash.
 #
-# Stage 1, validate: each app's <app>:validate, one matrix job per app.
-# Stage 2, e2e:      each client's <app>:e2e, one matrix job per client, once
+# Stage 1, validate: each app's <app>:validate, one matrix job per app; and
+#   openapi-breaking: each <app>:openapi-breaking against the base commit, for
+#                    apps with an OpenAPI document.
+# Stage 2, e2e:      each <app>:e2e, one matrix job per app with a suite, once
 #                    every app is valid. Each job stands up its own copy of the
 #                    servers on its own runner, so suites can't share state.
 # ci-passed:         the one check to require on main. Its name stays fixed as
@@ -34,6 +36,7 @@ jobs:
         # One entry per app; each must have an <app>:validate task.
         app:
           - web-client
+          - api
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -43,6 +46,30 @@ jobs:
           APP: ${{ matrix.app }}
         run: ./bin/mise run "$APP:validate"
 
+  openapi-breaking:
+    name: openapi-breaking (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # One entry per app with an OpenAPI document; each must have an
+        # <app>:openapi-breaking task.
+        app:
+          - api
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # HEAD and its first parent. On a pull request HEAD is GitHub's merge
+          # commit, whose first parent is the base branch; on a push to main it
+          # is main before the push. Either way HEAD^ is what clients rely on.
+          fetch-depth: 2
+      - name: ./bin/mise run ${{ matrix.app }}:openapi-breaking -- HEAD^
+        env:
+          APP: ${{ matrix.app }}
+        run: ./bin/mise run "$APP:openapi-breaking" -- "HEAD^"
+
   e2e:
     name: e2e (${{ matrix.app }})
     needs: validate
@@ -51,11 +78,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # One entry per client with an end-to-end suite; each must have an
+        # One entry per app with an end-to-end suite; each must have an
         # <app>:e2e task. A client that needs another runner (iOS: macOS) moves
         # this to `include:` entries with an `os` and runs-on: ${{ matrix.os }}.
         app:
           - web-client
+          - api
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -77,7 +105,7 @@ jobs:
 
   ci-passed:
     name: ci-passed
-    needs: [validate, e2e]
+    needs: [validate, openapi-breaking, e2e]
     # Run even when a stage failed or was skipped, so this check always reports.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest

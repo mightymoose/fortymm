@@ -1,0 +1,200 @@
+{
+  "components": {
+    "schemas": {
+      "DatabaseUnavailableError": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "database_unavailable",
+            "default": "database_unavailable",
+            "title": "Code",
+            "type": "string"
+          },
+          "status": {
+            "const": "503",
+            "default": "503",
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "const": "The database did not answer",
+            "default": "The database did not answer",
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "code",
+          "title"
+        ],
+        "title": "DatabaseUnavailableError",
+        "type": "object"
+      },
+      "DatabaseUnavailableErrorDocument": {
+        "additionalProperties": false,
+        "properties": {
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/DatabaseUnavailableError"
+            },
+            "minItems": 1,
+            "title": "Errors",
+            "type": "array"
+          }
+        },
+        "required": [
+          "errors"
+        ],
+        "title": "DatabaseUnavailableErrorDocument",
+        "type": "object"
+      },
+      "HealthAttributes": {
+        "additionalProperties": false,
+        "properties": {
+          "database": {
+            "const": "ok",
+            "title": "Database",
+            "type": "string"
+          }
+        },
+        "required": [
+          "database"
+        ],
+        "title": "HealthAttributes",
+        "type": "object"
+      },
+      "HealthDocument": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/HealthResource"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "HealthDocument",
+        "type": "object"
+      },
+      "HealthResource": {
+        "additionalProperties": false,
+        "properties": {
+          "attributes": {
+            "$ref": "#/components/schemas/HealthAttributes"
+          },
+          "id": {
+            "const": "api",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "health",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "attributes"
+        ],
+        "title": "HealthResource",
+        "type": "object"
+      },
+      "InternalServerError": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "internal_server_error",
+            "default": "internal_server_error",
+            "title": "Code",
+            "type": "string"
+          },
+          "status": {
+            "const": "500",
+            "default": "500",
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "const": "Internal Server Error",
+            "default": "Internal Server Error",
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "code",
+          "title"
+        ],
+        "title": "InternalServerError",
+        "type": "object"
+      },
+      "InternalServerErrorDocument": {
+        "additionalProperties": false,
+        "properties": {
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/InternalServerError"
+            },
+            "minItems": 1,
+            "title": "Errors",
+            "type": "array"
+          }
+        },
+        "required": [
+          "errors"
+        ],
+        "title": "InternalServerErrorDocument",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "fortymm API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/health": {
+      "get": {
+        "operationId": "get_health",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthDocument"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalServerErrorDocument"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseUnavailableErrorDocument"
+                }
+              }
+            },
+            "description": "The database did not answer"
+          }
+        },
+        "summary": "Whether the API can reach its database"
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+# The production image needs only these.
+*
+!pyproject.toml
+!uv.lock
+!src/
+src/**/__pycache__
