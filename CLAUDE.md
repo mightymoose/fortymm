@@ -39,7 +39,7 @@ Stack-wide tasks act on every app in the stack:
 `.github/workflows/ci.yml` runs on pull requests and on pushes to `main`. Each job is a checkout plus one `./bin/mise run` command, so the same command reproduces any failure locally:
 
 1. `validate (<app>)`: `./bin/mise run <app>:validate`, one matrix job per app.
-2. `e2e`: `./bin/mise run e2e`, after every app validates. On failure the Playwright reports are uploaded as the `playwright-reports` artifact.
+2. `e2e (<app>)`: `./bin/mise run <app>:e2e`, one matrix job per client, after every app validates. Each job starts its own copy of the stack. On failure the job uploads the suite's report as the `e2e-report-<app>` artifact.
 3. `ci-passed`: fails unless every job above succeeded. This is the check to require on `main`.
 
 ## Naming rule
@@ -56,7 +56,7 @@ Stack-wide tasks act on every app in the stack:
   - the suite in `e2e/<app>/`;
   - its runner image in `dev/<app>-e2e/` and an `<app>-e2e` service in `compose.dev.yaml`;
   - any other service it needs, named `<app>-<role>` (e.g. `web-client-preview`), with its image in `dev/<app>-<role>/`;
-  - an `<app>:e2e` task that runs the suite and stops what it started, added to the stack-wide `e2e` task's `depends`.
+  - an `<app>:e2e` task that runs the suite and stops what it started, added to the stack-wide `e2e` task's `depends` and to the `app` matrix of the `e2e` job in `.github/workflows/ci.yml`.
 - Don't rename the stack-wide tasks or another app's tasks.
 
 Each checkout (including each git worktree) gets its own Compose project, so stacks in different checkouts don't collide. If you add or change a task in `mise.toml`, update the lists above.

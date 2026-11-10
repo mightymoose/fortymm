@@ -3,7 +3,9 @@
 # on the runner; it needs only Docker and bash.
 #
 # Stage 1, validate: each app's <app>:validate, one matrix job per app.
-# Stage 2, e2e:      the stack-wide e2e task, once every app is valid.
+# Stage 2, e2e:      each client's <app>:e2e, one matrix job per client, once
+#                    every app is valid. Each job stands up its own copy of the
+#                    servers on its own runner, so suites can't share state.
 # ci-passed:         the one check to require on main. Its name stays fixed as
 #                    apps and stages are added.
 name: CI
@@ -42,24 +44,34 @@ jobs:
         run: ./bin/mise run "$APP:validate"
 
   e2e:
-    name: e2e
+    name: e2e (${{ matrix.app }})
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # One entry per client with an end-to-end suite; each must have an
+        # <app>:e2e task. A client that needs another runner (iOS: macOS) moves
+        # this to `include:` entries with an `os` and runs-on: ${{ matrix.os }}.
+        app:
+          - web-client
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: ./bin/mise run e2e
-        run: ./bin/mise run e2e
-      - name: Upload Playwright reports
+      - name: ./bin/mise run ${{ matrix.app }}:e2e
+        env:
+          APP: ${{ matrix.app }}
+        run: ./bin/mise run "$APP:e2e"
+      - name: Upload the e2e report
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: playwright-reports
+          name: e2e-report-${{ matrix.app }}
           path: |
-            e2e/*/playwright-report/
-            e2e/*/test-results/
+            e2e/${{ matrix.app }}/playwright-report/
+            e2e/${{ matrix.app }}/test-results/
           if-no-files-found: ignore
           retention-days: 14
 
