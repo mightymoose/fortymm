@@ -14,14 +14,28 @@ To add a screen, add a route file that exports `Route = createFileRoute('/path')
 
 `src/routeTree.gen.ts` is generated but committed, so the type checker and editors work on a fresh checkout. Don't edit it. If it disagrees with `src/routes/`, `web-client:routes-check` (first step of `web-client:validate`, so in CI) fails, regenerates it, and you commit the result. Generator options go in `tsr.config.json`, which both the Vite plugin and the check read. Lint skips the file.
 
+## Calling the api
+
+| What | Where |
+| --- | --- |
+| The api's types, generated from `../api/openapi.json` | `src/api/schema.gen.ts` (committed, never edited) |
+| The one client every call goes through (openapi-fetch) | `src/api/client.ts` |
+| A call, turned into what a screen needs | `src/api/<resource>.ts`, e.g. `fetchHealth()` in `src/api/health.ts` |
+| The call's MSW handlers, for component tests | `src/test/api/<resource>.ts` |
+
+- **Types.** `web-client:api-types` regenerates `src/api/schema.gen.ts` with [openapi-typescript](https://openapi-ts.dev/). Run it after `api:openapi` changes the document, and commit both. `web-client:api-types-check` (in `web-client:validate`, so in CI) fails when the file is stale, and regenerates it. The generator runs in its own tool image, `dev/web-client-openapi/`, because it needs TypeScript 5's compiler API and this app is on TypeScript 7.
+- **Client.** [openapi-fetch](https://openapi-ts.dev/openapi-fetch/) typed by those types: `api.GET('/v1/health')`. A path the document doesn't have, or a field it doesn't declare, fails `web-client:typecheck`. Paths are the api's own (`/v1/...`).
+- **Where the api is.** At `/api` on the app's own origin. Whatever serves the app forwards `/api/*` to the api with `/api` stripped, so `/api/v1/health` reaches the api's `/v1/health`: Vite's `server.proxy` in dev (`vite.config.ts`, to the `api` service), `web-client-hosting`'s nginx in the cross-app suite, and the production hosting when it lands. So no route file may produce a URL starting with `/api`.
+- **Screens that load data** use a route `loader` that calls the `src/api/` function, and a `pendingComponent` for while it's on the way (see `src/routes/health.tsx`). Turn every answer, including "couldn't reach the api", into data the component shows; don't let the loader throw for an answer the api can give.
+
 ## Tests
 
 | What | Where | Run by |
 | --- | --- | --- |
 | A screen's behavior | `src/routes/<route>.test.tsx`, next to the route | `web-client:test` (Vitest, Testing Library, jsdom) |
 | Its page object | `src/routes/<route>.page.ts` | used by the test above |
-| Type-level claims | `src/**/*.test-d.tsx` | `web-client:typecheck` |
-| How the build is hosted (a deep path gets the app; the bundle loads and mounts in a real browser), and wiring to another app | `../e2e/` | the stack-wide `e2e` task (CI's stage 2) |
+| Type-level claims (the router's paths; the client and mocks typed from the document) | `src/**/*.test-d.ts(x)` | `web-client:typecheck` |
+| How the build is hosted (a deep path gets the app; the bundle loads and mounts in a real browser), and wiring to another app (the hosted page reaches the api: `e2e/tests/health.spec.ts`) | `../e2e/` | the stack-wide `e2e` task (CI's stage 2) |
 
 web-client has no browser suite of its own. The production build is checked by `web-client:build`, the last step of `web-client:validate`. The hosting the cross-app suite drives today is `web-client-hosting`, an nginx stand-in (`dev/web-client-hosting/`) for the production hosting, Cloudflare Workers, which is not in this repository yet. When it lands, point the suite at it (for example the Workers runtime run locally) and remove the stand-in.
 
@@ -39,6 +53,21 @@ await start.render()
 await user.click(await start.counter())
 expect(await start.counter()).toHaveAccessibleName('Count is 1')
 ```
+
+### A screen that calls the api
+
+[MSW](https://mswjs.io/) stands in for the api, at the network level, so the client and everything above it run for real. `src/test/setup.ts` starts the server (`src/test/api/server.ts`) once per file, resets its handlers after each test, and fails any test that sent a request no handler answered. There are no default handlers: each test says how the api answers, before `render()`:
+
+```tsx
+server.use(databaseUnavailable())
+const page = new HealthPage()
+await page.render()
+expect(await page.databaseUnavailable()).toBeVisible()
+```
+
+Handlers live in `src/test/api/<resource>.ts`, one function per way the api can answer. Write them with the `http` from `src/test/api/server.ts` ([openapi-msw](https://github.com/christoph-fricke/openapi-msw)) and `response(status).json(body)`. Path, status and body are then checked against the document, so a mock can't return what the api doesn't send. It matches the URL the browser really requests (`/api/v1/health`), while you write the api's own path (`/v1/health`). For an answer the document doesn't declare on purpose (a network error, an HTML page from a misrouted host), use `response.untyped(...)`.
+
+`renderRoute()` doesn't wait for the route's loader, so a test can see the pending state. Every finder is a `findBy*`, which waits.
 
 Don't add action methods (`clickCounter()`) to a page object. The route generator ignores `*.test.*` and `*.page.*` files in `src/routes/` (`tsr.config.json`).
 

@@ -18,7 +18,7 @@ Stack-wide tasks act on every app in the stack:
 - `ports`: print every published port as a URL (`postgresql://` for the database, `http://` otherwise). Host ports are random and change when an app restarts.
 - `logs`: follow the logs of every app.
 - `validate`: validate every app (runs each `<app>:validate`).
-- `e2e`: run the cross-app suite in `e2e/`: what can fail only because of how the apps are served or connected. It typechecks the suite, builds `web-client`, serves the build from `web-client-hosting`, runs the Playwright suite against it (in the `e2e` service), then stops the server. `web-client-hosting` is an nginx stand-in for the production hosting (Cloudflare Workers, not in this repository yet).
+- `e2e`: run the cross-app suite in `e2e/`: what can fail only because of how the apps are served or connected. It typechecks the suite, builds `web-client`, serves the build from `web-client-hosting`, brings up `api-release` (the api's production image) and `api-db` behind it, runs the Playwright suite against it (in the `e2e` service), then stops what it started. `web-client-hosting` is an nginx stand-in for the production hosting (Cloudflare Workers, not in this repository yet); like the real hosting must, it forwards `/api/*` to the api with `/api` stripped.
 
 `web-client` tasks act on the Vite + React app in `web-client/` only:
 
@@ -29,18 +29,22 @@ Stack-wide tasks act on every app in the stack:
 - `web-client:exec`: run any command in a `web-client` container, e.g. `./bin/mise run web-client:exec -- npx vite --version`.
 - `web-client:install`: install dependencies. With arguments, add packages: `./bin/mise run web-client:install -- zod`, `./bin/mise run web-client:install -- -D vitest`.
 - `web-client:routes-check`: fail if the generated route tree `web-client/src/routeTree.gen.ts` is stale against `web-client/src/routes/`. It regenerates the file, so commit the result.
+- `web-client:api-types`: regenerate the api types `web-client/src/api/schema.gen.ts` from `api/openapi.json` (openapi-typescript, in the `web-client-openapi` tool service). Run it after `api:openapi` changes the document, and commit the file.
+- `web-client:api-types-check`: fail if `web-client/src/api/schema.gen.ts` is stale against `api/openapi.json`. It regenerates the file, so commit the result. This is the one place `web-client` reads a file of another app.
 - `web-client:lint`: lint (oxlint).
 - `web-client:typecheck`: typecheck (`tsc -b`).
 - `web-client:test`: component tests (Vitest, Testing Library, jsdom).
 - `web-client:build`: production build into `web-client/dist`.
-- `web-client:validate`: route tree check, lint, typecheck, component tests, then the production build, one after another. CI's stage 1 calls this.
+- `web-client:validate`: route tree check, api types check, lint, typecheck, component tests, then the production build, one after another. CI's stage 1 calls this.
 
 How `web-client` code and tests are laid out (details in `web-client/README.md`):
 
 - Screens are TanStack Router file routes: one file per route in `web-client/src/routes/` (`__root.tsx` is the shared layout and the not-found page, `index.tsx` is `/`). To add a screen, add a route file; the Vite plugin regenerates `web-client/src/routeTree.gen.ts` (committed, never hand-edited). Generator options go in `web-client/tsr.config.json`.
 - A screen's component test goes next to its route, `web-client/src/routes/<route>.test.tsx`. It uses a page object in `web-client/src/routes/<route>.page.ts` whose `render()` mounts the whole app at that screen's URL (through `renderRoute(path)` in `web-client/src/test/render-route.tsx`), and whose other methods only find elements, by role and accessible name. The test performs every interaction itself with user-event: `const user = userEvent.setup()`, then `await user.click(await page.counter())`. Page objects have no action methods.
-- Type-level tests go in `*.test-d.tsx`, checked by `tsc -b`.
-- `web-client` has no browser suite of its own: anything the router or a screen decides, such as which page a URL shows, is a component test. What depends on how the build is hosted (a deep path gets the app; the bundle loads and mounts in a real browser) is in the cross-app suite, `e2e/`.
+- The web client calls the api only through the typed client in `web-client/src/api/client.ts` (openapi-fetch, typed by the generated `schema.gen.ts`); a call that turns an answer into what the app needs goes next to it (`web-client/src/api/health.ts`). The browser reaches the api at `/api` on the app's own origin, and whatever serves the app forwards `/api/*` to the api's paths (`/api/v1/health` to `/v1/health`): Vite's proxy in dev, `web-client-hosting` in the cross-app suite. No route of the app may start with `/api`.
+- In component tests, MSW stands in for the api (`web-client/src/test/api/server.ts`, started by `web-client/src/test/setup.ts`). A test says how the api answers with `server.use(...)` and a handler from `web-client/src/test/api/<resource>.ts`, typed from the same document. A request no handler answers fails the test.
+- Type-level tests go in `*.test-d.ts` or `*.test-d.tsx`, checked by `tsc -b` (`web-client/src/api/client.test-d.ts` proves the client and the mocks are typed from the document).
+- `web-client` has no browser suite of its own: anything the router or a screen decides, such as which page a URL shows, is a component test. What depends on how the build is hosted (a deep path gets the app; the bundle loads and mounts in a real browser; the hosted page reaches the api through the hosting) is in the cross-app suite, `e2e/`.
 
 `api` tasks act on the FastAPI app in `api/` and its PostgreSQL, the `api-db` service. Tasks that need the database start `api-db` and remove it afterwards unless it was already running:
 
@@ -77,7 +81,7 @@ How `api` code and tests are laid out (details in `api/README.md`):
 `.github/workflows/ci.yml` runs on pull requests and on pushes to `main`. Each job is a checkout plus one `./bin/mise run` command, so the same command reproduces any failure locally:
 
 1. `validate (<app>)`: `./bin/mise run <app>:validate`, one matrix job per app: everything the app can prove by itself, its own end-to-end suite included where it has one (api's shipped-image suite). On failure the job uploads that suite's report as the `validate-report-<app>` artifact. Alongside it, `openapi-breaking (<app>)` runs `./bin/mise run <app>:openapi-breaking -- HEAD^`, one matrix job per app with an OpenAPI document. It checks out two commits: on a pull request `HEAD^` is the base branch, and on a push to `main` it is `main` before the push.
-2. `e2e`: `./bin/mise run e2e`, one job for the cross-app suite in `e2e/`, after every app validates. It holds only what can fail because of how the apps are served or connected (today: the web client's hosting, through its stand-in). On failure the job uploads the suite's report as the `e2e-report` artifact.
+2. `e2e`: `./bin/mise run e2e`, one job for the cross-app suite in `e2e/`, after every app validates. It holds only what can fail because of how the apps are served or connected (today: the web client's hosting, through its stand-in, and the web client reaching the api through it). On failure the job uploads the suite's report as the `e2e-report` artifact.
 3. `ci-passed`: fails unless every job above succeeded. This is the check to require on `main`.
 
 ## Naming rule
