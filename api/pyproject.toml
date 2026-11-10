@@ -41,3 +41,5 @@ plugins = ["pydantic.mypy"]
 testpaths = ["tests"]
 addopts = ["--strict-markers", "--strict-config"]
 xfail_strict = true
+# Two operations with one operationId would collide in a generated client.
+filterwarnings = ["error:Duplicate Operation ID"]

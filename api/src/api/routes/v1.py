@@ -4,6 +4,8 @@ paths written without the prefix."""
 from fastapi import APIRouter
 
 from api.routes import health
+from api.routes.errors import InternalServerError, documented
 
-router = APIRouter(prefix="/v1")
+# Any operation can fail with an unhandled exception, so every one documents the 500.
+router = APIRouter(prefix="/v1", responses=documented(InternalServerError))
 router.include_router(health.router)

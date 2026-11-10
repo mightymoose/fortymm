@@ -8,7 +8,7 @@ fortymm's HTTP API: FastAPI on Python 3.15, with PostgreSQL 18 (the `api-db` ser
 | --- | --- |
 | `src/api/services/<concern>.py` | A service class that holds one piece of logic, plus the plain results it returns (frozen dataclasses). It returns results for expected outcomes instead of raising, and knows nothing about HTTP or the response format: no status codes, no FastAPI types, no `data` or `errors`. |
 | `src/api/routes/<resource>.py` | A route gets its service from `api.dependencies`, calls it, and converts each result into a status code and a response document (below). Its response models (`<Resource>Document`, `<Resource>Resource`, `<Resource>Attributes`) live in the same file. No logic of its own. |
-| `src/api/routes/errors.py` | The error document: `ErrorDocument`, `error_response()` for routes, and the handlers that give FastAPI's own errors the same shape. |
+| `src/api/routes/errors.py` | The error shape (`ErrorObject`, `ErrorDocument`), the shared errors (404, 405, 500), `documented()` and `error_response()` for routes, and the handlers that give FastAPI's own errors the same shape. |
 | `src/api/routes/v1.py` | The `/v1` router. A new route module joins it with `router.include_router(...)` and writes its paths without the prefix. `/openapi.json` and `/docs` stay unversioned: one document covers every version. |
 | `src/api/dependencies.py` | FastAPI dependencies that build services from settings (and, later, the connection pool). |
 | `src/api/app.py` | `create_app()`: reads settings from the environment at startup (`src/api/settings.py`; `DATABASE_URL`), installs the error handlers and includes the routers. |
@@ -36,8 +36,22 @@ Response bodies are shaped after [JSON:API](https://jsonapi.org/format/), as ins
   {"errors": [{"status": "503", "code": "database_unavailable", "title": "The database did not answer"}]}
   ```
 
-  Routes build errors with `error_response(status, code=..., title=...)`; don't raise `HTTPException` with a `detail`, as the detail is dropped. FastAPI's own 404 and 405 (with its `Allow` header) and any unhandled exception (500) come out in this shape too; the 500's cause goes to the server log. Request validation errors (422) don't yet, because no endpoint takes input. The first one that does should convert them in `routes/errors.py`, using `detail` and `source`.
+  **Each error is a typed class.** Subclass `ErrorObject` (`routes/errors.py`) and pin all three members to constants. An error a route owns sits in the route's file; a shared one sits in `routes/errors.py`.
+
+  ```python
+  class DatabaseUnavailableError(ErrorObject):
+      status: Literal["503"] = "503"
+      code: Literal["database_unavailable"] = "database_unavailable"
+      title: Literal["The database did not answer"] = "The database did not answer"
+  ```
+
+  - **Declaring and sending:** a route declares an error with `responses=documented(DatabaseUnavailableError)` and sends it with `return error_response(DatabaseUnavailableError())`. Both go through the class's `DatabaseUnavailableErrorDocument`, so the OpenAPI document and the body can't drift apart. The document says the 503's `status` is `"503"` and its `code` is `"database_unavailable"`, and a generated client can narrow on `code`.
+  - **`title` is a constant too:** JSON:API says it doesn't change between occurrences, and pinning it puts a change in the document's diff. If titles are ever localized, loosen it to a string then.
+  - **Don't raise `HTTPException` with a `detail`:** the detail is dropped.
+  - **FastAPI's own errors** come out in this shape too: 404 (`NotFoundError`), 405 (`MethodNotAllowedError`, with its `Allow` header) and any unhandled exception (`InternalServerError`, its cause in the server log). The `/v1` router documents the 500 on every operation, since any operation can raise. 404 and 405 are not documented: they are about paths and methods the document doesn't list.
+  - **Request validation errors (422)** are not converted yet, because no endpoint takes input. The first one that does should convert them in `routes/errors.py`, using `detail` and `source`.
 - **Services never return either shape.** They return plain results. The route is the only place that knows about `data`, `errors` and status codes.
+- **Operation IDs** come from the route function's name (`operation_id()` in `app.py`): `get_health`. A new route gets one with no extra work. Name route functions verb_noun and keep them unique across the API; `api:openapi` and the tests fail on a duplicate.
 - **Media type** stays `application/json`, not JSON:API's `application/vnd.api+json`. We don't follow the spec's content negotiation rules, and plain JSON is what curl, load balancers and generic clients expect.
 
 The example is the health check. `HealthCheck.run()` (`services/health_check.py`) runs `SELECT 1` within 2 seconds, logs the cause of a failure, and returns `HealthOk` or `HealthUnavailable`. `GET /v1/health` (`routes/health.py`, mounted by `routes/v1.py`) converts them into the 200 and 503 documents above.

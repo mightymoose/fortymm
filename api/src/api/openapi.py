@@ -7,13 +7,19 @@ python -m api.openapi openapi.json --check  # exit 1 if the file differs
 import argparse
 import json
 import sys
+import warnings
 from pathlib import Path
 
 from api.app import create_app
 
 
 def render() -> str:
-    return json.dumps(create_app().openapi(), indent=2, sort_keys=True) + "\n"
+    with warnings.catch_warnings():
+        # FastAPI only warns when two operations share an operationId; a client generated
+        # from that document would lose one of them, so make it fail instead.
+        warnings.filterwarnings("error", message="Duplicate Operation ID")
+        document = create_app().openapi()
+    return json.dumps(document, indent=2, sort_keys=True) + "\n"
 
 
 def main() -> int:
