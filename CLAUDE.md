@@ -53,7 +53,13 @@ Stack-wide tasks act on every app in the stack:
 - `api:validate`: lock check, lint, format check, typecheck, OpenAPI check and tests, one after another. CI's stage 1 calls this.
 - `api:e2e`: build the production image (`api/Dockerfile`), run it as `api-release` against `api-db`, run the pytest suite in `e2e/api/` against it, then stop what it started.
 
-Where `api` tests go (see `api/README.md`): a pure function's tests in `api/tests/unit/`; a route's tests in `api/tests/http/`, through the app's HTTP interface with the real database (`tests/support/`); one end-to-end test per journey in `e2e/api/tests/`, on its happy path only.
+How `api` code and tests are laid out (details in `api/README.md`):
+
+- Logic lives in a service class in `api/src/api/services/`. It returns result models and knows nothing about HTTP. A route in `api/src/api/routes/` gets the service from `api/src/api/dependencies.py` and only turns each result into a status code and body.
+- A pure function's tests go in `api/tests/unit/`.
+- Every case of a service's logic is tested in `api/tests/services/`, through its public methods, with the real database and the stand-ins in `api/tests/support/database_faults.py`.
+- A route's tests go in `api/tests/http/`: one real case per outcome, nothing faked, plus a check of each response against the OpenAPI document. They prove wiring and translation, not logic.
+- `e2e/api/tests/` has one end-to-end test per journey, on its happy path only.
 
 ## CI
 
