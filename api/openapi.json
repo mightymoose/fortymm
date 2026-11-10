@@ -1,0 +1,87 @@
+{
+  "components": {
+    "schemas": {
+      "HealthOk": {
+        "additionalProperties": false,
+        "properties": {
+          "database": {
+            "const": "ok",
+            "default": "ok",
+            "title": "Database",
+            "type": "string"
+          },
+          "status": {
+            "const": "ok",
+            "default": "ok",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "database"
+        ],
+        "title": "HealthOk",
+        "type": "object"
+      },
+      "HealthUnavailable": {
+        "additionalProperties": false,
+        "properties": {
+          "database": {
+            "const": "unavailable",
+            "default": "unavailable",
+            "title": "Database",
+            "type": "string"
+          },
+          "status": {
+            "const": "unavailable",
+            "default": "unavailable",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "database"
+        ],
+        "title": "HealthUnavailable",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "fortymm API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthOk"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthUnavailable"
+                }
+              }
+            },
+            "description": "The database did not answer SELECT 1 in time"
+          }
+        },
+        "summary": "Whether the API can reach its database"
+      }
+    }
+  }
+}

@@ -3,7 +3,7 @@
 # on the runner; it needs only Docker and bash.
 #
 # Stage 1, validate: each app's <app>:validate, one matrix job per app.
-# Stage 2, e2e:      each client's <app>:e2e, one matrix job per client, once
+# Stage 2, e2e:      each <app>:e2e, one matrix job per app with a suite, once
 #                    every app is valid. Each job stands up its own copy of the
 #                    servers on its own runner, so suites can't share state.
 # ci-passed:         the one check to require on main. Its name stays fixed as
@@ -34,6 +34,7 @@ jobs:
         # One entry per app; each must have an <app>:validate task.
         app:
           - web-client
+          - api
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -51,11 +52,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # One entry per client with an end-to-end suite; each must have an
+        # One entry per app with an end-to-end suite; each must have an
         # <app>:e2e task. A client that needs another runner (iOS: macOS) moves
         # this to `include:` entries with an `os` and runs-on: ${{ matrix.os }}.
         app:
           - web-client
+          - api
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

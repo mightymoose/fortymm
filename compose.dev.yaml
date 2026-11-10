@@ -3,17 +3,32 @@
 # DEV_GID (the host user).
 #
 # One service per app. The service is named after the app's directory, and its
-# dev image lives in dev/<app>/.
+# dev image lives in dev/<app>/. A service an app needs to run, such as its
+# database, is <app>-<role> (api-db), with its image in dev/<app>-<role>/.
 #
 # Services that exist only for end-to-end tests are in the `e2e` profile, so
 # `up` never starts them:
 #   <app>-e2e      runs the app's end-to-end suite from e2e/<app>/
-#   <app>-<role>   anything else the suite needs, e.g. web-client-preview
+#   <app>-<role>   anything else the suite needs, e.g. web-client-preview, or
+#                  api-release (api's production image)
 
 # Containers that write to the checkout run as the host user, so files they
 # create (web-client/dist, Playwright reports) are writable by the host on
 # Linux too, where a bind mount keeps the container's uid.
 x-host-user: &host-user "${DEV_UID:-1000}:${DEV_GID:-1000}"
+
+# How api reaches its database: the configuration the stack gives both the dev
+# server (api) and the production image (api-release).
+x-api-database-url: &api-database-url postgresql://api:api@api-db:5432/api
+
+# Liveness for a Python image: something accepts connections on port 8000.
+# Deliberately not GET /health, so a failing health check is the end-to-end
+# suite's to report, not a reason the stack never starts.
+x-api-listening: &api-listening
+  test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), timeout=1)"]
+  interval: 5s
+  timeout: 2s
+  retries: 5
 
 services:
   web-client:
@@ -32,6 +47,50 @@ services:
       timeout: 2s
       retries: 5
       start_period: 180s
+      start_interval: 1s
+
+  # FastAPI under uvicorn --reload. The first start installs the venv.
+  api:
+    build:
+      context: ./dev/api
+    user: *host-user
+    environment:
+      DATABASE_URL: *api-database-url
+      # For api:test, which runs in this service's container.
+      TEST_DATABASE_URL: postgresql://api:api@api-db:5432/api_test
+    volumes:
+      - ./api:/app
+      - api-venv:/opt/venvs
+    ports:
+      - "127.0.0.1::8000"
+    depends_on:
+      api-db:
+        condition: service_healthy
+    healthcheck:
+      <<: *api-listening
+      start_period: 180s
+      start_interval: 1s
+
+  # api's PostgreSQL. Databases: api (the dev server) and api_test (api:test).
+  api-db:
+    build:
+      context: ./dev/api-db
+    environment:
+      POSTGRES_USER: api
+      POSTGRES_PASSWORD: api
+      POSTGRES_DB: api
+    volumes:
+      - api-db-data:/var/lib/postgresql
+    ports:
+      - "127.0.0.1::5432"
+    healthcheck:
+      # Over TCP: during first-run initialization the server listens only on
+      # its Unix socket, so this stays false until the real server is up.
+      test: ["CMD", "pg_isready", "--host", "127.0.0.1", "--username", "api", "--dbname", "api"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+      start_period: 60s
       start_interval: 1s
 
   # ---- e2e ------------------------------------------------------------------
@@ -71,6 +130,40 @@ services:
       web-client-preview:
         condition: service_healthy
 
+  # api's production image (api/Dockerfile) with its real start command,
+  # configured like the dev server and using the same api-db.
+  api-release:
+    profiles: [e2e]
+    build:
+      context: ./api
+    environment:
+      DATABASE_URL: *api-database-url
+    depends_on:
+      api-db:
+        condition: service_healthy
+    healthcheck:
+      <<: *api-listening
+      start_period: 30s
+      start_interval: 1s
+
+  # pytest, driving api-release over the stack's network.
+  api-e2e:
+    profiles: [e2e]
+    build:
+      context: ./dev/api-e2e
+    user: *host-user
+    environment:
+      BASE_URL: http://api-release:8000
+    volumes:
+      - ./e2e/api:/app
+      - api-e2e-venv:/opt/venvs
+    depends_on:
+      api-release:
+        condition: service_healthy
+
 volumes:
   web-client-node-modules:
   web-client-e2e-node-modules:
+  api-venv:
+  api-db-data:
+  api-e2e-venv:

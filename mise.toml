@@ -18,7 +18,8 @@ COMPOSE_PROJECT_NAME = "fortymm-{{ config_root | basename | kebabcase }}-{{ conf
 # files they create stay writable on Linux hosts (CI runners included).
 DEV_UID = "{{ exec(command='id -u') }}"
 DEV_GID = "{{ exec(command='id -g') }}"
-DEV_PORTS_FORMAT = "{% raw %}{{range .Publishers}}{{if .PublishedPort}}{{$.Service}}  {{.TargetPort}}/{{.Protocol}} -> http://{{.URL}}:{{.PublishedPort}}{{println}}{{end}}{{end}}{% endraw %}"
+# PostgreSQL's port (5432) prints as a postgresql:// URL, every other as http://.
+DEV_PORTS_FORMAT = "{% raw %}{{range .Publishers}}{{if .PublishedPort}}{{$.Service}}  {{.TargetPort}}/{{.Protocol}} -> {{if eq .TargetPort 5432}}postgresql{{else}}http{{end}}://{{.URL}}:{{.PublishedPort}}{{println}}{{end}}{{end}}{% endraw %}"
 
 # ---- Stack-wide -------------------------------------------------------------
 
@@ -47,11 +48,11 @@ run = "docker compose logs --follow --tail 100"
 
 [tasks.validate]
 description = "Validate every app (each app's <app>:validate)"
-depends = ["web-client:validate"]
+depends = ["web-client:validate", "api:validate"]
 
 [tasks.e2e]
-description = "Run every end-to-end suite (each client's <app>:e2e)"
-depends = ["web-client:e2e"]
+description = "Run every end-to-end suite (each <app>:e2e)"
+depends = ["web-client:e2e", "api:e2e"]
 
 # ---- web-client -------------------------------------------------------------
 
@@ -112,4 +113,96 @@ depends = ["web-client:build"]
 run = """
 trap 'docker compose --profile e2e rm --stop --force web-client-preview' EXIT
 docker compose --profile e2e run --rm --build web-client-e2e
+"""
+
+# ---- api --------------------------------------------------------------------
+# api's tasks run in the api service's container. Static checks use --no-deps;
+# the tasks that need the database start api-db through depends_on, and remove
+# it again afterwards unless it was already running.
+
+[tasks."api:up"]
+description = "Start only api (uvicorn --reload) and its database, and print their URLs"
+run = [
+  "docker compose up --detach --build --wait api",
+  'docker compose ps --format "$DEV_PORTS_FORMAT" api api-db | grep -v "^$"',
+]
+
+[tasks."api:down"]
+description = "Stop only api and its database; keeps their images, venv and data"
+run = "docker compose down api api-db"
+
+[tasks."api:logs"]
+description = "Follow the logs of api and its database"
+run = "docker compose logs --follow --tail 100 api api-db"
+
+[tasks."api:shell"]
+description = "Open a shell in an api container"
+run = "docker compose run --rm --no-deps api bash"
+
+[tasks."api:exec"]
+description = "Run a command in an api container: ./bin/mise run api:exec -- python --version"
+run = "docker compose run --rm --no-deps api"
+
+[tasks."api:install"]
+description = "Install api dependencies, updating uv.lock; with arguments, add packages: ./bin/mise run api:install -- --dev pytest-xdist"
+run = "docker compose run --rm --no-deps api dev-install"
+
+[tasks."api:lint"]
+description = "Lint api (ruff check)"
+run = "docker compose run --rm --no-deps api ruff check"
+
+[tasks."api:format"]
+description = "Format api's code in place (ruff format)"
+run = "docker compose run --rm --no-deps api ruff format"
+
+[tasks."api:format-check"]
+description = "Check api's formatting without changing files (ruff format --check)"
+run = "docker compose run --rm --no-deps api ruff format --check"
+
+[tasks."api:typecheck"]
+description = "Typecheck api (mypy --strict)"
+run = "docker compose run --rm --no-deps api mypy"
+
+[tasks."api:lock-check"]
+description = "Check that api/uv.lock matches api/pyproject.toml"
+run = "docker compose run --rm --no-deps api uv lock --check"
+
+[tasks."api:openapi"]
+description = "Write api's OpenAPI document to api/openapi.json"
+run = "docker compose run --rm --no-deps api python -m api.openapi openapi.json"
+
+[tasks."api:openapi-check"]
+description = "Check that api/openapi.json is the document api serves"
+run = "docker compose run --rm --no-deps api python -m api.openapi openapi.json --check"
+
+[tasks."api:test"]
+description = "Test api in process against a real PostgreSQL (pytest); arguments go to pytest"
+run = """
+db_was_running=$(docker compose ps --quiet --status running api-db)
+trap '[ -n "$db_was_running" ] || docker compose rm --stop --force api-db' EXIT
+docker compose run --rm api pytest
+"""
+
+# The one entry point CI calls for this app. One step at a time: the steps
+# share the venv volume, which the first one may still be filling.
+[tasks."api:validate"]
+description = "Validate api: lockfile, lint, formatting, typecheck, OpenAPI drift and tests"
+run = [
+  { task = "api:lock-check" },
+  { task = "api:lint" },
+  { task = "api:format-check" },
+  { task = "api:typecheck" },
+  { task = "api:openapi-check" },
+  { task = "api:test" },
+]
+
+# Builds api's production image, runs it as api-release against api-db, runs
+# the pytest suite in e2e/api/ against it, then stops what it started.
+[tasks."api:e2e"]
+description = "End-to-end test api: its production image against a real PostgreSQL"
+run = """
+db_was_running=$(docker compose ps --quiet --status running api-db)
+trap 'docker compose --profile e2e rm --stop --force api-release; [ -n "$db_was_running" ] || docker compose rm --stop --force api-db' EXIT
+docker compose --profile e2e build api-release api-e2e
+docker compose --profile e2e run --rm api-e2e
 """
