@@ -32,6 +32,11 @@ def unused_port() -> int:
     return port
 
 
+def unreachable(database_url: str) -> str:
+    """The same URL at a local port where connecting is refused."""
+    return with_address(database_url, "127.0.0.1", unused_port())
+
+
 class DatabaseProxy:
     """Forwards TCP to the real database until stopped, so a test can take it away."""
 

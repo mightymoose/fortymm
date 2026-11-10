@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from api import health
+from api.routes import health
 from api.settings import Settings
 
 
