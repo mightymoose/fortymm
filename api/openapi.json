@@ -55,9 +55,9 @@
   },
   "openapi": "3.1.0",
   "paths": {
-    "/health": {
+    "/v1/health": {
       "get": {
-        "operationId": "health_health_get",
+        "operationId": "health_v1_health_get",
         "responses": {
           "200": {
             "content": {

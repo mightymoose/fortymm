@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from api.routes import health
+from api.routes import v1
 from api.settings import Settings
 
 
@@ -16,5 +16,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
 
     app = FastAPI(title="fortymm API", version="0.1.0", lifespan=lifespan)
-    app.include_router(health.router)
+    # /openapi.json and /docs stay unversioned: one document describes every version.
+    app.include_router(v1.router)
     return app
