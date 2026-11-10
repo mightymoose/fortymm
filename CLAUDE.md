@@ -41,7 +41,7 @@ How `web-client` code and tests are laid out (details in `web-client/README.md`)
 - Screens are TanStack Router file routes: one file per route in `web-client/src/routes/` (`__root.tsx` is the shared layout and the not-found page, `index.tsx` is `/`). To add a screen, add a route file; the Vite plugin regenerates `web-client/src/routeTree.gen.ts` (committed, never hand-edited). Generator options go in `web-client/tsr.config.json`.
 - A screen's component test goes next to its route, `web-client/src/routes/<route>.test.tsx`. It mounts the screen with `renderRoute(path)` from `web-client/src/test/render-route.tsx` and drives it through a page object in `web-client/src/routes/<route>.page.ts`.
 - Type-level tests go in `*.test-d.tsx`, checked by `tsc -b`.
-- `web-client/e2e/` holds only what needs the production build as served (nginx in `web-client-preview`), with page objects in `web-client/e2e/pages/`. Playwright is one of web-client's own dev dependencies, pinned to the version of the `dev/web-client-e2e` image.
+- `web-client/e2e/` holds only what needs the production build as served (nginx in `web-client-preview`); today that is one smoke test that `/` loads and the bundle runs. Anything the router or a screen decides, such as which page a URL shows, is a component test instead. Page objects for it go in `web-client/e2e/pages/`. Playwright is one of web-client's own dev dependencies, pinned to the version of the `dev/web-client-e2e` image.
 
 `api` tasks act on the FastAPI app in `api/` and its PostgreSQL, the `api-db` service. Tasks that need the database start `api-db` and remove it afterwards unless it was already running:
 
