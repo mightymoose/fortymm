@@ -201,24 +201,34 @@ def stored(made: Made, arrival: int) -> StoredRecord:
 
 
 def test_a_database_holding_what_the_service_would_not_store_is_refused() -> None:
+    # Each bad record is the second of two, and differs from the first in only the way
+    # named, so only that check can refuse it.
     forged = fortymm_core.Record.from_parts(
-        record(FIRST_MATCH).body, record(SECOND_MATCH).signature
+        record(SECOND_MATCH).body, record(FIRST_MATCH).signature
     ).to_bytes()
-    hello = bytes.fromhex(HELLO_UAT)
-    cases = {
-        "a record that does not decode": (b"\x00",),
-        "a record whose signature does not verify": (forged,),
-        "a record of another environment": (bytes.fromhex(UAT_MATCH.record),),
-        "a record of another kind": (hello,),
-    }
-    for what, (bad,) in cases.items():
-        database = Database((stored(FIRST_MATCH, 1), StoredRecord(2, NOON, "held", bad)))
-        assert DEVELOPMENT.apply(database, [SECOND_MATCH.text], NOON) == InvalidDatabase(1), what
+    for what, (service, first, bad) in {
+        "a record that does not decode": (DEVELOPMENT, FIRST_MATCH, b"\x00"),
+        "a record whose signature does not verify": (DEVELOPMENT, FIRST_MATCH, forged),
+        "a record of another environment": (
+            DEVELOPMENT,
+            FIRST_MATCH,
+            bytes.fromhex(UAT_MATCH.record),
+        ),
+        # In UAT, so the hello record is for this server's environment.
+        "a record of another kind": (
+            MatchDatabase(fortymm_core.UAT),
+            UAT_MATCH,
+            bytes.fromhex(HELLO_UAT),
+        ),
+    }.items():
+        database = Database((stored(first, 1), StoredRecord(2, NOON, "held", bad)))
+        assert service.apply(database, [], NOON) == InvalidDatabase(1), what
 
     for what, records in {
         "the same record twice": (stored(FIRST_MATCH, 1), stored(FIRST_MATCH, 2)),
         "arrival numbers out of order": (stored(FIRST_MATCH, 2), stored(SECOND_MATCH, 2)),
     }.items():
-        assert DEVELOPMENT.apply(Database(records), [SECOND_MATCH.text], NOON) == InvalidDatabase(
-            1
-        ), what
+        assert DEVELOPMENT.apply(Database(records), [], NOON) == InvalidDatabase(1), what
+    # The checks refuse only what they should: the good records alone are taken.
+    good = Database((stored(FIRST_MATCH, 1), stored(SECOND_MATCH, 3)))
+    assert applied(DEVELOPMENT.apply(good, [], NOON)).database.records == good.records

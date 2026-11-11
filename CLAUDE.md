@@ -12,17 +12,17 @@ Run with `./bin/mise run <task>`. Pass arguments after `--`.
 
 Stack-wide tasks act on every app in the stack:
 
-- `up`: start every app and its services (`web-client`, `api`, `api-db`), then print their URLs.
+- `up`: start every app and its services (`web-client`, `api`, `api-db`), then print their URLs. It first runs `core:python` and `core:wasm`, which `api` and `web-client` load.
 - `down`: stop the stack. Keeps built images and dependency volumes.
 - `teardown`: remove everything the stack uses, e2e services included: containers, networks, volumes (the database's data too) and built images.
 - `ports`: print every published port as a URL (`postgresql://` for the database, `http://` otherwise). Host ports are random and change when an app restarts.
 - `logs`: follow the logs of every app.
 - `validate`: validate every app (runs each `<app>:validate`: `web-client`, `api` and `core`).
-- `e2e`: run the cross-app suite in `e2e/`: what can fail only because of how the apps are served or connected. It typechecks the suite, builds `web-client`, serves the build from `web-client-hosting`, brings up `api-release` (the api's production image) and `api-db` behind it, runs the Playwright suite against it (in the `e2e` service), then stops what it started. `web-client-hosting` is an nginx stand-in for the production hosting (Cloudflare Workers, not in this repository yet); like the real hosting must, it forwards `/api/*` to the api with `/api` stripped. Its tests assert what a person sees, not HTTP details: status codes and content types are the api's own tests' job.
+- `e2e`: run the cross-app suite in `e2e/`: what can fail only because of how the apps are served or connected. It typechecks the suite, builds `web-client`, serves the build from `web-client-hosting`, brings up `api-release` (the api's production image) and `api-db` behind it, runs the Playwright suite against it (in the `e2e` service), then stops what it started. `web-client-hosting` is an nginx stand-in for the production hosting (Cloudflare Workers, not in this repository yet); like the real hosting must, it forwards `/api/*` to the api with `/api` stripped. Its tests assert what a person sees, not HTTP details: status codes and content types are the api's own tests' job. The browser is full Chromium told to treat the stand-in's plain-http origin as secure (`e2e/playwright.config.ts`), because WebCrypto, which the web client signs with, exists only in a secure context.
 
 `web-client` tasks act on the Vite + React app in `web-client/` only:
 
-- `web-client:up`: start only `web-client` (Vite dev server, hot reload), then print its URL.
+- `web-client:up`: start only `web-client` (Vite dev server, hot reload), then print its URL. Runs `core:wasm` first.
 - `web-client:down`: stop only `web-client`.
 - `web-client:logs`: follow `web-client`'s logs.
 - `web-client:shell`: open a shell in a `web-client` container.
@@ -35,6 +35,7 @@ Stack-wide tasks act on every app in the stack:
 - `web-client:typecheck`: typecheck (`tsc -b`).
 - `web-client:test`: component tests (Vitest, Testing Library, jsdom).
 - `web-client:build`: production build into `web-client/dist`.
+- These three, and `web-client:up`, first run `core:wasm`: the web client reads the core's browser build (the WebAssembly module with cryptography and its wrapper) from the `core-cache` volume, mounted read-only at `/opt/core`, as `fortymm-core/...` (`web-client/vite.config.ts`, `web-client/tsconfig.app.json`). The build bundles both into `dist`.
 - `web-client:validate`: route tree check, api types check, lint, typecheck, component tests, then the production build, one after another. CI's stage 1 calls this.
 
 How `web-client` code and tests are laid out (details in `web-client/README.md`):
@@ -48,7 +49,7 @@ How `web-client` code and tests are laid out (details in `web-client/README.md`)
 
 `api` tasks act on the FastAPI app in `api/` and its PostgreSQL, the `api-db` service. Tasks that need the database start `api-db` and remove it afterwards unless it was already running:
 
-- `api:up`: start only `api` (uvicorn with reload) and `api-db`, then print their URLs.
+- `api:up`: start only `api` (uvicorn with reload) and `api-db`, then print their URLs. Runs `core:python` first.
 - `api:down`: stop only `api` and `api-db`. Keeps the venv and the data.
 - `api:logs`: follow the logs of `api` and `api-db`.
 - `api:shell`: open a shell in an `api` container.
@@ -61,9 +62,11 @@ How `web-client` code and tests are laid out (details in `web-client/README.md`)
 - `api:lock-check`: check that `api/uv.lock` matches `api/pyproject.toml`.
 - `api:openapi`: write the OpenAPI document to `api/openapi.json`. Run it after changing a route or a response model, and commit the file.
 - `api:openapi-check`: fail if `api/openapi.json` is not the document the app serves.
-- `api:openapi-breaking`: fail if `api/openapi.json` would break clients of the copy on a git ref (oasdiff, in the `api-oasdiff` service; it fails on level ERR, such as a removed path or field or a new required parameter). Additive changes pass. If the ref has no copy, it passes and says so. Defaults to `origin/main` (run `git fetch origin main` first); CI passes the base commit: `./bin/mise run api:openapi-breaking -- HEAD^`.
+- `api:openapi-breaking`: fail if `api/openapi.json` would break clients of the copy on a git ref (oasdiff, in the `api-oasdiff` service; it fails on level ERR, such as a removed path or field or a new required parameter). Additive changes pass. If the ref has no copy, it passes and says so. Defaults to `origin/main` (run `git fetch origin main` first); CI passes the base commit: `./bin/mise run api:openapi-breaking -- HEAD^`. An operation marked temporary (`x-stability-level: draft`, see `api/README.md`) may be removed or changed without failing it.
 - `api:test`: run the in-process tests in `api/tests/` (pytest) against a real PostgreSQL, the `api_test` database. Arguments go to pytest: `./bin/mise run api:test -- -k health`.
-- `api:validate`: lock check, lint, format check, typecheck, OpenAPI check, tests, then `api:e2e` (the shipped image), one after another. CI's stage 1 calls this.
+- `api:openapi-temporary-check`: fail unless `api:openapi-breaking`'s oasdiff command passes with every temporary operation taken out of `api/openapi.json`, and fails with any one other operation taken out. It edits the document with `jq` on the host.
+- `api:up`, `api:typecheck`, `api:openapi`, `api:openapi-check` and `api:test` first run `core:python`: the app imports the core's Python module, which the `api` service reads from the `core-cache` volume (`PYTHONPATH` and, for mypy, `MYPYPATH`, at `/opt/core/python`). The shipped image (`api/Dockerfile`) builds its own copy from `core/`, given to the build as a second context named `core`.
+- `api:validate`: lock check, lint, format check, typecheck, OpenAPI check, the temporary-mark check, tests, then `api:e2e` (the shipped image), one after another. CI's stage 1 calls this.
 - `api:e2e`: build the production image (`api/Dockerfile`), run it as `api-release` against `api-db`, run the pytest suite in `api/e2e/` against it (from `api-e2e`, with the api's dev image and venv), then stop what it started.
 
 How `api` code and tests are laid out (details in `api/README.md`):
@@ -86,8 +89,8 @@ How `api` code and tests are laid out (details in `api/README.md`):
 - `core:format-check`: check the formatting without changing files.
 - `core:test`: run the tests (`cargo test`). Arguments go to cargo: `./bin/mise run core:test -- --test sizes -- --nocapture` prints the measured parcel sizes.
 - `core:build`: release build of the library for the container's own platform.
-- `core:wasm`: build the WebAssembly module for browsers twice, with the cryptography compiled in and without it, shrink both with `wasm-opt`, print their sizes, then run the golden vectors through both from Node. The build without cryptography hashes and verifies with WebCrypto.
-- `core:python`: build the Python module for the server (stable ABI, Python 3.12 and later), then run the golden vectors through it with the same Python as `api`.
+- `core:wasm`: build the WebAssembly module for browsers twice, with the cryptography compiled in and without it, shrink both with `wasm-opt`, print their sizes, then run the golden vectors through both from Node. The build without cryptography hashes and verifies with WebCrypto. The wrapper `fortymm-core.mjs` and its types `fortymm-core.d.mts` are copied beside the modules in `/opt/core/wasm`.
+- `core:python`: build the Python module for the server (stable ABI, Python 3.12 and later), then run the golden vectors through it with the same Python as `api`. The module and its type stub `fortymm_core.pyi` go to `/opt/core/python`.
 - `core:validate`: format check, lint, tests, release build, `core:wasm`, then `core:python`, one after another. CI's stage 1 calls this.
 
 How `core` code and tests are laid out (details in `core/README.md`; every byte-level choice in `core/FORMAT.md`):

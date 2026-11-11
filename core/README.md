@@ -34,8 +34,8 @@ Everything runs in Docker through mise (see `CLAUDE.md` at the repository root).
 | `src/layout.rs` | Every number in the format |
 | `tests/` | Golden vectors, record and parcel properties, damage fuzzing, signatures, sizes |
 | `vectors/vectors.json` | The golden vectors, checked by every build |
-| `bindings/wasm/` | Raw WebAssembly interface, the hand-written wrapper `fortymm-core.mjs`, and the Node vector runner |
-| `bindings/python/` | The Python module (PyO3, stable ABI) and the Python vector runner |
+| `bindings/wasm/` | Raw WebAssembly interface, the hand-written wrapper `fortymm-core.mjs` and its types `fortymm-core.d.mts`, and the Node vector runner. Besides reading records and parcels, it builds a `match` body, converts WebCrypto's raw public key to the stored form, and assembles a record from a body and a signature; the web client signs |
+| `bindings/python/` | The Python module (PyO3, stable ABI), its type stub `fortymm_core.pyi`, and the Python vector runner. A record gives its `sides` and `terms` when it is a `match` this library interpreted |
 
 ## Purity, and cryptography supplied from outside
 

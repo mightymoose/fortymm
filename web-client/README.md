@@ -33,6 +33,14 @@ To add a screen, add a route file that exports `Route = createFileRoute('/path')
 - **Where the api is.** At `/api` on the app's own origin. Whatever serves the app forwards `/api/*` to the api with `/api` stripped, so `/api/v1/health` reaches the api's `/v1/health`: Vite's `server.proxy` in dev (`vite.config.ts`, to the `api` service), `web-client-hosting`'s nginx in the cross-app suite, and the production hosting when it lands. So no route file may produce a URL starting with `/api`.
 - **Screens that load data** use a route `loader` that calls the `src/api/` function, and a `pendingComponent` for while it's on the way (see `src/routes/health.tsx`). Turn every answer, including "couldn't reach the api", into data the component shows; don't let the loader throw for an answer the api can give.
 
+## The core in the browser
+
+`core:wasm` builds the core's WebAssembly module and copies its wrapper (`fortymm-core.mjs`, with types in `fortymm-core.d.mts`) beside it in the `core-cache` volume. The `web-client` service mounts that at `/opt/core`, and the app imports it as `fortymm-core/...` (an alias in `vite.config.ts` and a path in `tsconfig.app.json`). `web-client:up`, `:typecheck`, `:test` and `:build` run `core:wasm` first, and the build bundles the module (`crypto.wasm`, the build with cryptography) into `dist`.
+
+- `src/core/load.ts` fetches and instantiates the module once per page. Component tests replace it with one that reads the same file from disk (`src/test/setup.ts`).
+- `src/core/match-parcel.ts` makes a signed `match` parcel: a P-256 key made by WebCrypto, non-extractable; the body built by the core; WebCrypto signs; the core assembles the record and the parcel. WebCrypto exists only in a secure context (https, or localhost).
+- `/match-database` (`src/routes/match-database.tsx`) is a temporary screen for the api's temporary apply endpoint: make or paste parcels, apply them to a database (`{}` to start), see what happened to each parcel and the new database, and carry it into the next submit. Nothing is stored: a reload starts from `{}` with a new key.
+
 ## Tests
 
 | What | Where | Run by |
