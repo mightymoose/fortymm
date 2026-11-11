@@ -2,7 +2,7 @@
 
 ## Getting started
 
-The apps are `web-client/` (Vite + React) and `api/` (FastAPI and PostgreSQL; see `api/README.md`).
+The apps are `web-client/` (Vite + React), `api/` (FastAPI and PostgreSQL; see `api/README.md`) and `core/`, the shared core library in Rust (see `core/README.md`). `core` is a library: `up` does not start it, and its tasks build and test it in a container.
 
 You need Docker. Everything else runs in a development Docker Compose stack, driven by [mise](https://mise.jdx.dev) through `./bin/mise`, which downloads a pinned mise into `.mise/` on first run.
 

@@ -1,0 +1,2 @@
+# Build output goes to the core-cache volume (CARGO_TARGET_DIR), not here.
+/target/

@@ -196,6 +196,18 @@ services:
       - ./web-client:/app
       - ./api/openapi.json:/contracts/api/openapi.json:ro
 
+  # The shared core library (Rust). It is a library, so it has nothing to
+  # serve: every core:* task runs one command in this container and exits.
+  # Cargo's downloads and all build output are in the core-cache volume.
+  core:
+    profiles: [tools]
+    build:
+      context: ./dev/core
+    user: *host-user
+    volumes:
+      - ./core:/app
+      - core-cache:/opt/core
+
   # oasdiff (api:breaking). The base document arrives on standard input.
   api-oasdiff:
     profiles: [tools]
@@ -209,3 +221,4 @@ volumes:
   api-venv:
   api-db-data:
   e2e-node-modules:
+  core-cache:

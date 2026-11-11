@@ -1,0 +1,19 @@
+[package]
+name = "fortymm-core-python"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+description = "The FortyMM core as a Python module, for the server"
+publish = false
+
+[lib]
+name = "fortymm_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+# Renamed, because this crate's own library is called fortymm_core (the
+# Python module's name).
+fmm = { package = "fortymm-core", path = "../.." }
+# The stable ABI from Python 3.12 on, so one build loads in every later
+# Python, the server's 3.15 included.
+pyo3 = { version = "0.30", features = ["abi3-py312", "extension-module"] }
