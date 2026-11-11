@@ -17,7 +17,7 @@ Stack-wide tasks act on every app in the stack:
 - `teardown`: remove everything the stack uses, e2e services included: containers, networks, volumes (the database's data too) and built images.
 - `ports`: print every published port as a URL (`postgresql://` for the database, `http://` otherwise). Host ports are random and change when an app restarts.
 - `logs`: follow the logs of every app.
-- `validate`: validate every app (runs each `<app>:validate`).
+- `validate`: validate every app (runs each `<app>:validate`: `web-client`, `api` and `core`).
 - `e2e`: run the cross-app suite in `e2e/`: what can fail only because of how the apps are served or connected. It typechecks the suite, builds `web-client`, serves the build from `web-client-hosting`, brings up `api-release` (the api's production image) and `api-db` behind it, runs the Playwright suite against it (in the `e2e` service), then stops what it started. `web-client-hosting` is an nginx stand-in for the production hosting (Cloudflare Workers, not in this repository yet); like the real hosting must, it forwards `/api/*` to the api with `/api` stripped. Its tests assert what a person sees, not HTTP details: status codes and content types are the api's own tests' job.
 
 `web-client` tasks act on the Vite + React app in `web-client/` only:
@@ -75,6 +75,28 @@ How `api` code and tests are laid out (details in `api/README.md`):
 - Every case of a service's logic is tested in `api/tests/services/`, through its public methods, with the real database and the stand-ins in `api/tests/support/database_faults.py`.
 - A route's tests go in `api/tests/http/`: one real case per outcome, nothing faked, plus a check of each response against the OpenAPI document. They prove wiring and translation, not logic.
 - `api/e2e/` drives the shipped image (`api-release`) over the network, with its real database: one test per journey, on its happy path only.
+
+`core` tasks act on the shared core library in `core/` (Rust), in the `core` service. It is a library, so it has no `up`, `down` or `logs`, and `up` does not start it. The Rust toolchain is pinned in `dev/core/Dockerfile`. Cargo's downloads and all build output are in the `core-cache` volume, never in the checkout:
+
+- `core:shell`: open a shell in a `core` container.
+- `core:exec`: run any command in a `core` container, e.g. `./bin/mise run core:exec -- cargo tree`.
+- `core:install`: update `core/Cargo.lock` to match the `Cargo.toml` files. With arguments, add packages: `./bin/mise run core:install -- sha2`, `./bin/mise run core:install -- --dev hex`.
+- `core:lint`: lint (`cargo clippy`, warnings are errors), once with the built-in cryptography and once without it (the web build).
+- `core:format`: format the code in place (`cargo fmt`).
+- `core:format-check`: check the formatting without changing files.
+- `core:test`: run the tests (`cargo test`). Arguments go to cargo: `./bin/mise run core:test -- --test sizes -- --nocapture` prints the measured parcel sizes.
+- `core:build`: release build of the library for the container's own platform.
+- `core:wasm`: build the WebAssembly module for browsers twice, with the cryptography compiled in and without it, shrink both with `wasm-opt`, print their sizes, then run the golden vectors through both from Node. The build without cryptography hashes and verifies with WebCrypto.
+- `core:python`: build the Python module for the server (stable ABI, Python 3.12 and later), then run the golden vectors through it with the same Python as `api`.
+- `core:validate`: format check, lint, tests, release build, `core:wasm`, then `core:python`, one after another. CI's stage 1 calls this.
+
+How `core` code and tests are laid out (details in `core/README.md`; every byte-level choice in `core/FORMAT.md`):
+
+- The library is pure: no input or output, no clock, no random generator, and it never signs. Hashing and signature verification come from the `Crypto` trait; the default `crypto` feature compiles in a software implementation, and a build without it gets both from its host.
+- Every number in the byte format (kind numbers, field keys, labels, the alphabet, the checksum) is in `core/src/layout.rs`, and each is described in `core/FORMAT.md`. Change both together.
+- Unit tests sit beside the code. Tests in `core/tests/` go through the public interface only; signing there uses software keys in `core/tests/common/`.
+- `core/vectors/vectors.json` holds the golden vectors. `core:test` fails if the code no longer produces them, and `core:wasm` and `core:python` check every build against the same file. Before the first public release, regenerate with `./bin/mise run core:test -- --test vectors -- --ignored regenerate`; after it, only add vectors.
+- The bindings are in `core/bindings/`: `wasm/` (a raw WebAssembly interface and the hand-written wrapper `fortymm-core.mjs`) and `python/` (PyO3). `cargo test` and `cargo build` without `-p` act on the library alone.
 
 ## CI
 

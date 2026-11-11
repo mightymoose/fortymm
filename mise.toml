@@ -50,7 +50,7 @@ run = "docker compose logs --follow --tail 100"
 
 [tasks.validate]
 description = "Validate every app (each app's <app>:validate)"
-depends = ["web-client:validate", "api:validate"]
+depends = ["web-client:validate", "api:validate", "core:validate"]
 
 # The cross-app suite in e2e/ (CI's stage 2): what can fail only because of how
 # the apps are served or connected. Everything an app can prove by itself runs
@@ -265,3 +265,70 @@ trap 'docker compose --profile e2e rm --stop --force api-release; [ -n "$db_was_
 docker compose --profile e2e build api-release api-e2e
 docker compose --profile e2e run --rm api-e2e
 """
+
+# ---- core -------------------------------------------------------------------
+# The shared core library (Rust) in core/. It is a library, so there is no
+# core:up: each task runs one command in the core service's container. The
+# toolchain is pinned by dev/core/Dockerfile; cargo's downloads and build
+# output stay in the core-cache volume.
+
+[tasks."core:shell"]
+description = "Open a shell in a core container"
+run = "docker compose --profile tools run --rm core bash"
+
+[tasks."core:exec"]
+description = "Run a command in a core container: ./bin/mise run core:exec -- cargo tree"
+run = "docker compose --profile tools run --rm core"
+
+[tasks."core:install"]
+description = "Update core/Cargo.lock to match the Cargo.toml files; with arguments, add packages: ./bin/mise run core:install -- --dev hex"
+run = "docker compose --profile tools run --rm core dev-install"
+
+# Twice: with the built-in cryptography, and without it (the web build, where
+# the host supplies hashing and signature verification).
+[tasks."core:lint"]
+description = "Lint core (clippy, warnings are errors), with and without built-in cryptography"
+run = [
+  "docker compose --profile tools run --rm core cargo clippy --locked --workspace --all-targets -- -D warnings",
+  "docker compose --profile tools run --rm core cargo clippy --locked --package fortymm-core --lib --no-default-features -- -D warnings",
+]
+
+[tasks."core:format"]
+description = "Format core's code in place (rustfmt)"
+run = "docker compose --profile tools run --rm core cargo fmt --all"
+
+[tasks."core:format-check"]
+description = "Check core's formatting without changing files (rustfmt --check)"
+run = "docker compose --profile tools run --rm core cargo fmt --all --check"
+
+[tasks."core:test"]
+description = "Test core (cargo test); arguments go to cargo test: ./bin/mise run core:test -- --test sizes -- --nocapture"
+run = "docker compose --profile tools run --rm core cargo test --locked"
+
+[tasks."core:build"]
+description = "Release build of core, for the container's own platform"
+run = "docker compose --profile tools run --rm core cargo build --locked --release"
+
+# The two targets that exist today. Each builds the bindings and runs the
+# golden vectors (core/vectors/vectors.json) through them. Output stays in the
+# core-cache volume.
+[tasks."core:wasm"]
+description = "Build core for browsers (WebAssembly, with and without cryptography), report sizes, run the golden vectors from Node"
+run = "docker compose --profile tools run --rm core sh bindings/wasm/build-and-check.sh"
+
+[tasks."core:python"]
+description = "Build core as a Python module for the server and run the golden vectors from Python"
+run = "docker compose --profile tools run --rm core sh bindings/python/build-and-check.sh"
+
+# The one entry point CI calls for this app. One step at a time: the steps
+# share the cargo cache volume, which the first one may still be filling.
+[tasks."core:validate"]
+description = "Validate core: formatting, lint, tests, release build, then the golden vectors through the WebAssembly and Python builds"
+run = [
+  { task = "core:format-check" },
+  { task = "core:lint" },
+  { task = "core:test" },
+  { task = "core:build" },
+  { task = "core:wasm" },
+  { task = "core:python" },
+]

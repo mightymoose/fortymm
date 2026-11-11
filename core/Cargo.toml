@@ -1,0 +1,45 @@
+[package]
+name = "fortymm-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+description = "FortyMM shared core: record bytes, signatures and parcels"
+publish = false
+
+[features]
+default = ["crypto"]
+# SHA-256 and ECDSA P-256 verification compiled in. Without it the caller
+# supplies both through the `Crypto` trait (the web build).
+crypto = ["dep:sha2", "dep:p256"]
+
+[dependencies]
+sha2 = { version = "0.10", default-features = false, optional = true }
+p256 = { version = "0.13", default-features = false, features = ["ecdsa"], optional = true }
+
+[dev-dependencies]
+# Test code signs with software keys. The library itself never signs.
+p256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
+sha2 = { version = "0.10", default-features = false }
+serde_json = "1"
+
+# The bindings for the two targets that exist today. `cargo test` and
+# `cargo build` without -p act on the library alone; core:wasm and
+# core:python build and check the bindings.
+[workspace]
+members = ["bindings/wasm", "bindings/python"]
+default-members = ["."]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+# The tests sign and hash thousands of times; unoptimised they are slow.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

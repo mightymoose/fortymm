@@ -1,0 +1,19 @@
+[package]
+name = "fortymm-core-wasm"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+description = "The FortyMM core for browsers: a raw WebAssembly interface for a small hand-written wrapper"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["crypto"]
+# Without it, the WebAssembly file contains no cryptography and the
+# JavaScript wrapper hashes and verifies with WebCrypto (design section 14).
+crypto = ["fortymm-core/crypto"]
+
+[dependencies]
+fortymm-core = { path = "../..", default-features = false }
