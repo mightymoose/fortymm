@@ -1,19 +1,19 @@
 // Type-level tests, checked by `tsc -b` (web-client:typecheck). Nothing here
 // runs or ships: no module imports this file.
 //
-// They prove the client and the component-test mocks are typed from the
-// api's OpenAPI document (src/api/schema.gen.ts). Each marked line must be a
-// type error; if the typing were lost (an untyped client, MSW's plain `http`),
-// the expect-error directive would be unused and tsc would fail.
+// They prove the client's requests, the zod schemas' input and the
+// component-test mocks all follow the api's OpenAPI document. Each marked line
+// must be a type error; if the typing were lost (an untyped client, a schema
+// not bound by fromWire, MSW's plain `http`), the expect-error directive would
+// be unused and tsc would fail.
+import * as z from 'zod'
 import { http } from '../test/api/server.ts'
 import { api } from './client.ts'
+import { type Health, healthDocument } from './health.ts'
+import { fromWire, type Wire } from './wire.ts'
 
 export async function callsWhatTheDocumentDeclares() {
-  const { data, error } = await api.GET('/v1/health')
-  const database: 'ok' | undefined = data?.data.attributes.database
-  const code: 'database_unavailable' | 'internal_server_error' | undefined =
-    error?.errors[0]?.code
-  return { database, code }
+  await api.GET('/v1/health')
 }
 
 export async function callsWhatTheDocumentDoesNotDeclare() {
@@ -21,11 +21,42 @@ export async function callsWhatTheDocumentDoesNotDeclare() {
   await api.GET('/v1/no-such-path')
   // @ts-expect-error: the document has no POST /v1/health
   await api.POST('/v1/health')
-
-  const { data } = await api.GET('/v1/health')
-  // @ts-expect-error: HealthAttributes has no field `status`
-  return data?.data.attributes.status
 }
+
+// A schema's input is the wire shape; its output is the app's.
+export const wireIn: Wire<'HealthDocument'> = {} as z.input<
+  typeof healthDocument
+>
+export const appOut: Health = {} as z.output<typeof healthDocument>
+
+// What a schema bound by fromWire may not do: describe a wire shape other
+// than the document's, in either direction.
+const attributes = (shape: z.ZodRawShape) =>
+  z.object({
+    data: z.object({
+      type: z.literal('health'),
+      id: z.literal('api'),
+      attributes: z.object(shape),
+    }),
+  })
+export const schemasThatDriftFromTheDocument = [
+  // The document's own shape, transformed into anything: fine.
+  fromWire('HealthAttributes')(
+    z.object({ database: z.literal('ok') }).transform(() => ({ isOk: true })),
+  ),
+  // @ts-expect-error: a field renamed (`database` is `db` here)
+  fromWire('HealthAttributes')(z.object({ db: z.literal('ok') })),
+  fromWire('HealthAttributes')(
+    // @ts-expect-error: a field the document doesn't have
+    z.object({ database: z.literal('ok'), checkedAt: z.string() }),
+  ),
+  // @ts-expect-error: a field of the document left out
+  fromWire('HealthAttributes')(z.object({})),
+  // @ts-expect-error: a value the document doesn't allow ("down")
+  fromWire('HealthAttributes')(z.object({ database: z.enum(['ok', 'down']) })),
+  // @ts-expect-error: the same, one level down
+  fromWire('HealthDocument')(attributes({ database: z.literal('down') })),
+]
 
 export const mocksWhatTheDocumentDeclares = http.get(
   '/v1/health',

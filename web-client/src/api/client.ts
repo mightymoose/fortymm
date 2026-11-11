@@ -10,10 +10,9 @@ import type { paths } from './schema.gen.ts'
 // stay the api's own (/v1/health). The app's routes never start with /api.
 export const apiBaseUrl = `${window.location.origin}/api`
 
-// The one client every call to the api goes through. Paths, parameters and
-// response bodies are typed from the api's OpenAPI document, so calling a path
-// the document doesn't have, or reading a field it doesn't declare, fails
-// web-client:typecheck.
+// The one client every call to the api goes through. It types the request:
+// calling a path, method or parameter the api's OpenAPI document doesn't have
+// fails web-client:typecheck. It does not decide what came back.
 export const api = createClient<paths>({
   baseUrl: apiBaseUrl,
   // Look fetch up on every call. openapi-fetch otherwise keeps the fetch that
@@ -21,3 +20,12 @@ export const api = createClient<paths>({
   // place of the api, replaces the global fetch later.
   fetch: (request) => globalThis.fetch(request),
 })
+
+// The body of an answer, whatever its status, as `unknown`. openapi-fetch
+// types `data` and `error` from the document, but that is a promise about the
+// api, not about every server on the way, so nothing reads them directly:
+// a call parses the body with its zod schemas (bound to the document by
+// fromWire in wire.ts), and only what matches one is trusted.
+export function bodyOf(result: { data?: unknown; error?: unknown }): unknown {
+  return result.data ?? result.error
+}
