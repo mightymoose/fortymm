@@ -21,21 +21,5 @@ export default defineConfig({
     baseURL,
     trace: 'retain-on-failure',
   },
-  projects: [
-    {
-      name: 'chromium',
-      use: {
-        ...devices['Desktop Chrome'],
-        // WebCrypto, which the web client signs with, exists only in a secure
-        // context. The production hosting is https; the stand-in serves plain
-        // http on the stack's network, so the browser is told to treat that
-        // one origin as secure. Only full Chromium honours the switch, not
-        // the headless shell Playwright uses by default.
-        channel: 'chromium',
-        launchOptions: {
-          args: [`--unsafely-treat-insecure-origin-as-secure=${baseURL}`],
-        },
-      },
-    },
-  ],
+  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 })
