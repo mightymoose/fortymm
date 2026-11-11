@@ -25,7 +25,7 @@
 
 use std::cell::RefCell;
 
-use fortymm_core::{Parcel, PublicKey, Record, Signature};
+use fortymm_core::{Draft, Parcel, PlayerId, PublicKey, Record, Signature};
 
 const OK: i32 = 0;
 const INVALID: i32 = 1;
@@ -173,6 +173,77 @@ pub unsafe extern "C" fn fmm_signature_from_der(pointer: *const u8, length: usiz
 pub unsafe extern "C" fn fmm_signature_from_raw(pointer: *const u8, length: usize) -> i32 {
     match Signature::from_raw(unsafe { input(pointer, length) }) {
         Ok(signature) => done(signature.as_bytes().to_vec()),
+        Err(error) => fail(INVALID, error),
+    }
+}
+
+/// Convert an uncompressed 65-byte public key (WebCrypto's "raw" export) to
+/// the stored 33-byte compressed form.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_public_key_from_raw(pointer: *const u8, length: usize) -> i32 {
+    match PublicKey::from_sec1_uncompressed(unsafe { input(pointer, length) }) {
+        Some(key) => done(key.as_bytes().to_vec()),
+        None => fail(INVALID, "not an uncompressed P-256 key"),
+    }
+}
+
+/// The body of a `match` record, to be signed by the caller. Input, all
+/// big-endian: the environment (8 bytes), the signer's compressed key (33),
+/// the random value (8), then for each of the two sides a player count (4)
+/// followed by that many 32-byte player ids, then the terms (the rest).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_match_body(pointer: *const u8, length: usize) -> i32 {
+    let bytes = unsafe { input(pointer, length) };
+    let Some((environment, rest)) = bytes.split_first_chunk::<8>() else {
+        return fail(INVALID, "no environment");
+    };
+    let Some((signer, rest)) = rest.split_first_chunk::<33>() else {
+        return fail(INVALID, "no signer");
+    };
+    let Some((random, mut rest)) = rest.split_first_chunk::<8>() else {
+        return fail(INVALID, "no random value");
+    };
+    let mut sides: [Vec<PlayerId>; 2] = [Vec::new(), Vec::new()];
+    for side in &mut sides {
+        let Some((count, after)) = rest.split_first_chunk::<4>() else {
+            return fail(INVALID, "no player count");
+        };
+        rest = after;
+        for _ in 0..u32::from_be_bytes(*count) {
+            let Some((player, after)) = rest.split_first_chunk::<32>() else {
+                return fail(INVALID, "truncated player list");
+            };
+            side.push(PlayerId::from_bytes(*player));
+            rest = after;
+        }
+    }
+    let Some(signer) = PublicKey::from_sec1_compressed(signer) else {
+        return fail(INVALID, "not a compressed P-256 key");
+    };
+    let environment = fortymm_core::Environment(u64::from_be_bytes(*environment));
+    match Draft::match_(sides, rest.to_vec())
+        .and_then(|draft| draft.body(environment, signer, *random, None))
+    {
+        Ok(body) => done(body),
+        Err(error) => fail(INVALID, error),
+    }
+}
+
+/// A standalone record from a body and a signature. Input: the body's length
+/// (4 bytes, big-endian), the body, then the 64-byte stored signature.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_record_from_parts(pointer: *const u8, length: usize) -> i32 {
+    let bytes = unsafe { input(pointer, length) };
+    let Some((size, rest)) = bytes.split_first_chunk::<4>() else {
+        return fail(INVALID, "no body length");
+    };
+    let size = u32::from_be_bytes(*size) as usize;
+    if rest.len() < size {
+        return fail(INVALID, "truncated body");
+    }
+    let (body, signature) = rest.split_at(size);
+    match Record::from_parts(body, signature) {
+        Ok(record) => done(record.to_bytes()),
         Err(error) => fail(INVALID, error),
     }
 }

@@ -89,6 +89,31 @@ impl PyRecord {
         self.0.header().environment.0
     }
 
+    /// A `match` record's two sides, each a list of 32-byte player ids. None
+    /// for every other record, including a `match` at a format version this
+    /// library did not interpret.
+    #[getter]
+    fn sides<'py>(&self, py: Python<'py>) -> Option<Vec<Vec<Bound<'py, PyBytes>>>> {
+        match self.0.content() {
+            fmm::Content::Match { sides, .. } => Some(
+                sides
+                    .iter()
+                    .map(|side| side.iter().map(|p| bytes(py, p.as_bytes())).collect())
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
+
+    /// A `match` record's terms (opaque bytes). None for every other record.
+    #[getter]
+    fn terms<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyBytes>> {
+        match self.0.content() {
+            fmm::Content::Match { terms, .. } => Some(bytes(py, terms)),
+            _ => None,
+        }
+    }
+
     fn id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         bytes(py, self.0.id(&Software).as_bytes())
     }
@@ -257,5 +282,8 @@ fn fortymm_core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(own_player_id, module)?)?;
     module.add_function(wrap_pyfunction!(checksum, module)?)?;
     module.add("FORMAT_VERSION", fmm::layout::FORMAT_VERSION)?;
+    module.add("PRODUCTION", fmm::layout::environment::PRODUCTION)?;
+    module.add("UAT", fmm::layout::environment::UAT)?;
+    module.add("DEVELOPMENT", fmm::layout::environment::DEVELOPMENT)?;
     Ok(())
 }

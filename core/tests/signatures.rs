@@ -5,7 +5,7 @@
 mod common;
 
 use common::{CRYPTO, Rng, high_s, keys};
-use fortymm_core::{Crypto, Signature, SignatureError};
+use fortymm_core::{Crypto, PublicKey, Signature, SignatureError};
 
 #[test]
 fn der_and_raw_give_the_same_stored_form_and_verify() {
@@ -58,4 +58,32 @@ fn verification_rejects_keys_that_are_not_points() {
     // An x coordinate of all ones is not on P-256 for either sign.
     not_a_point[1..].fill(0xff);
     assert!(!CRYPTO.verify_p256_sha256(&not_a_point, message, signature.as_bytes()));
+}
+
+#[test]
+fn an_uncompressed_key_converts_to_the_stored_compressed_form() {
+    // Every test key; the assertion below checks both parities of Y occur.
+    let mut parities = std::collections::BTreeSet::new();
+    for key in keys() {
+        let uncompressed = key.signing.verifying_key().to_encoded_point(false);
+        let converted = PublicKey::from_sec1_uncompressed(uncompressed.as_bytes()).unwrap();
+        assert_eq!(converted, key.public(), "{}", key.name);
+        parities.insert(converted.as_bytes()[0]);
+    }
+    assert_eq!(
+        parities,
+        [0x02, 0x03].into(),
+        "the test keys cover both parities"
+    );
+}
+
+#[test]
+fn an_uncompressed_key_of_the_wrong_shape_is_refused() {
+    let uncompressed = keys()[0].signing.verifying_key().to_encoded_point(false);
+    let bytes = uncompressed.as_bytes();
+    assert!(PublicKey::from_sec1_uncompressed(&bytes[..64]).is_none());
+    let mut wrong_prefix = bytes.to_vec();
+    wrong_prefix[0] = 0x02;
+    assert!(PublicKey::from_sec1_uncompressed(&wrong_prefix).is_none());
+    assert!(PublicKey::from_sec1_uncompressed(keys()[0].public().as_bytes()).is_none());
 }

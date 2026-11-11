@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Literal
 
 import httpx
 from fastapi import APIRouter
@@ -11,15 +12,18 @@ from api.settings import Settings
 
 @asynccontextmanager
 async def api_client(
-    database_url: str, extra_routes: APIRouter | None = None
+    database_url: str,
+    extra_routes: APIRouter | None = None,
+    environment: Literal["production", "uat", "development"] = "development",
 ) -> AsyncIterator[httpx.AsyncClient]:
     """The whole app in process, started as uvicorn starts it, using this database.
 
     extra_routes adds test-only routes, for behavior no real route can trigger on
-    demand (an unhandled exception). Unhandled exceptions become 500 responses, as
+    demand (an unhandled exception). environment is the deployment the server says it
+    is (ENVIRONMENT). Unhandled exceptions become 500 responses, as
     they do under uvicorn, instead of being raised into the test.
     """
-    app = create_app(Settings(database_url=PostgresDsn(database_url)))
+    app = create_app(Settings(database_url=PostgresDsn(database_url), environment=environment))
     if extra_routes is not None:
         app.include_router(extra_routes)
     async with app.router.lifespan_context(app):

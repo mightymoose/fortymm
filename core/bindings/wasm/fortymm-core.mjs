@@ -81,6 +81,36 @@ export class Core {
     return this.sha256(this.call("fmm_own_player_id_preimage", publicKey).out);
   }
 
+  // Making a record. The core builds the body and assembles the record; the
+  // caller signs the body (the core never signs) and supplies the random
+  // value (the core has no random generator).
+
+  // WebCrypto's "raw" export of a P-256 public key (65 bytes, uncompressed)
+  // to the 33-byte form a record stores.
+  publicKeyFromRaw(raw) { return this.call("fmm_public_key_from_raw", raw).out; }
+
+  // The body of a `match` record to sign. `sides` is two non-empty arrays of
+  // 32-byte player ids; `terms` is opaque bytes; `random` is 8 bytes.
+  matchBody(environment, signer, random, sides, terms) {
+    const head = new Uint8Array(8);
+    new DataView(head.buffer).setBigUint64(0, BigInt(environment));
+    const parts = [head, signer, random];
+    for (const side of sides) {
+      const count = new Uint8Array(4);
+      new DataView(count.buffer).setUint32(0, side.length);
+      parts.push(count, ...side);
+    }
+    parts.push(terms);
+    return this.call("fmm_match_body", concat(parts)).out;
+  }
+
+  // A standalone record from a body and its stored 64-byte signature.
+  recordFromParts(body, signature) {
+    const size = new Uint8Array(4);
+    new DataView(size.buffer).setUint32(0, body.length);
+    return this.call("fmm_record_from_parts", concat([size, body, signature])).out;
+  }
+
   // Signatures.
   signatureFromDer(der) { return this.call("fmm_signature_from_der", der).out; }
   signatureFromRaw(raw) { return this.call("fmm_signature_from_raw", raw).out; }

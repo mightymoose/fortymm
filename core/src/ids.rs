@@ -99,6 +99,22 @@ impl PublicKey {
         matches!(bytes[0], 0x02 | 0x03).then_some(PublicKey(bytes))
     }
 
+    /// From uncompressed SEC1 bytes: 0x04, X, then Y, 65 bytes in all. This is
+    /// what WebCrypto exports as "raw" (and iOS as its external
+    /// representation). The stored form keeps X and the parity of Y. As with
+    /// [`PublicKey::from_sec1_compressed`], whether the point is on the curve
+    /// is left to signature verification.
+    pub fn from_sec1_uncompressed(bytes: &[u8]) -> Option<PublicKey> {
+        let bytes: [u8; 65] = bytes.try_into().ok()?;
+        if bytes[0] != 0x04 {
+            return None;
+        }
+        let mut compressed = [0u8; 33];
+        compressed[0] = 0x02 | (bytes[64] & 1);
+        compressed[1..].copy_from_slice(&bytes[1..33]);
+        Some(PublicKey(compressed))
+    }
+
     /// The 33 bytes.
     pub const fn as_bytes(&self) -> &[u8; 33] {
         &self.0

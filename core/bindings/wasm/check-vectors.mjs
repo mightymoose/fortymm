@@ -100,6 +100,38 @@ for (const path of modules) {
     check(refused, `invalid der ${v.name}`);
     checks += 1;
   }
+  // Making a match record the way a browser does: a non-extractable WebCrypto
+  // key, its raw public key converted by the core, the body built by the
+  // core, signed by WebCrypto, and the record assembled by the core.
+  {
+    const subtle = globalThis.crypto.subtle;
+    const keys = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+    const raw = new Uint8Array(await subtle.exportKey("raw", keys.publicKey));
+    const signer = core.publicKeyFromRaw(raw);
+    check(signer.length === 33 && hex(signer.slice(1)) === hex(raw.slice(1, 33)), "made: signer is X with Y's parity");
+    check(signer[0] === 2 + (raw[64] & 1), "made: signer prefix");
+    const players = [new Uint8Array(32).fill(0x11), new Uint8Array(32).fill(0x22)];
+    const random = globalThis.crypto.getRandomValues(new Uint8Array(8));
+    const body = core.matchBody(3, signer, random, [[players[0]], [players[1]]], new Uint8Array([7]));
+    const signature = core.signatureFromRaw(new Uint8Array(
+      await subtle.sign({ name: "ECDSA", hash: "SHA-256" }, keys.privateKey, body)));
+    const record = core.recordFromParts(body, signature);
+    check(hex(core.body(record)) === hex(body), "made: body");
+    check(hex(core.signer(record)) === hex(signer), "made: signer in the body");
+    check(await core.verify(record), "made: verifies");
+    const parcel = core.parse(core.text(core.build(3, [record])));
+    check(JSON.stringify(core.records(parcel).map(hex)) === JSON.stringify([hex(record)]), "made: parcel round trip");
+    for (const [what, make] of [
+      ["an empty side", () => core.matchBody(3, signer, random, [[], [players[1]]], new Uint8Array())],
+      ["a compressed key as raw", () => core.publicKeyFromRaw(signer)],
+      ["a body over the size limit", () => core.matchBody(3, signer, random, [[players[0]], [players[1]]], new Uint8Array(5000))],
+    ]) {
+      let refused = false;
+      try { make(); } catch (error) { refused = !(error instanceof Damaged) && error.message.startsWith("fmm_"); }
+      check(refused, `made: refuses ${what}`);
+    }
+    checks += 11;
+  }
   console.log(`  ${checks} checks`);
 }
 

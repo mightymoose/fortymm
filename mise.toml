@@ -27,6 +27,8 @@ DEV_PORTS_FORMAT = "{% raw %}{{range .Publishers}}{{if .PublishedPort}}{{$.Servi
 
 [tasks.up]
 description = "Start every app in the stack and print their URLs"
+# api imports the core's Python module; web-client loads its WebAssembly.
+depends = ["core:python", "core:wasm"]
 run = "docker compose up --detach --build --wait"
 depends_post = ["ports"]
 
@@ -148,10 +150,13 @@ run = [
 # ---- api --------------------------------------------------------------------
 # api's tasks run in the api service's container. Static checks use --no-deps;
 # the tasks that need the database start api-db through depends_on, and remove
-# it again afterwards unless it was already running.
+# it again afterwards unless it was already running. The tasks that import the
+# app (it imports the core's Python module) depend on core:python, which builds
+# the module into the core-cache volume that the api service mounts.
 
 [tasks."api:up"]
 description = "Start only api (uvicorn --reload) and its database, and print their URLs"
+depends = ["core:python"]
 run = [
   "docker compose up --detach --build --wait api",
   'docker compose ps --format "$DEV_PORTS_FORMAT" api api-db | grep -v "^$"',
@@ -191,6 +196,7 @@ run = "docker compose run --rm --no-deps api ruff format --check"
 
 [tasks."api:typecheck"]
 description = "Typecheck api (mypy --strict)"
+depends = ["core:python"]
 run = "docker compose run --rm --no-deps api mypy"
 
 [tasks."api:lock-check"]
@@ -199,10 +205,12 @@ run = "docker compose run --rm --no-deps api uv lock --check"
 
 [tasks."api:openapi"]
 description = "Write api's OpenAPI document to api/openapi.json"
+depends = ["core:python"]
 run = "docker compose run --rm --no-deps api python -m api.openapi openapi.json"
 
 [tasks."api:openapi-check"]
 description = "Check that api/openapi.json is the document api serves"
+depends = ["core:python"]
 run = "docker compose run --rm --no-deps api python -m api.openapi openapi.json --check"
 
 # Compares the working tree's api/openapi.json with the copy committed on a base
@@ -233,6 +241,7 @@ echo "api:openapi-breaking: no breaking changes."
 
 [tasks."api:test"]
 description = "Test api in process against a real PostgreSQL (pytest); arguments go to pytest"
+depends = ["core:python"]
 run = """
 db_was_running=$(docker compose ps --quiet --status running api-db)
 trap '[ -n "$db_was_running" ] || docker compose rm --stop --force api-db' EXIT

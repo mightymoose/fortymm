@@ -1,6 +1,37 @@
 {
   "components": {
     "schemas": {
+      "ApplyParcelsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "arrived_at": {
+            "description": "The time of arrival to record. The server reads no clock.",
+            "format": "date-time",
+            "title": "Arrived At",
+            "type": "string"
+          },
+          "database": {
+            "$ref": "#/components/schemas/MatchDatabase"
+          },
+          "parcels": {
+            "description": "Parcel texts.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Parcels",
+            "type": "array"
+          }
+        },
+        "required": [
+          "database",
+          "parcels",
+          "arrived_at"
+        ],
+        "title": "ApplyParcelsRequest",
+        "type": "object"
+      },
       "DatabaseUnavailableError": {
         "additionalProperties": false,
         "properties": {
@@ -47,6 +78,21 @@
           "errors"
         ],
         "title": "DatabaseUnavailableErrorDocument",
+        "type": "object"
+      },
+      "ErrorSource": {
+        "additionalProperties": false,
+        "description": "Where in the request the error is: a JSON Pointer into the request body.",
+        "properties": {
+          "pointer": {
+            "title": "Pointer",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pointer"
+        ],
+        "title": "ErrorSource",
         "type": "object"
       },
       "HealthAttributes": {
@@ -149,6 +195,318 @@
         ],
         "title": "InternalServerErrorDocument",
         "type": "object"
+      },
+      "InvalidRequestError": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "invalid_request",
+            "default": "invalid_request",
+            "title": "Code",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ErrorSource"
+          },
+          "status": {
+            "const": "422",
+            "default": "422",
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "const": "The request is not valid",
+            "default": "The request is not valid",
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "code",
+          "title",
+          "source"
+        ],
+        "title": "InvalidRequestError",
+        "type": "object"
+      },
+      "InvalidRequestErrorDocument": {
+        "additionalProperties": false,
+        "properties": {
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/InvalidRequestError"
+            },
+            "minItems": 1,
+            "title": "Errors",
+            "type": "array"
+          }
+        },
+        "required": [
+          "errors"
+        ],
+        "title": "InvalidRequestErrorDocument",
+        "type": "object"
+      },
+      "Match": {
+        "additionalProperties": false,
+        "description": "A match, derived from its `match` record.",
+        "properties": {
+          "created_by": {
+            "description": "The 33-byte key that signed the match record.",
+            "pattern": "^([0-9a-f]{2})*$",
+            "title": "Created By",
+            "type": "string"
+          },
+          "match_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Match Id",
+            "type": "string"
+          },
+          "sides": {
+            "description": "Player ids, in hex.",
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "items": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "items": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ],
+            "title": "Sides",
+            "type": "array"
+          },
+          "terms": {
+            "pattern": "^([0-9a-f]{2})*$",
+            "title": "Terms",
+            "type": "string"
+          }
+        },
+        "required": [
+          "match_id",
+          "sides",
+          "terms",
+          "created_by"
+        ],
+        "title": "Match",
+        "type": "object"
+      },
+      "MatchDatabase": {
+        "additionalProperties": false,
+        "description": "The database: `{}` when empty. `matches` is derived from `records`: the matches\nof a database sent in are ignored and rebuilt.",
+        "properties": {
+          "matches": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Match"
+            },
+            "maxItems": 10000,
+            "title": "Matches",
+            "type": "array"
+          },
+          "records": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/StoredRecord"
+            },
+            "maxItems": 10000,
+            "title": "Records",
+            "type": "array"
+          }
+        },
+        "title": "MatchDatabase",
+        "type": "object"
+      },
+      "MatchDatabaseAttributes": {
+        "additionalProperties": false,
+        "properties": {
+          "database": {
+            "$ref": "#/components/schemas/MatchDatabase"
+          },
+          "parcels": {
+            "description": "One per parcel sent, in order.",
+            "items": {
+              "$ref": "#/components/schemas/ParcelOutcome"
+            },
+            "title": "Parcels",
+            "type": "array"
+          }
+        },
+        "required": [
+          "database",
+          "parcels"
+        ],
+        "title": "MatchDatabaseAttributes",
+        "type": "object"
+      },
+      "MatchDatabaseDocument": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/MatchDatabaseResource"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "MatchDatabaseDocument",
+        "type": "object"
+      },
+      "MatchDatabaseResource": {
+        "additionalProperties": false,
+        "properties": {
+          "attributes": {
+            "$ref": "#/components/schemas/MatchDatabaseAttributes"
+          },
+          "id": {
+            "const": "new",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "match-database",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "attributes"
+        ],
+        "title": "MatchDatabaseResource",
+        "type": "object"
+      },
+      "ParcelOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "too_long",
+                  "damaged",
+                  "wrong_environment"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/RecordAnswer"
+            },
+            "title": "Records",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "applied",
+              "refused"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "reason",
+          "records"
+        ],
+        "title": "ParcelOutcome",
+        "type": "object"
+      },
+      "RecordAnswer": {
+        "additionalProperties": false,
+        "properties": {
+          "answer": {
+            "enum": [
+              "held",
+              "malformed",
+              "not_stored"
+            ],
+            "title": "Answer",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "bad_signature",
+                  "match_records_only"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "record_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Record Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "record_id",
+          "answer",
+          "reason"
+        ],
+        "title": "RecordAnswer",
+        "type": "object"
+      },
+      "StoredRecord": {
+        "additionalProperties": false,
+        "description": "A record the database holds.",
+        "properties": {
+          "answer": {
+            "const": "held",
+            "title": "Answer",
+            "type": "string"
+          },
+          "arrival": {
+            "description": "Arrival number: 1 for the first record held.",
+            "minimum": 1.0,
+            "title": "Arrival",
+            "type": "integer"
+          },
+          "arrived_at": {
+            "description": "The time of arrival sent with the submit.",
+            "format": "date-time",
+            "title": "Arrived At",
+            "type": "string"
+          },
+          "record": {
+            "description": "The standalone record ([body, signature]), in hex.",
+            "pattern": "^([0-9a-f]{2})*$",
+            "title": "Record",
+            "type": "string"
+          }
+        },
+        "required": [
+          "arrival",
+          "arrived_at",
+          "answer",
+          "record"
+        ],
+        "title": "StoredRecord",
+        "type": "object"
       }
     }
   },
@@ -194,6 +552,55 @@
           }
         },
         "summary": "Whether the API can reach its database"
+      }
+    },
+    "/v1/match-database/apply": {
+      "post": {
+        "operationId": "apply_parcels",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyParcelsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchDatabaseDocument"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorDocument"
+                }
+              }
+            },
+            "description": "The request is not valid"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalServerErrorDocument"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "TEMPORARY: apply parcels of match records to a database sent with the request",
+        "x-stability-level": "draft"
       }
     }
   }

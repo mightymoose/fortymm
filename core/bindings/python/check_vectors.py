@@ -84,8 +84,19 @@ for v in vectors["records"]:
         check(unhex(v["subject"]) in record.body, f"{name}: subject is a slice of the body")
     if "match_id" in v:
         check(record.match_id().hex() == v["match_id"] == v["id"], f"{name}: match id")
+    is_match = v["kind_name"] == "match" and v["interpreted"]
+    check((record.sides is not None) == is_match, f"{name}: sides only on a match")
+    check((record.terms is not None) == is_match, f"{name}: terms only on a match")
+    if is_match:
+        # The sides and terms are the body's own bytes: each player id, and
+        # the terms, appear in it as a CBOR byte string.
+        for player in [p for side in record.sides for p in side]:
+            check(len(player) == 32 and b"\x58\x20" + player in record.body, f"{name}: player id")
+        check(record.terms in record.body, f"{name}: terms")
     if "extra_player_id" in v:
         check(record.extra_player_id().hex() == v["extra_player_id"] == v["id"], f"{name}: player id")
+
+check((core.PRODUCTION, core.UAT, core.DEVELOPMENT) == (1, 2, 3), "environment numbers")
 
 for v in vectors["invalid_records"]:
     try:

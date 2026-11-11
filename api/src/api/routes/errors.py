@@ -33,6 +33,7 @@ from http import HTTPStatus
 from typing import Any, Literal
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, create_model
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -79,6 +80,23 @@ class MethodNotAllowedError(ErrorObject):
     status: Literal["405"] = "405"
     code: Literal["method_not_allowed"] = "method_not_allowed"
     title: Literal["Method Not Allowed"] = "Method Not Allowed"
+
+
+class ErrorSource(BaseModel):
+    """Where in the request the error is: a JSON Pointer into the request body."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pointer: str
+
+
+class InvalidRequestError(ErrorObject):
+    # Any request body that is not what the operation takes: FastAPI's own validation
+    # errors, and a route's own refusal of its input. `source` points at the part.
+    status: Literal["422"] = "422"
+    code: Literal["invalid_request"] = "invalid_request"
+    title: Literal["The request is not valid"] = "The request is not valid"
+    source: ErrorSource
 
 
 class InternalServerError(ErrorObject):
@@ -130,6 +148,17 @@ async def _http_error(request: Request, exc: Exception) -> JSONResponse:
     return error_response(error, headers=exc.headers)
 
 
+async def _invalid_request(request: Request, exc: Exception) -> JSONResponse:
+    # FastAPI's 422: the first thing wrong, as a pointer into the body. Pydantic's
+    # message is left out: it can quote the input back.
+    assert isinstance(exc, RequestValidationError)
+    errors = exc.errors()
+    location: tuple[str | int, ...] = tuple(errors[0]["loc"]) if errors else ()
+    path = location[1:] if location[:1] == ("body",) else location
+    pointer = "".join(f"/{str(part).replace('~', '~0').replace('/', '~1')}" for part in path)
+    return error_response(InvalidRequestError(source=ErrorSource(pointer=pointer)))
+
+
 async def _unhandled_error(request: Request, exc: Exception) -> JSONResponse:
     # The server still logs the traceback; the client learns only that it was ours.
     return error_response(InternalServerError())
@@ -137,4 +166,5 @@ async def _unhandled_error(request: Request, exc: Exception) -> JSONResponse:
 
 def install(app: FastAPI) -> None:
     app.add_exception_handler(StarletteHTTPException, _http_error)
+    app.add_exception_handler(RequestValidationError, _invalid_request)
     app.add_exception_handler(Exception, _unhandled_error)
