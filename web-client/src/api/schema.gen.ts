@@ -21,10 +21,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/match-database/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** TEMPORARY: apply parcels of match records to a database sent with the request */
+        post: operations["apply_parcels"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** ApplyParcelsRequest */
+        ApplyParcelsRequest: {
+            /**
+             * Arrived At
+             * Format: date-time
+             * @description The time of arrival to record. The server reads no clock.
+             */
+            arrived_at: string;
+            database: components["schemas"]["MatchDatabase"];
+            /**
+             * Parcels
+             * @description Parcel texts.
+             */
+            parcels: string[];
+        };
         /** DatabaseUnavailableError */
         DatabaseUnavailableError: {
             /**
@@ -50,6 +82,14 @@ export interface components {
         DatabaseUnavailableErrorDocument: {
             /** Errors */
             errors: components["schemas"]["DatabaseUnavailableError"][];
+        };
+        /**
+         * ErrorSource
+         * @description Where in the request the error is: a JSON Pointer into the request body.
+         */
+        ErrorSource: {
+            /** Pointer */
+            pointer: string;
         };
         /** HealthAttributes */
         HealthAttributes: {
@@ -103,6 +143,151 @@ export interface components {
             /** Errors */
             errors: components["schemas"]["InternalServerError"][];
         };
+        /** InvalidRequestError */
+        InvalidRequestError: {
+            /**
+             * Code
+             * @default invalid_request
+             * @constant
+             */
+            code: "invalid_request";
+            source: components["schemas"]["ErrorSource"];
+            /**
+             * Status
+             * @default 422
+             * @constant
+             */
+            status: "422";
+            /**
+             * Title
+             * @default The request is not valid
+             * @constant
+             */
+            title: "The request is not valid";
+        };
+        /** InvalidRequestErrorDocument */
+        InvalidRequestErrorDocument: {
+            /** Errors */
+            errors: components["schemas"]["InvalidRequestError"][];
+        };
+        /**
+         * Match
+         * @description A match, derived from its `match` record.
+         */
+        Match: {
+            /**
+             * Created By
+             * @description The 33-byte key that signed the match record.
+             */
+            created_by: string;
+            /** Match Id */
+            match_id: string;
+            /**
+             * Sides
+             * @description Player ids, in hex.
+             */
+            sides: [
+                string[],
+                string[]
+            ];
+            /** Terms */
+            terms: string;
+        };
+        /**
+         * MatchDatabase
+         * @description The database: `{}` when empty. `matches` is derived from `records`: the matches
+         *     of a database sent in are ignored and rebuilt.
+         */
+        MatchDatabase: {
+            /**
+             * Matches
+             * @default []
+             */
+            matches: components["schemas"]["Match"][];
+            /**
+             * Records
+             * @default []
+             */
+            records: components["schemas"]["StoredRecord"][];
+        };
+        /** MatchDatabaseAttributes */
+        MatchDatabaseAttributes: {
+            database: components["schemas"]["MatchDatabase"];
+            /**
+             * Parcels
+             * @description One per parcel sent, in order.
+             */
+            parcels: components["schemas"]["ParcelOutcome"][];
+        };
+        /** MatchDatabaseDocument */
+        MatchDatabaseDocument: {
+            data: components["schemas"]["MatchDatabaseResource"];
+        };
+        /** MatchDatabaseResource */
+        MatchDatabaseResource: {
+            attributes: components["schemas"]["MatchDatabaseAttributes"];
+            /**
+             * Id
+             * @constant
+             */
+            id: "new";
+            /**
+             * Type
+             * @constant
+             */
+            type: "match-database";
+        };
+        /** ParcelOutcome */
+        ParcelOutcome: {
+            /** Reason */
+            reason: ("too_long" | "damaged" | "wrong_environment") | null;
+            /** Records */
+            records: components["schemas"]["RecordAnswer"][];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "applied" | "refused";
+        };
+        /** RecordAnswer */
+        RecordAnswer: {
+            /**
+             * Answer
+             * @enum {string}
+             */
+            answer: "held" | "malformed" | "not_stored";
+            /** Reason */
+            reason: ("bad_signature" | "match_records_only") | null;
+            /** Record Id */
+            record_id: string;
+        };
+        /**
+         * StoredRecord
+         * @description A record the database holds.
+         */
+        StoredRecord: {
+            /**
+             * Answer
+             * @constant
+             */
+            answer: "held";
+            /**
+             * Arrival
+             * @description Arrival number: 1 for the first record held.
+             */
+            arrival: number;
+            /**
+             * Arrived At
+             * Format: date-time
+             * @description The time of arrival sent with the submit.
+             */
+            arrived_at: string;
+            /**
+             * Record
+             * @description The standalone record ([body, signature]), in hex.
+             */
+            record: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -146,6 +331,48 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DatabaseUnavailableErrorDocument"];
+                };
+            };
+        };
+    };
+    apply_parcels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApplyParcelsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchDatabaseDocument"];
+                };
+            };
+            /** @description The request is not valid */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvalidRequestErrorDocument"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InternalServerErrorDocument"];
                 };
             };
         };

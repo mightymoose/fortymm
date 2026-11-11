@@ -1,8 +1,22 @@
 // Runs before every component test file (vite.config.ts, `test.setupFiles`).
 import '@testing-library/jest-dom/vitest'
 import { cleanup } from '@testing-library/react'
-import { afterAll, afterEach, beforeAll } from 'vitest'
+import { afterAll, afterEach, beforeAll, vi } from 'vitest'
 import { server } from './api/server.ts'
+
+// The core's real WebAssembly build (core:wasm), read from disk: jsdom cannot
+// fetch the file the way the browser does in src/core/load.ts. Only how the
+// bytes arrive differs; the module and its wrapper are the real ones.
+vi.mock('../core/load.ts', async () => {
+  // Typed here: the app's tsconfig has no Node types, and this is the one
+  // place that reads a file.
+  const { readFile } = (await import('node:fs/promises' as string)) as {
+    readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>
+  }
+  const { Core } = await import('fortymm-core/fortymm-core.mjs')
+  const core = Core.load(await readFile('/opt/core/wasm/crypto.wasm'))
+  return { loadCore: () => core }
+})
 
 // The router resets scroll on navigation; jsdom has no layout and only logs
 // "Not implemented" for scrollTo.

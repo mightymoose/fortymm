@@ -17,7 +17,15 @@ export default defineConfig({
   // production hosting does (see src/api/client.ts). The target is the api
   // service on the dev stack's network (compose.dev.yaml); if it isn't running,
   // the page says the api's health is unknown.
+  // The core's browser build, made by core:wasm into the core-cache volume
+  // and mounted read-only at /opt/core (compose.dev.yaml): the wrapper
+  // `fortymm-core/fortymm-core.mjs` and the module with cryptography
+  // `fortymm-core/crypto.wasm`. The build bundles both into dist.
+  resolve: {
+    alias: { 'fortymm-core': '/opt/core/wasm' },
+  },
   server: {
+    fs: { allow: ['.', '/opt/core/wasm'] },
     proxy: {
       '/api': {
         target: 'http://api:8000',

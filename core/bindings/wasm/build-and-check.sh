@@ -24,12 +24,23 @@ build() {
   cp "/opt/core/target-wasm-$name/wasm32-unknown-unknown/release/fortymm_core_wasm.wasm" \
     "$out/$name.raw.wasm"
   wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
-    --enable-mutable-globals "$out/$name.raw.wasm" -o "$out/$name.wasm"
+    --enable-mutable-globals "$out/$name.raw.wasm" -o "$out/.$name.wasm.tmp"
+  # Renamed into place: the web client may be reading the previous one.
+  mv "$out/.$name.wasm.tmp" "$out/$name.wasm"
   gzip -9 -k -f "$out/$name.wasm"
 }
 
 build crypto
 build no-crypto --no-default-features
+
+# The wrapper and its types beside the modules, so one directory is the whole
+# browser build. The web client reads it from the core-cache volume
+# (compose.dev.yaml, web-client/vite.config.ts). Copy, then rename, so a reader
+# never sees half a file.
+for file in fortymm-core.mjs fortymm-core.d.mts; do
+  cp "bindings/wasm/$file" "$out/.$file.tmp"
+  mv "$out/.$file.tmp" "$out/$file"
+done
 
 size() { wc -c < "$1" | tr -d ' '; }
 echo

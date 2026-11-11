@@ -76,6 +76,7 @@ docker compose --profile e2e run --rm e2e
 
 [tasks."web-client:up"]
 description = "Start only web-client (Vite dev server, hot reload) and print its URL"
+depends = ["core:wasm"]
 run = [
   "docker compose up --detach --build --wait web-client",
   'docker compose ps --format "$DEV_PORTS_FORMAT" web-client | grep -v "^$"',
@@ -121,14 +122,17 @@ run = "docker compose --profile tools run --rm --build web-client-openapi sh scr
 
 [tasks."web-client:typecheck"]
 description = "Typecheck web-client (tsc -b)"
+depends = ["core:wasm"]
 run = "docker compose run --rm web-client npx tsc -b"
 
 [tasks."web-client:test"]
 description = "Run web-client's component tests (Vitest, Testing Library, jsdom)"
+depends = ["core:wasm"]
 run = "docker compose run --rm web-client npm test"
 
 [tasks."web-client:build"]
 description = "Production build of web-client into web-client/dist"
+depends = ["core:wasm"]
 run = "docker compose run --rm web-client npm run build"
 
 # The one entry point CI calls for this app. One step at a time: the steps
@@ -239,6 +243,35 @@ git show "$base:api/openapi.json" \
 echo "api:openapi-breaking: no breaking changes."
 """
 
+# Proves the temporary mark (api/src/api/routes/temporary.py) on the current
+# api/openapi.json, with the oasdiff command api:openapi-breaking runs: taking
+# every temporary operation out of the document is not a breaking change, and
+# taking out any one other operation is. jq edits the document on the runner.
+[tasks."api:openapi-temporary-check"]
+description = "Check that api:openapi-breaking ignores temporary (draft) operations and still catches the removal of any other"
+run = """
+set -u
+breaking() {
+  docker compose --profile tools run --rm -T api-oasdiff \
+    breaking /revision/openapi.json - --fail-on ERR --color never --allow-external-refs=false >/dev/null
+}
+draft='.paths |= (map_values(with_entries(select(.value["x-stability-level"]? != "draft"))) | with_entries(select(.value != {})))'
+if jq "$draft" api/openapi.json | breaking; then
+  echo "api:openapi-temporary-check: removing every temporary operation is not breaking."
+else
+  echo "api:openapi-temporary-check: removing the temporary operations was reported as breaking." >&2
+  exit 1
+fi
+for op in $(jq -r '.paths | to_entries[] | .key as $p | .value | to_entries[] | select(.value["x-stability-level"]? != "draft") | "\\($p)|\\(.key)"' api/openapi.json); do
+  path=${op%|*} method=${op#*|}
+  if jq --arg p "$path" --arg m "$method" 'del(.paths[$p][$m]) | .paths |= with_entries(select(.value != {}))' api/openapi.json | breaking; then
+    echo "api:openapi-temporary-check: removing $method $path was not reported as breaking." >&2
+    exit 1
+  fi
+  echo "api:openapi-temporary-check: removing $method $path is breaking, as it should be."
+done
+"""
+
 [tasks."api:test"]
 description = "Test api in process against a real PostgreSQL (pytest); arguments go to pytest"
 depends = ["core:python"]
@@ -253,13 +286,14 @@ docker compose run --rm api pytest
 # against the shipped image is part of validating the api: it is something the
 # api proves by itself, with the database it owns.
 [tasks."api:validate"]
-description = "Validate api: lockfile, lint, formatting, typecheck, OpenAPI drift, tests, and its shipped image"
+description = "Validate api: lockfile, lint, formatting, typecheck, OpenAPI drift, the temporary mark, tests, and its shipped image"
 run = [
   { task = "api:lock-check" },
   { task = "api:lint" },
   { task = "api:format-check" },
   { task = "api:typecheck" },
   { task = "api:openapi-check" },
+  { task = "api:openapi-temporary-check" },
   { task = "api:test" },
   { task = "api:e2e" },
 ]

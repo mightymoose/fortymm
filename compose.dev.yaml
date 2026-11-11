@@ -45,6 +45,10 @@ services:
     volumes:
       - ./web-client:/app
       - web-client-node-modules:/app/node_modules
+      # The core's browser build (WebAssembly and its wrapper), built by
+      # core:wasm into the core-cache volume. The web-client tasks that read
+      # it depend on core:wasm (vite.config.ts, tsconfig.app.json).
+      - core-cache:/opt/core:ro
     ports:
       # Host port chosen by Docker, so several checkouts can run at once.
       - "127.0.0.1::5173"
