@@ -56,13 +56,16 @@ depends = ["web-client:validate", "api:validate"]
 # the apps are served or connected. Everything an app can prove by itself runs
 # in its <app>:validate instead. Typechecks the suite, builds web-client,
 # serves the build from web-client-hosting (stand-in for its production
-# hosting), runs the suite against it, then stops what it started.
+# hosting), which forwards /api/* to api-release (api's production image) and
+# its api-db, runs the suite against it, then stops what it started (api-db
+# only if it wasn't already running).
 [tasks.e2e]
-description = "Run the cross-app end-to-end suite in e2e/: typecheck, then Playwright against the hosted web-client build"
+description = "Run the cross-app end-to-end suite in e2e/: typecheck, then Playwright against the hosted web-client build and api's production image"
 depends = ["web-client:build"]
 run = """
-trap 'docker compose --profile e2e rm --stop --force web-client-hosting' EXIT
-docker compose --profile e2e build e2e web-client-hosting
+db_was_running=$(docker compose ps --quiet --status running api-db)
+trap 'docker compose --profile e2e rm --stop --force web-client-hosting api-release; [ -n "$db_was_running" ] || docker compose rm --stop --force api-db' EXIT
+docker compose --profile e2e build e2e web-client-hosting api-release
 docker compose --profile e2e run --rm --no-deps e2e npm run typecheck
 docker compose --profile e2e run --rm e2e
 """
@@ -104,6 +107,16 @@ run = "docker compose run --rm web-client npm run lint"
 description = "Fail if web-client's generated route tree (src/routeTree.gen.ts) is stale against src/routes"
 run = "docker compose run --rm web-client npm run routes:check"
 
+# The types are generated from api's OpenAPI document, so these two read
+# api/openapi.json (in the web-client-openapi tool container, read-only).
+[tasks."web-client:api-types"]
+description = "Regenerate web-client's api types (src/api/schema.gen.ts) from api/openapi.json"
+run = "docker compose --profile tools run --rm --build web-client-openapi sh scripts/api-types.sh"
+
+[tasks."web-client:api-types-check"]
+description = "Fail if web-client's generated api types (src/api/schema.gen.ts) are stale against api/openapi.json"
+run = "docker compose --profile tools run --rm --build web-client-openapi sh scripts/api-types.sh --check"
+
 [tasks."web-client:typecheck"]
 description = "Typecheck web-client (tsc -b)"
 run = "docker compose run --rm web-client npx tsc -b"
@@ -119,10 +132,13 @@ run = "docker compose run --rm web-client npm run build"
 # The one entry point CI calls for this app. One step at a time: the steps
 # share the node_modules volume, which the first one may still be filling.
 # The route tree check goes first: the build regenerates the tree in place.
+# The api types check reads api/openapi.json, so a change to api's document
+# fails web-client's validation until the regenerated types are committed.
 [tasks."web-client:validate"]
-description = "Validate web-client: route tree check, lint, typecheck, component tests, production build"
+description = "Validate web-client: route tree check, api types check, lint, typecheck, component tests, production build"
 run = [
   { task = "web-client:routes-check" },
+  { task = "web-client:api-types-check" },
   { task = "web-client:lint" },
   { task = "web-client:typecheck" },
   { task = "web-client:test" },

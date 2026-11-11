@@ -15,4 +15,8 @@ export class StartPage {
   counter() {
     return screen.findByRole('button', { name: /^Count is \d+$/ })
   }
+
+  linkToHealth() {
+    return screen.findByRole('link', { name: 'Check the API’s health' })
+  }
 }

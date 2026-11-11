@@ -5,7 +5,13 @@ import { Link, useNavigate } from '@tanstack/react-router'
 export function LinksToRoutesThatExist() {
   const navigate = useNavigate()
   void navigate({ to: '/' })
-  return <Link to="/">Start</Link>
+  void navigate({ to: '/health' })
+  return (
+    <>
+      <Link to="/">Start</Link>
+      <Link to="/health">API health</Link>
+    </>
+  )
 }
 
 // Each marked line must be a type error. If the router were not registered

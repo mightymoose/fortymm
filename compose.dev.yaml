@@ -104,12 +104,18 @@ services:
   # this repository yet): nginx serving the production build in
   # web-client/dist (made by web-client:build) as static files. Used by the
   # cross-app suite. Replace it with the real hosting when that lands.
+  # It also forwards /api/* to api-release, stripping /api, as the real hosting
+  # must (dev/web-client-hosting/default.conf).
   web-client-hosting:
     profiles: [e2e]
     build:
       context: ./dev/web-client-hosting
     volumes:
       - ./web-client/dist:/usr/share/nginx/html:ro
+    depends_on:
+      # nginx resolves the api's name when it starts.
+      api-release:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
       interval: 5s
@@ -155,8 +161,8 @@ services:
 
   # Playwright for the cross-app suite in e2e/ (the `e2e` task, CI's stage 2):
   # what can fail only because of how the apps are served or connected. It
-  # drives web-client-hosting. A test that also needs the api adds
-  # api-release to depends_on (and the e2e task stops it).
+  # drives web-client-hosting, which forwards /api/* to api-release (api's
+  # production image) and its api-db; the e2e task stops all three.
   e2e:
     profiles: [e2e]
     build:
@@ -177,6 +183,18 @@ services:
 
   # ---- tools ----------------------------------------------------------------
   # Run by a task, never by `up`.
+
+  # openapi-typescript (web-client:api-types, web-client:api-types-check):
+  # generates web-client/src/api/schema.gen.ts from api/openapi.json. The one
+  # place web-client reads a file of another app, and read-only.
+  web-client-openapi:
+    profiles: [tools]
+    build:
+      context: ./dev/web-client-openapi
+    user: *host-user
+    volumes:
+      - ./web-client:/app
+      - ./api/openapi.json:/contracts/api/openapi.json:ro
 
   # oasdiff (api:breaking). The base document arrives on standard input.
   api-oasdiff:
