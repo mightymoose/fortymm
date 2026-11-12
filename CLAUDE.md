@@ -78,8 +78,15 @@ How `web-client` code and tests are laid out (details in `web-client/README.md`)
 - `api:openapi-check`: fail if `api/openapi.json` is not the document the app serves.
 - `api:openapi-breaking`: fail if `api/openapi.json` would break clients of the copy on a git ref (oasdiff, in the `api-oasdiff` service; it fails on level ERR, such as a removed path or field or a new required parameter). Additive changes pass. If the ref has no copy, it passes and says so. Defaults to `origin/main` (run `git fetch origin main` first); CI passes the base commit: `./bin/mise run api:openapi-breaking -- HEAD^`.
 - `api:test`: run the in-process tests in `api/tests/` (pytest) against a real PostgreSQL, the `api_test` database. Arguments go to pytest: `./bin/mise run api:test -- -k health`.
-- `api:validate`: lock check, lint, format check, typecheck, OpenAPI check, tests, then `api:e2e` (the shipped image), one after another. CI's stage 1 calls this.
+- `api:validate`: lock check, lint, format check, typecheck, OpenAPI check, tests, `api:e2e` (the shipped image), then `api:deploy-check`, one after another. CI's stage 1 calls this.
 - `api:e2e`: build the production image (`api/Dockerfile`), run it as `api-release` against `api-db`, run the pytest suite in `api/e2e/` against it (from `api-e2e`, with the api's dev image and venv), then stop what it started.
+
+The api's pull request previews run on Google Cloud, in the project `fortymm`, region `northamerica-northeast2`: one Cloud Run service per pull request, each with its own database on one shared Cloud SQL instance for previews only (`api/README.md`, "Hosting"). These tasks run gcloud in the `api-hosting` service (image `dev/api-hosting/`), with the login kept in the `api-hosting-gcloud` volume, never in the checkout (`teardown` removes it):
+
+- `api:gcloud`: run any gcloud command with the kept login. Log in first, in a terminal: `./bin/mise run api:gcloud -- auth login --no-launch-browser`.
+- `api:hosting-setup`: prepare the project for the previews (`api/hosting/setup.sh`): APIs, the deployer and runtime service accounts and their roles, the image repository, the instance, the shared database role and its password in Secret Manager, and Workload Identity Federation for GitHub Actions in `mightymoose/fortymm`. It creates what is missing and changes nothing already in place; a second run says so. Something that exists but differs is reported, never changed. Needs an owner's login.
+- `api:hosting-check`: change nothing; report each item the setup makes as in place, missing or different, then ask Google Cloud, as the deployer (impersonated), what it may and may not do. Fails if anything is missing or wrong.
+- `api:deploy-check`: what can be proven about the api's hosting without credentials: `api:hosting-setup` and `api:hosting-check` stop first, saying the login is missing, before reading or changing anything. The last step of `api:validate`.
 
 How `api` code and tests are laid out (details in `api/README.md`):
 

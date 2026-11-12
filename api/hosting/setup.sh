@@ -458,6 +458,17 @@ binding project "$PROJECT" "$SERVICES_ROLE_NAME" "serviceAccount:$DEPLOYER_EMAIL
 binding repository "$IMAGE_REPOSITORY" roles/artifactregistry.repoAdmin "serviceAccount:$DEPLOYER_EMAIL"
 binding service-account "$RUNTIME_EMAIL" roles/iam.serviceAccountUser "serviceAccount:$DEPLOYER_EMAIL"
 binding service-account "$DEPLOYER_EMAIL" roles/iam.workloadIdentityUser "$PRINCIPAL_SET"
+# The owner who runs this may act as the deployer, so api:hosting-check can
+# ask what the deployer may do, and a deployment can be tried by hand as it.
+# An owner could grant this to themselves anyway; it adds nothing they lack.
+case "$account" in
+  *.gserviceaccount.com) owner_member="serviceAccount:$account" ;;
+  *@*) owner_member="user:$account" ;;
+  *) owner_member="" ;;
+esac
+if [ -n "$owner_member" ]; then
+  binding service-account "$DEPLOYER_EMAIL" roles/iam.serviceAccountTokenCreator "$owner_member"
+fi
 binding project "$PROJECT" roles/cloudsql.client "serviceAccount:$RUNTIME_EMAIL" "$INSTANCE_CONDITION" "only $INSTANCE"
 binding secret "$PASSWORD_SECRET" roles/secretmanager.secretAccessor "serviceAccount:$RUNTIME_EMAIL"
 
