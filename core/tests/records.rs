@@ -514,7 +514,6 @@ fn ids_are_what_the_design_says() {
     let outcome = result.outcome_id(&CRYPTO).unwrap();
     assert_eq!(outcome.as_bytes(), &Sha256::digest(&preimage)[..]);
     assert_eq!(outcome.tag().as_bytes(), &outcome.as_bytes()[..8]);
-    assert_eq!(subject.outcome_id_preimage(), preimage);
     // The subject's bytes are a slice of the record's body.
     let bytes = subject.to_bytes();
     assert!(result.body().windows(bytes.len()).any(|w| w == bytes));

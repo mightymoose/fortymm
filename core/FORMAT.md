@@ -135,7 +135,7 @@ Every id is SHA-256 (design section 4). This implementation chose the labels. Ea
 | Outcome id | `"fortymm.outcome.v1\0"` followed by the subject's bytes |
 | Tag | the first 8 bytes of an outcome id |
 
-Each id has a function that returns its preimage, so a host that hashes asynchronously, such as WebCrypto, can compute ids itself.
+Every build computes ids itself; no build needs a host to hash.
 
 ## 8. Signatures
 

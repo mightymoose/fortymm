@@ -29,7 +29,7 @@ Everything runs in Docker through mise (see `CLAUDE.md` at the repository root).
 | `src/record.rs` | Body layout, kinds, `Draft` (one constructor per kind), `Record` |
 | `src/ids.rs` | Computed ids, their labels, and their preimages |
 | `src/signature.rs` | The stored form, DER and raw conversion, low S |
-| `src/crypto.rs` | The `Crypto` trait (SHA-256 and verification), and `Software` behind the `crypto` feature |
+| `src/crypto.rs` | The `Crypto` trait (SHA-256 and verification), and `Software`, the implementation every build uses |
 | `src/parcel.rs` | Parcels: binary form, checksum, text and link, parse, split |
 | `src/layout.rs` | Every number in the format |
 | `tests/` | Golden vectors, record and parcel properties, damage fuzzing, signatures, sizes |
@@ -37,9 +37,9 @@ Everything runs in Docker through mise (see `CLAUDE.md` at the repository root).
 | `bindings/wasm/` | Raw WebAssembly interface, the hand-written wrapper `fortymm-core.mjs`, and the Node vector runner |
 | `bindings/python/` | The Python module (PyO3, stable ABI) and the Python vector runner |
 
-## Purity, and cryptography supplied from outside
+## Purity, and cryptography
 
-The library has no input or output, no clock and no random generator. The random value in a record is a parameter of `Draft::body`. Hashing and verification go through the `Crypto` trait. The default `crypto` feature compiles in a pure-Rust implementation (`sha2`, `p256`). Without that feature the library contains no cryptography. Every id then has a `*_preimage` function, and `Record::signed_message` gives the bytes to verify, so a host can do the work asynchronously. The web build does exactly that with WebCrypto, and `core:wasm` checks that the file contains no SHA-256 or P-256 constants.
+The library has no input or output, no clock and no random generator. The random value in a record is a parameter of `Draft::body`. Hashing and verification go through the `Crypto` trait, and `Software` (pure Rust: `sha2`, `p256`) implements it in every build, the WebAssembly one included: the browser uses WebCrypto only to sign, so every getter and id is synchronous there.
 
 Nothing in the library takes bytes and returns a signature. Tests sign with software keys in `tests/common/`.
 

@@ -278,11 +278,6 @@ impl Subject {
         cbor::encode(&self.to_value())
     }
 
-    /// The preimage of the outcome id, for a host that hashes by itself.
-    pub fn outcome_id_preimage(&self) -> Vec<u8> {
-        ids::outcome_id_preimage(&self.to_bytes())
-    }
-
     /// The id of the outcome this subject creates.
     pub fn outcome_id(&self, crypto: &impl Crypto) -> OutcomeId {
         ids::outcome_id(crypto, &self.to_bytes())
@@ -1093,7 +1088,7 @@ impl std::error::Error for BadSignature {}
 /// A record: a body that decodes strictly and a signature in the stored form.
 ///
 /// Holding a `Record` does not mean its signature verifies. Call
-/// [`Record::verify`] (or verify [`Record::signed_message`] outside the core).
+/// [`Record::verify`].
 #[derive(Clone)]
 pub struct Record {
     body: Vec<u8>,
@@ -1178,12 +1173,6 @@ impl Record {
 
     /// The body bytes.
     pub fn body(&self) -> &[u8] {
-        &self.body
-    }
-
-    /// The bytes the signature is over: the body. ECDSA hashes them with
-    /// SHA-256.
-    pub fn signed_message(&self) -> &[u8] {
         &self.body
     }
 
