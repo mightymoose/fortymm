@@ -440,7 +440,7 @@ docker compose run --rm api pytest
 # against the shipped image is part of validating the api: it is something the
 # api proves by itself, with the database it owns.
 [tasks."api:validate"]
-description = "Validate api: lockfile, lint, formatting, typecheck, OpenAPI drift, tests, and its shipped image"
+description = "Validate api: lockfile, lint, formatting, typecheck, OpenAPI drift, tests, its shipped image, and its hosting setup's credential check"
 run = [
   { task = "api:lock-check" },
   { task = "api:lint" },
@@ -449,6 +449,7 @@ run = [
   { task = "api:openapi-check" },
   { task = "api:test" },
   { task = "api:e2e" },
+  { task = "api:deploy-check" },
 ]
 
 # Builds api's production image, runs it as api-release against api-db, runs
@@ -460,6 +461,58 @@ db_was_running=$(docker compose ps --quiet --status running api-db)
 trap 'docker compose --profile e2e rm --stop --force api-release; [ -n "$db_was_running" ] || docker compose rm --stop --force api-db' EXIT
 docker compose --profile e2e build api-release api-e2e
 docker compose --profile e2e run --rm api-e2e
+"""
+
+# ---- api's hosting ----------------------------------------------------------
+# The Google Cloud project the api's pull request previews run in: a Cloud
+# Run service and a database on one shared Cloud SQL instance per pull
+# request. gcloud runs in the api-hosting service's image, with its login in
+# the api-hosting-gcloud volume. api/README.md, "Hosting", has the details.
+
+# Any gcloud command, with the kept login: ./bin/mise run api:gcloud -- auth
+# login, then e.g. ./bin/mise run api:gcloud -- run services list.
+[tasks."api:gcloud"]
+description = "Run a gcloud command for api's hosting, with the login kept in a Docker volume: ./bin/mise run api:gcloud -- auth login"
+run = "docker compose --profile tools run --rm --build api-hosting gcloud"
+
+# Creates what the previews need in the project and changes nothing already in
+# place (api/hosting/setup.sh); a second run changes nothing and says so.
+# Needs an owner's login (api:gcloud -- auth login).
+[tasks."api:hosting-setup"]
+description = "Prepare the Google Cloud project for api's pull request previews; re-runnable, changes nothing already in place"
+run = "docker compose --profile tools run --rm --build api-hosting bash setup.sh"
+
+# Changes nothing: reports each item the setup makes as in place, missing or
+# different, then asks Google Cloud, as the deployer, what it may and may not
+# do. Fails if anything is missing or wrong.
+[tasks."api:hosting-check"]
+description = "Check the Google Cloud project has everything api's previews need, and the deployer no more, changing nothing"
+run = "docker compose --profile tools run --rm --build api-hosting bash setup.sh --check"
+
+# What can be proven about api's hosting without credentials: the setup and
+# the check stop, saying what is missing, before reading or changing anything
+# in Google Cloud. gcloud gets an empty configuration, so a login kept in the
+# volume is not used. The last step of api:validate.
+[tasks."api:deploy-check"]
+description = "Check, without credentials, that api's hosting setup and check stop before touching Google Cloud"
+run = """
+docker compose --profile tools build api-hosting
+compose_log=$(mktemp)
+trap 'rm -f "$compose_log"' EXIT
+for mode in setup check; do
+  flag=""
+  [ "$mode" = setup ] || flag=--check
+  # The script's own output only (Compose's goes to $compose_log).
+  if out=$(docker compose --profile tools run --rm -T -e CLOUDSDK_CONFIG=/tmp/no-login api-hosting \
+      sh -c 'bash setup.sh "$@" 2>&1' setup.sh $flag 2>"$compose_log"); then
+    echo "api:deploy-check: api:hosting-$mode ran without credentials." >&2
+    exit 1
+  fi
+  case "$out" in
+    "api:hosting-$mode: gcloud has no credentials, so nothing was read or changed."*) echo "Without credentials, api:hosting-$mode stops first, with: $out" ;;
+    *) echo "api:deploy-check: api:hosting-$mode failed without credentials, but not first and with: $out $(cat "$compose_log")" >&2; exit 1 ;;
+  esac
+done
 """
 
 # ---- core -------------------------------------------------------------------

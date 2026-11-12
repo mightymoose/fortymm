@@ -308,6 +308,20 @@ services:
       - ./core:/app
       - core-cache:/opt/core
 
+  # gcloud, for api's hosting on Google Cloud (api:gcloud, api:hosting-setup,
+  # api:hosting-check, api:deploy-check). The login stays in the
+  # api-hosting-gcloud volume, never in the checkout; `teardown` removes it.
+  # The host's Docker socket is there so the Docker CLI can push an image the
+  # host built to Artifact Registry, with gcloud's credentials.
+  api-hosting:
+    profiles: [tools]
+    build:
+      context: ./dev/api-hosting
+    volumes:
+      - ./api/hosting:/hosting:ro
+      - api-hosting-gcloud:/gcloud
+      - /var/run/docker.sock:/var/run/docker.sock
+
   # oasdiff (api:breaking). The base document arrives on standard input.
   api-oasdiff:
     profiles: [tools]
@@ -324,3 +338,4 @@ volumes:
   web-client-e2e-node-modules:
   web-client-worker-node-modules:
   core-cache:
+  api-hosting-gcloud:
