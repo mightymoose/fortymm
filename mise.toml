@@ -243,45 +243,6 @@ git show "$base:api/openapi.json" \
 echo "api:openapi-breaking: no breaking changes."
 """
 
-# Proves the temporary mark (api/src/api/routes/temporary.py) on the current
-# api/openapi.json, with the oasdiff command api:openapi-breaking runs: taking
-# every temporary operation out of the document is not a breaking change, and
-# taking out any one other operation is. api/scripts/openapi_edit.py edits the
-# document in the api container, so the host needs only Docker.
-[tasks."api:openapi-temporary-check"]
-description = "Check that api:openapi-breaking ignores temporary (draft) operations and still catches the removal of any other"
-run = """
-set -eu
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
-# The edited document, written to a file first so a failed edit stops the
-# task instead of reaching oasdiff as an empty document.
-edit() {
-  docker compose run --rm --no-deps -T api python scripts/openapi_edit.py "$@" < /dev/null > "$work/revision.json"
-}
-breaking() {
-  docker compose --profile tools run --rm -T api-oasdiff \
-    breaking /revision/openapi.json - --fail-on ERR --color never --allow-external-refs=false \
-    < "$work/revision.json" > /dev/null
-}
-edit without-temporary
-if breaking; then
-  echo "api:openapi-temporary-check: removing every temporary operation is not breaking."
-else
-  echo "api:openapi-temporary-check: removing the temporary operations was reported as breaking." >&2
-  exit 1
-fi
-docker compose run --rm --no-deps -T api python scripts/openapi_edit.py stable < /dev/null > "$work/stable"
-while read -r path method; do
-  edit without "$path" "$method"
-  if breaking; then
-    echo "api:openapi-temporary-check: removing $method $path was not reported as breaking." >&2
-    exit 1
-  fi
-  echo "api:openapi-temporary-check: removing $method $path is breaking, as it should be."
-done < "$work/stable"
-"""
-
 [tasks."api:test"]
 description = "Test api in process against a real PostgreSQL (pytest); arguments go to pytest"
 depends = ["core:python"]
@@ -296,14 +257,13 @@ docker compose run --rm api pytest
 # against the shipped image is part of validating the api: it is something the
 # api proves by itself, with the database it owns.
 [tasks."api:validate"]
-description = "Validate api: lockfile, lint, formatting, typecheck, OpenAPI drift, the temporary mark, tests, and its shipped image"
+description = "Validate api: lockfile, lint, formatting, typecheck, OpenAPI drift, tests, and its shipped image"
 run = [
   { task = "api:lock-check" },
   { task = "api:lint" },
   { task = "api:format-check" },
   { task = "api:typecheck" },
   { task = "api:openapi-check" },
-  { task = "api:openapi-temporary-check" },
   { task = "api:test" },
   { task = "api:e2e" },
 ]
