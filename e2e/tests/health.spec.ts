@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { HealthPage } from '../pages/health-page.ts'
+import { waitUntilAppIsKept } from '../pages/kept-app.ts'
 
 // The wire between the web client and the api, as a person sees it. The page
 // can only say the api is healthy if the hosting forwarded /api/v1/health to
@@ -17,4 +18,28 @@ test('the hosted health page reaches the api, which reaches its database', async
   await health.open()
 
   await expect(health.healthy).toBeVisible()
+})
+
+// The browser keeps the app on the device, but never the api's answers: a
+// request under /api/ always goes to the network. With a connection the page
+// still gets the api's real answer (not the kept index.html, which it would
+// call "unknown"), and an address under /api/ opened directly shows the api's
+// document, not the app. Without one, it can't reach the api (not an answer
+// kept from before, which would say "healthy").
+test('with the app kept on the device, the health page still asks the api, and says it can’t reach it with no connection', async ({
+  page,
+  context,
+}) => {
+  const health = new HealthPage(page)
+  await page.goto('/')
+  await waitUntilAppIsKept(page)
+
+  await health.open()
+  await expect(health.healthy).toBeVisible()
+  await page.goto('/api/v1/health')
+  await expect(page.locator('body')).toContainText('"database":"ok"')
+
+  await context.setOffline(true)
+  await health.open()
+  await expect(health.unknown).toBeVisible()
 })

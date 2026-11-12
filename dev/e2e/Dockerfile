@@ -1,5 +1,7 @@
-# Test-only image: runs the cross-app Playwright suite (e2e/). The tag must
-# match the exact @playwright/test version in e2e/package.json; the image
+# Test-only image: runs the cross-app Playwright suite (e2e/), web-client's
+# own browser suite (web-client/e2e/, service web-client-e2e) and its icon
+# rendering (web-client-icons). The tag must match the exact @playwright/test
+# version in e2e/package.json and web-client/e2e/package.json; the image
 # carries that version's browsers.
 FROM mcr.microsoft.com/playwright:v1.65.0-noble
 

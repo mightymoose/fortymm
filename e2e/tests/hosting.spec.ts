@@ -25,3 +25,16 @@ test('the hosting serves the app at a deep path, and the bundle runs', async ({
 
   expect(pageErrors).toEqual([])
 })
+
+// The one HTTP detail this suite checks, because no person can see it until
+// it goes wrong: the browser looks for a new version of the app by fetching
+// /sw.js, and an edge cache that kept an old one would leave phones on an old
+// version. The hosting must tell every cache to check with it first.
+test('the hosting serves the service worker uncached, so the browser always checks for a new version', async ({
+  request,
+}) => {
+  const response = await request.get('/sw.js')
+
+  expect(response.ok()).toBe(true)
+  expect(response.headers()['cache-control']).toBe('no-cache')
+})

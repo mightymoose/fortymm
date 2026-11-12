@@ -4,7 +4,8 @@
 #
 # Stage 1, validate: each app's <app>:validate, one matrix job per app:
 #                    everything the app can prove by itself (api's includes
-#                    its shipped image against its database); and
+#                    its shipped image against its database, web-client's
+#                    its production build in a real browser); and
 #   openapi-breaking: each <app>:openapi-breaking against the base commit, for
 #                    apps with an OpenAPI document.
 # Stage 2, e2e:      the stack-wide e2e task: one job for the cross-app suite in
@@ -49,7 +50,8 @@ jobs:
         env:
           APP: ${{ matrix.app }}
         run: ./bin/mise run "$APP:validate"
-      # Reports of an app's own end-to-end suite (today api's JUnit file).
+      # Reports of an app's own end-to-end suite (api's JUnit file,
+      # web-client's Playwright report and traces).
       - name: Upload the test reports
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -57,6 +59,8 @@ jobs:
           name: validate-report-${{ matrix.app }}
           path: |
             ${{ matrix.app }}/test-results/
+            ${{ matrix.app }}/e2e/playwright-report/
+            ${{ matrix.app }}/e2e/test-results/
           if-no-files-found: ignore
           retention-days: 14
 
