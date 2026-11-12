@@ -13,3 +13,11 @@ Every conversion at the api boundary is done with zod, in the schema: telling a 
 - The boundary is where the wire format stops: past it there are no snake_case keys and no date strings ("I don't want snake case or string dates from the api"). The schema's transform converts snake_case keys to camelCase and date strings to date values. No answer has either yet, so don't build a generic converter before the first field that needs one.
 
 `src/api/health.ts` is the example to copy.
+
+## The app is kept on the device
+
+The service worker (`offline/`, README "Opening with no connection") keeps every file of the build and answers page loads with the kept `index.html`. Keep it that way:
+
+- Never answer a request under `/api/` from the service worker, and never keep an api answer in it. Data on the device belongs in its own store, with the tasks that add it.
+- Don't list files to keep by hand: the build keeps whatever it emitted.
+- Never take over or reload a page that is open: no `skipWaiting()`, no reload on `controllerchange`. A new version shows at the next opening.
