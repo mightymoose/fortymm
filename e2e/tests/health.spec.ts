@@ -7,9 +7,12 @@ import { waitUntilAppIsKept } from '../pages/kept-app.ts'
 // the api's /v1/health and the api's production image answered from its real
 // database; anything else on the way (no forwarding, the prefix not
 // stripped, the app's own index.html) makes it say the health is unknown.
-// Today the hosting is web-client-hosting, an nginx stand-in for Cloudflare
-// Workers. What the api answers over HTTP is proven in api/; what the page
-// shows for each answer, in web-client's component tests.
+// The production hosting, the Worker in web-client/worker/, has no proxy to
+// the api yet, so these tests go through web-client-hosting, an nginx
+// stand-in that forwards /api/* (the Playwright project api-wiring). Point
+// them at the Worker when its proxy lands. What the api answers over HTTP is
+// proven in api/; what the page shows for each answer, in web-client's
+// component tests.
 test('the hosted health page reaches the api, which reaches its database', async ({
   page,
 }) => {

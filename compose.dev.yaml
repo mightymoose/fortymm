@@ -14,8 +14,10 @@
 #                  connected)
 #   <app>-<role>   anything else a suite needs, e.g. api-release (api's
 #                  production image), web-client-preview (serves a
-#                  web-client build to its own suite), or web-client-hosting
-#                  (stand-in for web-client's production hosting)
+#                  web-client build to its own suite), web-client-worker
+#                  (web-client's production hosting in the local Workers
+#                  runtime) or web-client-hosting (an nginx stand-in for it
+#                  that forwards /api/* to the api, until the Worker can)
 #
 # Tools a task runs once, such as api-oasdiff, are in the `tools` profile.
 
@@ -106,7 +108,7 @@ services:
   # (web-client/e2e/): web-client/e2e/.site, which web-client:e2e fills from
   # the production build and the suite replaces to deploy another build. It
   # reads the files on every request. Not the hosting: that is
-  # web-client-hosting, in the cross-app suite.
+  # web-client-worker, in the cross-app suite.
   web-client-preview:
     profiles: [e2e]
     build:
@@ -148,12 +150,39 @@ services:
       web-client-preview:
         condition: service_healthy
 
-  # Stands in for web-client's production hosting (Cloudflare Workers, not in
-  # this repository yet): nginx serving the production build in
-  # web-client/dist (made by web-client:build) as static files. Used by the
-  # cross-app suite. Replace it with the real hosting when that lands.
-  # It also forwards /api/* to api-release, stripping /api, as the real hosting
-  # must (dev/web-client-hosting/default.conf).
+  # web-client's production hosting, the Worker in web-client/worker/, in the
+  # local Workers runtime (wrangler dev): the same configuration Cloudflare
+  # runs, serving the production build in web-client/dist (made by
+  # web-client:build). The cross-app suite's hosting tests drive it
+  # (web-client:worker-up starts it alone). Its image also runs Wrangler for
+  # web-client:deploy-check and web-client:deploy.
+  web-client-worker:
+    profiles: [e2e]
+    build:
+      context: ./dev/web-client-worker
+    user: *host-user
+    volumes:
+      - ./web-client:/app
+      - web-client-worker-node-modules:/app/worker/node_modules
+    ports:
+      - "127.0.0.1::8787"
+    # Liveness only: the runtime answers HTTP. Deliberately not "/ is the
+    # app", so a broken rule is the suite's to report, not a reason the stack
+    # never starts.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/').then(() => process.exit(0), () => process.exit(1))"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 120s
+      start_interval: 1s
+
+  # Stands in for web-client's production hosting where the Worker can't yet:
+  # the Worker has no proxy to the api, so the cross-app suite's api-wiring
+  # tests (e2e/tests/health.spec.ts) go through this nginx instead. It serves
+  # web-client/dist and forwards /api/* to api-release, stripping /api, as the
+  # Worker must once its proxy lands (dev/web-client-hosting/default.conf).
+  # Delete it then, and point those tests at web-client-worker.
   web-client-hosting:
     profiles: [e2e]
     build:
@@ -209,8 +238,10 @@ services:
 
   # Playwright for the cross-app suite in e2e/ (the `e2e` task, CI's stage 2):
   # what can fail only because of how the apps are served or connected. It
-  # drives web-client-hosting, which forwards /api/* to api-release (api's
-  # production image) and its api-db; the e2e task stops all three.
+  # drives web-client-worker (the hosting's rules) and web-client-hosting,
+  # which forwards /api/* to api-release (api's production image) and its
+  # api-db (the api wiring); the e2e task stops all four.
+  # web-client:hosting-check runs it with --no-deps against another address.
   e2e:
     profiles: [e2e]
     build:
@@ -220,12 +251,17 @@ services:
     # Chromium runs out of shared memory in a container without this.
     ipc: host
     environment:
-      BASE_URL: http://web-client-hosting
+      WORKER_URL: http://web-client-worker:8787
+      STAND_IN_URL: http://web-client-hosting
       CI: ${CI:-}
     volumes:
       - ./e2e:/app
       - e2e-node-modules:/app/node_modules
+      # The build the hosting checks expect the address to serve.
+      - ./web-client/dist:/build:ro
     depends_on:
+      web-client-worker:
+        condition: service_healthy
       web-client-hosting:
         condition: service_healthy
 
@@ -286,4 +322,5 @@ volumes:
   api-db-data:
   e2e-node-modules:
   web-client-e2e-node-modules:
+  web-client-worker-node-modules:
   core-cache:

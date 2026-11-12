@@ -1,0 +1,38 @@
+// web-client's production hosting: a Cloudflare Worker serving the production
+// build (web-client/dist) as static assets. Deployed by web-client:deploy
+// (CI's deploy job, on main); run locally in the Workers runtime by
+// web-client:worker-up and the cross-app suite (service web-client-worker).
+// web-client/README.md ("Hosting") has the whole story.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // PROVISIONAL name. It is also the workers.dev address:
+  // https://fortymm.<account subdomain>.workers.dev. web-client:deploy takes
+  // another name for a trial Worker.
+  "name": "fortymm",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-23",
+  // Only the workers.dev address: no routes, no custom domain. No per-version
+  // preview addresses either; pull requests never deploy.
+  "workers_dev": true,
+  "preview_urls": false,
+  "send_metrics": false,
+  "assets": {
+    "directory": "../dist",
+    "binding": "ASSETS",
+    // The Worker's code runs for every request, before the assets, so every
+    // rule (the app's page for unknown paths, the 404s, every header) lives
+    // in one place, src/index.ts, and doesn't depend on which requests the
+    // platform routes straight to the assets (that changes with the
+    // compatibility date: navigations skip the Worker since 2025-04-01).
+    // A _headers file can't do it: it doesn't apply to responses the Worker
+    // makes, and in dist/ the service worker would try to keep it.
+    "run_worker_first": true,
+    // The Worker decides what an unknown path gets (src/index.ts), so the
+    // assets answer only the files that exist.
+    "not_found_handling": "none",
+    // Every file is served at its own path: /index.html is not redirected
+    // to /. The service worker keeps /index.html and answers page loads with
+    // it, and a browser refuses a redirected response for a page load.
+    "html_handling": "none"
+  }
+}

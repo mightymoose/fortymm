@@ -1,0 +1,13 @@
+{
+  "name": "web-client-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "types": "wrangler types",
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "typescript": "~7.0.2",
+    "wrangler": "4.155.0"
+  }
+}
