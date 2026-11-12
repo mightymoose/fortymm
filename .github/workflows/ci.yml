@@ -12,8 +12,19 @@
 #                    e2e/ (what can fail only because of how the apps are
 #                    served or connected), once every app is valid. One suite,
 #                    so no matrix.
+# preview:           on a pull request from this repository: web-client:preview,
+#                    the pull request's build to its own Worker on Cloudflare
+#                    (fortymm-pr-<number>), then the hosting checks against it.
+#                    Skipped where there are no secrets (a fork, Dependabot).
 # ci-passed:         the one check to require on main. Its name stays fixed as
 #                    apps and stages are added.
+# deploy:            on a push to main, after ci-passed: web-client:deploy, the
+#                    web client to its production Worker on Cloudflare. Nothing
+#                    is tested against production; the preview was.
+# The preview, the deploy, and preview-cleanup.yml (which deletes a pull
+# request's preview when it closes) are the only jobs with the Cloudflare
+# secrets. Pull requests run on pull_request, never pull_request_target, so a
+# fork's code never runs with them.
 name: CI
 
 on:
@@ -110,9 +121,59 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # Deploys the pull request's build to its own Worker, fortymm-pr-<number>,
+  # and runs the hosting checks against its address (they first wait until it
+  # serves this build: every pull request's first run is a first deploy). The
+  # address goes in the job summary. Only on a pull request from a branch of
+  # this repository, not opened by Dependabot: elsewhere the secrets are not
+  # given, so the job is skipped, and ci-passed accepts that. When it runs, a
+  # failure fails ci-passed. A comment with the address would need the
+  # pull-requests: write permission; the summary needs none.
+  preview:
+    name: preview (web-client)
+    if: >-
+      ${{ github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # One preview deploy at a time per pull request; a newer push replaces one
+    # still waiting. preview-cleanup.yml shares the group.
+    concurrency:
+      group: preview-web-client-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: ./bin/mise run web-client:preview -- fortymm-pr-${{ github.event.pull_request.number }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WORKER: fortymm-pr-${{ github.event.pull_request.number }}
+        run: ./bin/mise run web-client:preview -- "$WORKER"
+      - name: Show the preview's address
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -s web-client/worker/.wrangler/address ]; then
+            echo "Preview of this pull request: $(cat web-client/worker/.wrangler/address)" >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo "No preview was deployed." >>"$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload the hosting checks' report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: preview-report
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
   ci-passed:
     name: ci-passed
-    needs: [validate, openapi-breaking, e2e]
+    needs: [validate, openapi-breaking, e2e, preview]
     # Run even when a stage failed or was skipped, so this check always reports.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
@@ -121,6 +182,42 @@ jobs:
       - name: Require every stage to have succeeded
         env:
           NEEDS: ${{ toJSON(needs) }}
+          # The preview's condition, above: where it holds, the preview must
+          # have succeeded; elsewhere (a fork, Dependabot, a push to main) it
+          # is skipped, and that's fine.
+          PREVIEW_EXPECTED: >-
+            ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository &&
+            github.actor != 'dependabot[bot]' }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
-          jq -e 'all(.[]; .result == "success")' <<<"$NEEDS" >/dev/null
+          echo "preview required: $PREVIEW_EXPECTED"
+          jq -e --argjson expected "$PREVIEW_EXPECTED" 'all(to_entries[];
+            .value.result == "success" or
+            (.key == "preview" and .value.result == "skipped" and ($expected | not)))' <<<"$NEEDS" >/dev/null
+
+  # Deploys web-client to its production Worker on Cloudflare (workers.dev):
+  # on a push to main only, once ci-passed has succeeded. Never on a pull
+  # request, and not a check ci-passed waits for. It runs no checks against
+  # the production address: the pull request's preview was checked. If the
+  # secrets are missing, web-client:deploy says so and fails.
+  deploy:
+    name: deploy (web-client)
+    needs: ci-passed
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # One deployment at a time, in push order; a newer push waiting here
+    # replaces an older one that hasn't started.
+    concurrency:
+      group: deploy-web-client
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: ./bin/mise run web-client:deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: ./bin/mise run web-client:deploy

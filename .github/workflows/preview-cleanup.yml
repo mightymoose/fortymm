@@ -1,0 +1,43 @@
+# When a pull request closes, merged or not, deletes its preview: the Worker
+# fortymm-pr-<number> that ci.yml's preview job deployed. A checkout plus one
+# ./bin/mise run command, like every CI job. web-client:preview-delete refuses
+# any name but fortymm-pr-<number>, and a preview that was never deployed is
+# not an error.
+#
+# Its own workflow, so a closed pull request starts nothing in ci.yml. It runs
+# on pull_request, never pull_request_target: a fork's pull request gets no
+# secrets, and is skipped here as in ci.yml's preview job (it never had a
+# preview). One of the three jobs with the Cloudflare secrets (ci.yml says
+# which).
+name: Preview cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  delete-preview:
+    name: delete preview (web-client)
+    if: >-
+      ${{ github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The preview job's group: a preview deploy still running finishes first,
+    # and one still waiting is replaced by this.
+    concurrency:
+      group: preview-web-client-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: ./bin/mise run web-client:preview-delete -- fortymm-pr-${{ github.event.pull_request.number }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WORKER: fortymm-pr-${{ github.event.pull_request.number }}
+        run: ./bin/mise run web-client:preview-delete -- "$WORKER"
