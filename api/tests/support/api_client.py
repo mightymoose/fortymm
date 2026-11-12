@@ -3,10 +3,9 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import APIRouter
-from pydantic import PostgresDsn
 
 from api.app import create_app
-from api.settings import Settings
+from api.settings import DatabaseUrl, Settings
 
 
 @asynccontextmanager
@@ -19,7 +18,7 @@ async def api_client(
     demand (an unhandled exception). Unhandled exceptions become 500 responses, as
     they do under uvicorn, instead of being raised into the test.
     """
-    app = create_app(Settings(database_url=PostgresDsn(database_url)))
+    app = create_app(Settings(database_url=DatabaseUrl(database_url)))
     if extra_routes is not None:
         app.include_router(extra_routes)
     async with app.router.lifespan_context(app):
