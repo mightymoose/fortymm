@@ -41,6 +41,49 @@ Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: tr
     const outcome = core.outcomeId(record);
     check((outcome && hex(outcome)) === (v.outcome_id ?? null), `${v.name}: outcome id`);
     checks += 7;
+    // The getters: each gives the vector's value, or null when it has none.
+    const hexed = (value) =>
+      value instanceof Uint8Array ? hex(value) : Array.isArray(value) ? value.map(hexed) : value;
+    check(hex(core.signer(record)) === v.signer, `${v.name}: signer`);
+    check(hex(core.signerAccountId(record)) === v.signer_account_id, `${v.name}: signerAccountId`);
+    check(hex(core.signerOwnPlayerId(record)) === v.signer_own_player_id, `${v.name}: signerOwnPlayerId`);
+    for (const [getter, field] of [
+      ["matchId", "match_id"],
+      ["extraPlayerId", "extra_player_id"],
+      ["sides", "sides"],
+      ["terms", "terms"],
+      ["repeatsPlayer", "repeats_player"],
+      ["creator", "creator"],
+      ["introducedKey", "introduced_key"],
+    ]) {
+      const got = JSON.stringify(hexed(core[getter](record)));
+      check(got === JSON.stringify(v[field] ?? null), `${v.name}: ${getter} gave ${got}`);
+    }
+    checks += 10;
+  }
+  for (const v of vectors.usernames) {
+    const name = core.username(unhex(v.player_id), v.suffix_length);
+    check(name === v.username, `username ${v.player_id} ${v.suffix_length}: ${name}`);
+    checks += 1;
+  }
+  for (const length of [...vectors.invalid_username_suffix_lengths, -1, 4.5, 2 ** 32 + 4]) {
+    let refused = false;
+    try { core.username(new Uint8Array(32), length); } catch (error) { refused = !(error instanceof Damaged); }
+    check(refused, `username suffix length ${length}: refused`);
+    checks += 1;
+  }
+  // The types name exactly the wrapper's methods (`call` and `optional` are
+  // its own plumbing).
+  {
+    const types = await readFile(new URL("./fortymm-core.d.mts", import.meta.url), "utf8");
+    const typed = new Set([...types.matchAll(/^  (?:static )?(\w+)\(/gm)].map((m) => m[1]));
+    const methods = new Set([
+      ...Object.getOwnPropertyNames(Core.prototype).filter((n) => !["constructor", "call", "optional"].includes(n)),
+      ...Object.getOwnPropertyNames(Core).filter((n) => typeof Core[n] === "function"),
+    ]);
+    const differ = [...typed].filter((n) => !methods.has(n)).concat([...methods].filter((n) => !typed.has(n)));
+    check(differ.length === 0, `types: names differ from the wrapper: ${differ.join(", ")}`);
+    checks += 1;
   }
   for (const v of vectors.invalid_records) {
     let refused = false;

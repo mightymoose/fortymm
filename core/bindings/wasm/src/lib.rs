@@ -21,7 +21,7 @@
 
 use std::cell::RefCell;
 
-use fortymm_core::{Parcel, PublicKey, Record, Signature, Software};
+use fortymm_core::{Parcel, PlayerId, PublicKey, Record, Signature, Software};
 
 const OK: i32 = 0;
 const INVALID: i32 = 1;
@@ -118,8 +118,101 @@ pub unsafe extern "C" fn fmm_record_signature(pointer: *const u8, length: usize)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fmm_record_signer(pointer: *const u8, length: usize) -> i32 {
     with_record(unsafe { input(pointer, length) }, |r| {
-        done(r.header().signer.as_bytes().to_vec())
+        done(r.signer().as_bytes().to_vec())
     })
+}
+
+// The getters. Each reports what the bytes say, not that the record counts,
+// and gives status 2 (not applicable) for a record of another kind or one
+// this library did not interpret.
+
+fn getter(bytes: &[u8], get: impl FnOnce(&Record) -> Option<Vec<u8>>) -> i32 {
+    with_record(bytes, |r| match get(&r) {
+        Some(out) => done(out),
+        None => fail(NOT_APPLICABLE, "not applicable to this record"),
+    })
+}
+
+/// The match id of a `match` record.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_record_match_id(pointer: *const u8, length: usize) -> i32 {
+    getter(unsafe { input(pointer, length) }, |r| {
+        r.match_id(&Software).map(|id| id.as_bytes().to_vec())
+    })
+}
+
+/// The two sides of a `match` record: for each, a player count (4 bytes,
+/// big-endian) followed by that many 32-byte player ids.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_record_sides(pointer: *const u8, length: usize) -> i32 {
+    getter(unsafe { input(pointer, length) }, |r| {
+        r.sides().map(|sides| {
+            let mut out = Vec::new();
+            for side in sides {
+                out.extend((side.len() as u32).to_be_bytes());
+                side.iter().for_each(|p| out.extend(p.as_bytes()));
+            }
+            out
+        })
+    })
+}
+
+/// The terms of a `match` record.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_record_terms(pointer: *const u8, length: usize) -> i32 {
+    getter(unsafe { input(pointer, length) }, |r| {
+        r.terms().map(<[u8]>::to_vec)
+    })
+}
+
+/// Whether a `match` record names a player more than once: one byte, 1 or 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_record_repeats_player(pointer: *const u8, length: usize) -> i32 {
+    getter(unsafe { input(pointer, length) }, |r| {
+        r.repeats_player().map(|repeats| vec![u8::from(repeats)])
+    })
+}
+
+/// The key that created a `match` or `player` record's match or player.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_record_creator(pointer: *const u8, length: usize) -> i32 {
+    getter(unsafe { input(pointer, length) }, |r| {
+        r.creator().map(|key| key.as_bytes().to_vec())
+    })
+}
+
+/// The id of the extra player a `player` record creates.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_record_extra_player_id(pointer: *const u8, length: usize) -> i32 {
+    getter(unsafe { input(pointer, length) }, |r| {
+        r.extra_player_id(&Software)
+            .map(|id| id.as_bytes().to_vec())
+    })
+}
+
+/// The key a `hello` record introduces.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_record_introduced_key(pointer: *const u8, length: usize) -> i32 {
+    getter(unsafe { input(pointer, length) }, |r| {
+        r.introduced_key().map(|key| key.as_bytes().to_vec())
+    })
+}
+
+/// The generated username of a player id. Input: the suffix length (4 bytes,
+/// big-endian), then the 32-byte player id. Output: the name as UTF-8.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_username(pointer: *const u8, length: usize) -> i32 {
+    let bytes = unsafe { input(pointer, length) };
+    let Some((suffix, player)) = bytes.split_first_chunk::<4>() else {
+        return fail(INVALID, "no suffix length");
+    };
+    let Ok(player) = <[u8; 32]>::try_from(player) else {
+        return fail(INVALID, "a player id is 32 bytes");
+    };
+    match PlayerId::from_bytes(player).username(u32::from_be_bytes(*suffix) as usize) {
+        Ok(name) => done(name.into_bytes()),
+        Err(error) => fail(INVALID, error),
+    }
 }
 
 fn with_key(bytes: &[u8], then: impl FnOnce(PublicKey) -> Vec<u8>) -> i32 {

@@ -114,7 +114,7 @@ How `api` code and tests are laid out (details in `api/README.md`):
 - `core:test`: run the tests (`cargo test`). Arguments go to cargo: `./bin/mise run core:test -- --test sizes -- --nocapture` prints the measured parcel sizes.
 - `core:build`: release build of the library for the container's own platform.
 - `core:wasm`: build the WebAssembly module for browsers (`fortymm-core.wasm`, with the cryptography compiled in), shrink it with `wasm-opt`, print its size, then run the golden vectors through it from Node with WebCrypto hidden.
-- `core:python`: build the Python module for the server (stable ABI, Python 3.12 and later), then run the golden vectors through it with the same Python as `api`.
+- `core:python`: build the Python module for the server (stable ABI, Python 3.12 and later), then run the golden vectors through it with the same Python as `api`. The module and its type stub `fortymm_core.pyi` go to `/opt/core/python`.
 - `core:validate`: format check, lint, tests, release build, `core:wasm`, then `core:python`, one after another. CI's stage 1 calls this.
 
 How `core` code and tests are laid out (details in `core/README.md`; every byte-level choice in `core/FORMAT.md`):

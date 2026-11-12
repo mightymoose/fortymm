@@ -160,3 +160,40 @@ pub mod parcel {
     /// What separates the host from the text.
     pub const LINK_PATH: &str = "/P/";
 }
+
+/// Generated usernames (design section 8.4): an adjective, an animal and a
+/// suffix, computed from a player id alone. **Provisional**: the design fixes
+/// the form and that the lists are frozen once released, not the lists or the
+/// scheme (FORMAT.md section 14). The final lists are the user's to curate
+/// (design section 12).
+pub mod username {
+    /// The shortest suffix (design section 8.4, "Confirmation").
+    pub const MIN_SUFFIX_LENGTH: usize = 4;
+    /// The longest suffix this implementation computes.
+    pub const MAX_SUFFIX_LENGTH: usize = 16;
+    /// The suffix characters, in value order: digits, then lower-case
+    /// consonants without l (it looks like 1) and y. No vowels, so a suffix
+    /// cannot spell a word (design section 8.3, "Moderating usernames").
+    pub const SUFFIX_ALPHABET: &[u8; 29] = b"0123456789bcdfghjkmnpqrstvwxz";
+    /// The adjectives, in value order.
+    pub const ADJECTIVES: &[&str; 64] = &[
+        "agile", "amber", "bold", "brave", "bright", "brisk", "calm", "candid", "cheerful",
+        "clever", "cool", "crisp", "curious", "daring", "deft", "eager", "earnest", "fair",
+        "fearless", "fleet", "friendly", "gentle", "glad", "golden", "graceful", "grand", "happy",
+        "hardy", "helpful", "honest", "hopeful", "jolly", "keen", "kind", "lively", "loyal",
+        "lucky", "merry", "mighty", "modest", "neat", "nimble", "noble", "patient", "plucky",
+        "polite", "proud", "quick", "quiet", "rapid", "ready", "sharp", "shiny", "silver", "smart",
+        "spry", "steady", "sunny", "swift", "tidy", "valiant", "vivid", "warm", "wise",
+    ];
+    /// The animals, in value order.
+    pub const ANIMALS: &[&str; 64] = &[
+        "alpaca", "antelope", "badger", "bison", "bobcat", "camel", "caribou", "cheetah",
+        "chipmunk", "condor", "coyote", "crane", "dingo", "dolphin", "eagle", "egret", "falcon",
+        "ferret", "finch", "flamingo", "fox", "gazelle", "gecko", "giraffe", "heron", "hippo",
+        "ibis", "iguana", "impala", "jaguar", "kestrel", "kiwi", "koala", "lemur", "leopard",
+        "lion", "llama", "lynx", "magpie", "manatee", "marmot", "meerkat", "moose", "narwhal",
+        "ocelot", "okapi", "orca", "osprey", "otter", "owl", "panda", "pelican", "penguin",
+        "puffin", "quail", "rabbit", "raven", "robin", "seal", "stork", "swan", "tiger", "toucan",
+        "zebra",
+    ];
+}

@@ -7,6 +7,8 @@
 //!   format to the stored 64-byte form, and verification. Nothing here signs.
 //! - **Parcels** ([`parcel`]): the binary, text and link forms, parsing, and
 //!   splitting.
+//! - **Reading what is inside** (part of the fourth): the getters on
+//!   [`Record`] and the generated username of a player ([`username`]).
 //!
 //! The library is pure: no input or output, no clock, no random generator.
 //! Hashing and verification come from a [`Crypto`]; [`Software`] provides
@@ -25,6 +27,7 @@ pub mod layout;
 pub mod parcel;
 pub mod record;
 pub mod signature;
+pub mod username;
 
 pub use crypto::Crypto;
 pub use crypto::Software;
@@ -35,3 +38,4 @@ pub use record::{
     GrantSubject, Header, Kind, Record, RecordError, StaffFields, Stamp, Subject,
 };
 pub use signature::{Signature, SignatureError};
+pub use username::BadSuffixLength;

@@ -1246,6 +1246,57 @@ impl Record {
     pub fn signer_own_player_id(&self, crypto: &impl Crypto) -> PlayerId {
         self.header.signer.own_player_id(crypto)
     }
+
+    // The getters below say what the bytes mean, not that the record counts:
+    // verifying is a separate call ([`Record::verify`]). A record this library
+    // did not interpret (an unknown kind, or a format version it cannot read)
+    // gives `None` from each of them; it still has its signer.
+
+    /// The key that signed this record, whatever its kind or format version.
+    pub fn signer(&self) -> PublicKey {
+        self.header.signer
+    }
+
+    /// A `match` record's two sides, each one or more player ids.
+    pub fn sides(&self) -> Option<&[Vec<PlayerId>; 2]> {
+        match &self.content {
+            Content::Match { sides, .. } => Some(sides),
+            _ => None,
+        }
+    }
+
+    /// A `match` record's terms, as the opaque bytes they are.
+    pub fn terms(&self) -> Option<&[u8]> {
+        match &self.content {
+            Content::Match { terms, .. } => Some(terms),
+            _ => None,
+        }
+    }
+
+    /// Whether a `match` record names any player more than once, on both
+    /// sides or twice on one. Such a match is read normally and not refused:
+    /// the design has no rule for it yet.
+    pub fn repeats_player(&self) -> Option<bool> {
+        let players: Vec<&PlayerId> = self.sides()?.iter().flatten().collect();
+        Some(
+            players
+                .iter()
+                .enumerate()
+                .any(|(index, player)| players[..index].contains(player)),
+        )
+    }
+
+    /// The key that created the match or the extra player: the signer of a
+    /// `match` or `player` record.
+    pub fn creator(&self) -> Option<PublicKey> {
+        matches!(self.content, Content::Match { .. } | Content::Player)
+            .then_some(self.header.signer)
+    }
+
+    /// The key a `hello` record introduces: its signer.
+    pub fn introduced_key(&self) -> Option<PublicKey> {
+        matches!(self.content, Content::Hello).then_some(self.header.signer)
+    }
 }
 
 /// Why [`Record::assemble_verified`] failed.

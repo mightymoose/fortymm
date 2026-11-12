@@ -353,6 +353,62 @@ pub fn fixtures() -> Fixtures {
         ),
     ));
 
+    // Matches that name a player more than once. Read normally, not refused.
+    records.push((
+        "match-player-on-both-sides",
+        bob.commit(
+            &Draft::match_(
+                [vec![alice.own_player()], vec![alice.own_player()]],
+                TERMS.to_vec(),
+            )
+            .unwrap(),
+            random(23),
+            None,
+        ),
+    ));
+    records.push((
+        "match-player-twice-on-one-side",
+        bob.commit(
+            &Draft::match_(
+                [
+                    vec![bob.own_player(), extra, bob.own_player()],
+                    vec![carol.own_player()],
+                ],
+                TERMS.to_vec(),
+            )
+            .unwrap(),
+            random(24),
+            None,
+        ),
+    ));
+    // A `match` and a `player` under a format version this library does not
+    // know: no match facts and no player facts, only the signer.
+    let player_id = |p: PlayerId| Value::Bytes(p.as_bytes().to_vec());
+    records.push((
+        "match-future-format-version",
+        raw_record(
+            carol,
+            2,
+            3,
+            ENV.0,
+            random(25),
+            vec![
+                (
+                    8,
+                    Value::Array(vec![
+                        Value::Array(vec![player_id(alice.own_player())]),
+                        Value::Array(vec![player_id(bob.own_player())]),
+                    ]),
+                ),
+                (9, Value::Bytes(TERMS.to_vec())),
+            ],
+        ),
+    ));
+    records.push((
+        "player-future-format-version",
+        raw_record(carol, 2, 2, ENV.0, random(26), vec![]),
+    ));
+
     Fixtures { keys, records }
 }
 

@@ -1,12 +1,13 @@
 # core
 
-The FortyMM shared core in Rust: the first three parts of design section 14 (`DESIGN-primitives.md`).
+The FortyMM shared core in Rust: the first three parts of design section 14 (`DESIGN-primitives.md`), and the start of the fourth.
 
 - **Record bytes.** The body layout, the restricted deterministic CBOR profile, strict decoding (R2), a typed constructor for each kind, and every computed id.
 - **Signatures.** Converting DER (iOS, Android) and raw r and s (WebCrypto) to the stored 64-byte form, and verifying ECDSA P-256 with SHA-256 against the key in the body. The core never signs.
 - **Parcels.** The binary form, the text and link form, parsing that returns the parcel or `Damaged`, and splitting.
+- **Reading what is inside** (part of it). Getters on a record: a `match` record's id, sides, terms, creating key, and whether it names a player more than once (reported, never refused: the design has no rule yet); the extra player a `player` record creates and its creator; the key a `hello` introduces; every record's signer, with its account and own player. A getter says what the bytes mean, not that the record counts: verifying is a separate call. A record the library did not interpret gives nothing beyond its signer. And the generated username of a player id (FORMAT section 14, provisional).
 
-Not here yet: the rules, journal and sync decisions, match terms and result content layouts (carried as opaque bytes), username generation, and the UniFFI wrappers for iOS and Android.
+Not here yet: the rules, journal and sync decisions, match terms and result content layouts (carried as opaque bytes), and the UniFFI wrappers for iOS and Android.
 
 Every byte-level choice is in [`FORMAT.md`](FORMAT.md), and every number is in `src/layout.rs`.
 
@@ -29,13 +30,14 @@ Everything runs in Docker through mise (see `CLAUDE.md` at the repository root).
 | `src/record.rs` | Body layout, kinds, `Draft` (one constructor per kind), `Record` |
 | `src/ids.rs` | Computed ids, their labels, and their preimages |
 | `src/signature.rs` | The stored form, DER and raw conversion, low S |
+| `src/username.rs` | Generated usernames (provisional scheme; the word lists are in `src/layout.rs`) |
 | `src/crypto.rs` | The `Crypto` trait (SHA-256 and verification), and `Software`, the implementation every build uses |
 | `src/parcel.rs` | Parcels: binary form, checksum, text and link, parse, split |
 | `src/layout.rs` | Every number in the format |
 | `tests/` | Golden vectors, record and parcel properties, damage fuzzing, signatures, sizes |
 | `vectors/vectors.json` | The golden vectors, checked by every build |
-| `bindings/wasm/` | Raw WebAssembly interface, the hand-written wrapper `fortymm-core.mjs`, and the Node vector runner |
-| `bindings/python/` | The Python module (PyO3, stable ABI) and the Python vector runner |
+| `bindings/wasm/` | Raw WebAssembly interface, the hand-written wrapper `fortymm-core.mjs` and its types `fortymm-core.d.mts`, and the Node vector runner. Every getter: `matchId`, `sides`, `terms`, `repeatsPlayer`, `creator`, `extraPlayerId`, `introducedKey`, `signer`, `signerAccountId`, `signerOwnPlayerId`, `accountId`, `ownPlayerId`, `username`; null where a getter does not apply |
+| `bindings/python/` | The Python module (PyO3, stable ABI), its type stub `fortymm_core.pyi`, and the Python vector runner. The same getters in Python style (`sides`, `terms`, `repeats_player`, `creator`, `introduced_key`, `signer` as properties; `match_id()`, `extra_player_id()`, `signer_account_id()`, `signer_own_player_id()`; `account_id()`, `own_player_id()`, `username()`), None where a getter does not apply |
 
 ## Purity, and cryptography
 

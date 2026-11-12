@@ -48,9 +48,55 @@ export class Core {
     return status === OK ? out : null;
   }
 
+  // What a record says about its match and its players. Each reports what
+  // the bytes say, not that the record counts: `verify` is a separate call.
+  // A record of another kind, or one this library did not interpret (an
+  // unknown kind, or a format version it cannot read), gives null; every
+  // record still has its signer.
+  optional(name, record) {
+    const { status, out } = this.call(name, record, { allow: [NOT_APPLICABLE] });
+    return status === OK ? out : null;
+  }
+  matchId(record) { return this.optional("fmm_record_match_id", record); }
+  sides(record) {
+    const out = this.optional("fmm_record_sides", record);
+    if (out === null) return null;
+    const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
+    const sides = [];
+    for (let at = 0; sides.length < 2;) {
+      const count = view.getUint32(at);
+      at += 4;
+      const side = [];
+      for (let i = 0; i < count; i += 1, at += 32) side.push(out.slice(at, at + 32));
+      sides.push(side);
+    }
+    return sides;
+  }
+  terms(record) { return this.optional("fmm_record_terms", record); }
+  repeatsPlayer(record) {
+    const out = this.optional("fmm_record_repeats_player", record);
+    return out === null ? null : out[0] === 1;
+  }
+  creator(record) { return this.optional("fmm_record_creator", record); }
+  extraPlayerId(record) { return this.optional("fmm_record_extra_player_id", record); }
+  introducedKey(record) { return this.optional("fmm_record_introduced_key", record); }
+  signerAccountId(record) { return this.accountId(this.signer(record)); }
+  signerOwnPlayerId(record) { return this.ownPlayerId(this.signer(record)); }
+
   // Keys: the 33 bytes a record stores.
   accountId(publicKey) { return this.call("fmm_account_id", publicKey).out; }
   ownPlayerId(publicKey) { return this.call("fmm_own_player_id", publicKey).out; }
+
+  // The generated username of a 32-byte player id, with a suffix of
+  // `suffixLength` characters (4 to 16). Throws for any other length.
+  username(playerId, suffixLength) {
+    if (!Number.isInteger(suffixLength) || suffixLength < 0 || suffixLength > 0xffffffff) {
+      throw new Error(`username: suffix length ${suffixLength} is not a whole number`);
+    }
+    const head = new Uint8Array(4);
+    new DataView(head.buffer).setUint32(0, suffixLength);
+    return new TextDecoder().decode(this.call("fmm_username", concat([head, playerId])).out);
+  }
 
   // Signatures.
   signatureFromDer(der) { return this.call("fmm_signature_from_der", der).out; }
