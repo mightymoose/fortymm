@@ -20,6 +20,21 @@ export default defineConfig({
   use: {
     baseURL,
     trace: 'retain-on-failure',
+    // Service workers run only in a secure context: https, or localhost. The
+    // production hosting is https; the stand-in is plain http on the stack's
+    // network, so tell Chromium to treat its origin as secure.
+    launchOptions: {
+      args: [
+        `--unsafely-treat-insecure-origin-as-secure=${new URL(baseURL).origin}`,
+      ],
+    },
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    {
+      name: 'chromium',
+      // The full Chromium, not the headless shell, which ignores the flag
+      // above, so service workers would not run.
+      use: { ...devices['Desktop Chrome'], channel: 'chromium' },
+    },
+  ],
 })
