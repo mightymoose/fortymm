@@ -8,12 +8,14 @@
 #
 # Services that exist only for end-to-end tests are in the `e2e` profile, so
 # `up` never starts them:
-#   <app>-e2e      runs the app's own end-to-end suite, from <app>/e2e/ (api-e2e)
+#   <app>-e2e      runs the app's own end-to-end suite, from <app>/e2e/ (api-e2e,
+#                  web-client-e2e)
 #   e2e            runs the cross-app suite in e2e/ (how the apps are served or
 #                  connected)
 #   <app>-<role>   anything else a suite needs, e.g. api-release (api's
-#                  production image), or web-client-hosting (stand-in for
-#                  web-client's production hosting)
+#                  production image), web-client-preview (serves a
+#                  web-client build to its own suite), or web-client-hosting
+#                  (stand-in for web-client's production hosting)
 #
 # Tools a task runs once, such as api-oasdiff, are in the `tools` profile.
 
@@ -99,6 +101,52 @@ services:
       start_interval: 1s
 
   # ---- e2e ------------------------------------------------------------------
+
+  # vite preview, serving a build for web-client's own browser suite
+  # (web-client/e2e/): web-client/e2e/.site, which web-client:e2e fills from
+  # the production build and the suite replaces to deploy another build. It
+  # reads the files on every request. Not the hosting: that is
+  # web-client-hosting, in the cross-app suite.
+  web-client-preview:
+    profiles: [e2e]
+    build:
+      context: ./dev/web-client
+    user: *host-user
+    volumes:
+      - ./web-client:/app
+      - web-client-node-modules:/app/node_modules
+    command: ["npx", "vite", "preview", "--host", "0.0.0.0", "--port", "4173", "--strictPort", "--outDir", "e2e/.site"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4173/"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 60s
+      start_interval: 1s
+
+  # Playwright for web-client's own browser suite (web-client/e2e/, the
+  # web-client:e2e task), with the cross-app suite's image. It shares
+  # web-client-preview's network, so the app is at localhost: a secure
+  # context, where service workers run, as they do on the https production
+  # hosting.
+  web-client-e2e:
+    profiles: [e2e]
+    build:
+      context: ./dev/e2e
+    user: *host-user
+    init: true
+    # Chromium runs out of shared memory in a container without this.
+    ipc: host
+    network_mode: "service:web-client-preview"
+    environment:
+      BASE_URL: http://localhost:4173
+      CI: ${CI:-}
+    volumes:
+      - ./web-client/e2e:/app
+      - web-client-e2e-node-modules:/app/node_modules
+    depends_on:
+      web-client-preview:
+        condition: service_healthy
 
   # Stands in for web-client's production hosting (Cloudflare Workers, not in
   # this repository yet): nginx serving the production build in
@@ -196,6 +244,22 @@ services:
       - ./web-client:/app
       - ./api/openapi.json:/contracts/api/openapi.json:ro
 
+  # Renders web-client's install icons (web-client/public/icons/) from its
+  # icon, public/favicon.svg, with Chromium (web-client:icons). Runs a script
+  # of web-client's browser suite, with its image and dependencies.
+  web-client-icons:
+    profiles: [tools]
+    build:
+      context: ./dev/e2e
+    user: *host-user
+    init: true
+    ipc: host
+    volumes:
+      - ./web-client/e2e:/app
+      - web-client-e2e-node-modules:/app/node_modules
+      - ./web-client/public:/public
+    command: ["node", "scripts/render-icons.ts", "/public"]
+
   # The shared core library (Rust). It is a library, so it has nothing to
   # serve: every core:* task runs one command in this container and exits.
   # Cargo's downloads and all build output are in the core-cache volume.
@@ -221,4 +285,5 @@ volumes:
   api-venv:
   api-db-data:
   e2e-node-modules:
+  web-client-e2e-node-modules:
   core-cache:
