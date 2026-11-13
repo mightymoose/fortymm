@@ -14,6 +14,16 @@ Every conversion at the api boundary is done with zod, in the schema: telling a 
 
 `src/api/health.ts` is the example to copy.
 
+## This device's signing key
+
+`src/device-key.ts` (README "This device's signing key") is the only place the web client makes, keeps or signs with a key.
+
+- The private key is made non-extractable and kept as the `CryptoKey` object in IndexedDB. Never export it, never make it extractable, never keep it as bytes, and never pass it to the core: the core gets the 33-byte public key and the signatures.
+- Make the key only inside the append lock (`appendLock`), looking again for a kept key once it holds it. The journal's appends take the same lock.
+- A browser that can't make or keep the key is a typed result (`{ ok: false, reason }`), never a thrown error, and never a key that isn't kept.
+- Feature code never signs (design 4.3); what makes records does.
+- Claims about the real key go in the browser suite (`e2e/tests/device-key.spec.ts`, through `e2e/harness/`); jsdom has no IndexedDB and no real `CryptoKey` to keep.
+
 ## The app is kept on the device
 
 The service worker (`offline/`, README "Opening with no connection") keeps every file of the build and answers page loads with the kept `index.html`. Keep it that way:
