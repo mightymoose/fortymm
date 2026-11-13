@@ -30,7 +30,7 @@ To add a screen, add a route file that exports `Route = createFileRoute('/path')
   - *In:* `fromWire('HealthDocument')(schema)` fails `web-client:typecheck` unless the schema's input type and the document's `HealthDocument` (from `schema.gen.ts`) are each assignable to the other. A field renamed, removed or added in the document, or a value it no longer allows, fails once the types are regenerated.
   - *Out:* `.transform(...)` turns the wire shape into the app's type (`Health`). This is where snake_case keys will become camelCase and date strings date values. App code uses only the output types.
   - A body that matches no variant (another status, an HTML page, a changed api) is an answer of its own (`unknown`), not a thrown error. `web-client/CLAUDE.md` has the rules in short.
-- **Where the api is.** At `/api` on the app's own origin. Whatever serves the app forwards `/api/*` to the api with `/api` stripped, so `/api/v1/health` reaches the api's `/v1/health`: Vite's `server.proxy` in dev (`vite.config.ts`, to the `api` service) and `web-client-hosting`'s nginx in the cross-app suite. The production hosting, the Worker ("Hosting" below), answers `/api` and `/api/*` with a 404 until its proxy to the api lands. So no route file may produce a URL starting with `/api`.
+- **Where the api is.** At `/api` on the app's own origin. Whatever serves the app forwards `/api/*` to the api with `/api` stripped, so `/api/v1/health` reaches the api's `/v1/health`: Vite's `server.proxy` in dev (`vite.config.ts`, to the `api` service), and the hosting, the Worker ("Hosting" below), when it was given an api: a pull request's preview forwards to that pull request's api preview. The production Worker has no api yet and answers `/api` and `/api/*` with a 404. So no route file may produce a URL starting with `/api`.
 - **Screens that load data** use a route `loader` that calls the `src/api/` function, and a `pendingComponent` for while it's on the way (see `src/routes/health.tsx`). Turn every answer, including "couldn't reach the api", into data the component shows; don't let the loader throw for an answer the api can give.
 
 ## Opening with no connection
@@ -61,14 +61,19 @@ The production build is served by a Cloudflare Worker, at its `workers.dev` addr
 
 | What | Where |
 | --- | --- |
-| The Worker's configuration: its name (`fortymm`, provisional), the build as its static assets (`../dist`), the compatibility date | `worker/wrangler.jsonc` |
-| Every rule the hosting applies | `worker/src/index.ts` |
+| The Worker's configuration: its name (`fortymm`, provisional), the build as its static assets (`../dist`), the compatibility date, `API_ORIGIN` (empty) | `worker/wrangler.jsonc` |
+| Every rule the hosting applies, the proxy to the api included | `worker/src/index.ts` |
 | The deploy, and its credential check | `worker/scripts/deploy.sh`, `worker/scripts/with-credentials.sh` |
+| Which api each Worker is given | `worker/scripts/api-origin.sh`, with the address from `../api/hosting/preview-address.sh` |
 | Wrangler, pinned | `worker/package.json` (installed by `web-client:worker-install`, in the `web-client-worker` image) |
 
 **What it serves.** The Worker's code runs first for every request (`run_worker_first`), so every rule is in `src/index.ts`, whatever the platform would otherwise route straight to the files.
 
-- `/api` and `/api/*`: a plain 404 for every method, never the app's page. The proxy to the api (`api.fortymm.com`, with `/api` stripped) goes where `src/index.ts` marks it.
+- `/api` and `/api/*`: the api's, never a file of the build or the app's page. What happens depends on the api the Worker was given, its `API_ORIGIN` variable (below):
+  - Given one: forwarded with `/api` stripped, `/api/v1/health?x=1` to `<API_ORIGIN>/v1/health?x=1` (`/api` to `/`), with the method, the headers (but `Host`, which becomes the api's own) and the body unchanged. The api's answer comes back as it is, status, headers and body, plus `nosniff`; a redirect is handed back, not followed. Only the path and query come from the request: the target is the path set on the api's URL, so no path (`//host/x`, `/@host/x`, `/http://host/x`), header or absolute request target can make the Worker call another host. No CORS is involved: the browser calls the Worker's own origin.
+  - Given one it can't reach (refused, no such host): a plain 502 at once. The health page shows it as "unknown", like any answer it doesn't understand.
+  - Given none, as the production Worker (there is no production api yet): a plain 404 for every method.
+- No other path is forwarded: `/v1/health`, `/apix`, `/API/...` get the app's page like any other path.
 - A file of the build: that file, at its own path. `/index.html` is not redirected to `/` (`html_handling: "none"`): the service worker keeps `/index.html` and answers page loads with it, and a browser refuses a redirected response for a page load.
 - Any other path, for GET and HEAD: the app's page, and the router decides what it shows (its own not-found page for an unknown path). A missing file under `/assets/`, `/sw.js` or `/manifest.webmanifest` is a 404 instead. Other methods get a 404 (405 for a file).
 - `Cache-Control: no-cache` on the app's page (at any path), `/sw.js` and `/manifest.webmanifest`, so a deployment is seen at once and the browser always checks for a new service worker. A Worker's responses never go through Cloudflare's edge cache.
@@ -76,11 +81,21 @@ The production build is served by a Cloudflare Worker, at its `workers.dev` addr
 - `X-Content-Type-Options: nosniff` on everything. Content types come from each file's extension (`sw.js` as JavaScript, the manifest as `application/manifest+json`).
 - A `_headers` file can't do this: it doesn't apply to responses the Worker makes, and in `dist/` the service worker would try to keep it.
 
-**Locally.** `./bin/mise run web-client:worker-up` builds the app and serves it from the Worker in the local Workers runtime (`wrangler dev`, the same configuration), and prints the address; `web-client:worker-down` stops it. The cross-app suite's `worker` project tests every rule above against it (`./bin/mise run e2e`), and `web-client:deploy-check` dry-runs the deployment in `web-client:validate`.
+**Which api a Worker is given.** `API_ORIGIN` is empty in `wrangler.jsonc`, so a deploy with that file alone (the production Worker) has none. `web-client:deploy` gives a Worker its api with `wrangler deploy --var API_ORIGIN:<address>`, from the Worker's name (`worker/scripts/api-origin.sh`), and refuses any other name:
+
+| Worker | Its api |
+| --- | --- |
+| `fortymm` (production) | none: `/api/*` is a 404 |
+| `fortymm-pr-<number>` (a pull request's preview) | that pull request's api preview, `fortymm-api-pr-<number>` |
+| `fortymm-trial` (a branch tried by hand) | the api's trial, `fortymm-api-trial` |
+
+The address is made from the api preview's name by the api's own `../api/hosting/preview-address.sh`, from `../api/hosting/hosting.env` (`https://<service>-<project number>.<region>.run.app`), the same script `api:preview` checks Cloud Run against, so it is written in one place. That is the second place this app reads a file of another app, after the api types. Api previews are public, so the Worker sends no credential. `web-client:deploy-check` proves each row, and that any other name is refused.
+
+**Locally.** `./bin/mise run web-client:worker-up` builds the app and serves it from the Worker in the local Workers runtime (`wrangler dev`, the same configuration, given no api), and prints the address; `web-client:worker-down` stops it. The cross-app suite (`./bin/mise run e2e`) tests every rule above against four local Workers, given no api, the api's production image, an echo and an api they can't reach ("Tests" below), and `web-client:deploy-check` dry-runs the deployment in `web-client:validate`.
 
 ### Deploying
 
-**Each pull request gets a preview.** CI's `preview (web-client)` job runs `./bin/mise run web-client:preview -- fortymm-pr-<number>`. That builds the app, uploads it with the Worker (`wrangler deploy`) to a Worker of its own, then runs the hosting checks (`web-client:hosting-check`) against its address. A preview that breaks a rule fails `ci-passed`. The address is in the job's summary (the run's page, Summary). The checks first wait, up to two minutes, until the address serves this build's `index.html`: a deployment reaches Cloudflare's edge some seconds after `wrangler deploy` returns. Until then a new Worker's address answers Cloudflare's own 404 (`error code: 1042`), and an existing one answers with the previous version. The local Workers runtime has no such delay, so only a deployment shows it. A pull request from a fork or from Dependabot gets no secrets: its preview is skipped, and `ci-passed` doesn't need it. When the pull request closes, merged or not, the `Preview cleanup` workflow deletes its Worker (`web-client:preview-delete`, which refuses any name but `fortymm-pr-<number>`).
+**Each pull request gets a preview of the whole stack.** CI's `preview (api)` job deploys the pull request's api to its own Cloud Run service with its own database (`../api/README.md`, "Previews"). Once it is up, CI's `preview (web-client)` job runs `./bin/mise run web-client:preview -- fortymm-pr-<number>`. That builds the app, uploads it with the Worker (`wrangler deploy`) to a Worker of its own, given that pull request's api preview to forward `/api/*` to, then runs the hosting checks (`web-client:hosting-check`) against its address: the rules every Worker keeps, then the journey across both previews, the health page showing this pull request's api and its database healthy. A preview that breaks a rule fails `ci-passed`. The web client's job waits for the api's, rather than deploying beside it, so its Worker never forwards to an api that isn't there yet or is still on the previous commit, and so the journey is checked by the same command a person runs for a trial. The address is in the job's summary (the run's page, Summary). The checks first wait, up to two minutes, until the address serves this build's `index.html`: a deployment reaches Cloudflare's edge some seconds after `wrangler deploy` returns. Until then a new Worker's address answers Cloudflare's own 404 (`error code: 1042`), and an existing one answers with the previous version. The local Workers runtime has no such delay, so only a deployment shows it. A pull request from a fork or from Dependabot gets no secrets: its preview is skipped, and `ci-passed` doesn't need it. When the pull request closes, merged or not, the `Preview cleanup` workflow deletes its Worker (`web-client:preview-delete`, which refuses any name but `fortymm-pr-<number>`).
 
 **Anyone who can push a branch to this repository and open a pull request from it can deploy a preview with the Cloudflare token**, and so run code of their choosing with it during that job. Pull requests from forks can't: CI runs on `pull_request`, never `pull_request_target`, so a fork's code never gets the secrets.
 
@@ -99,7 +114,7 @@ The first deploy needs the account to have a `workers.dev` subdomain: opening Wo
 
 ### Trying a branch on Cloudflare before it merges
 
-A pull request's preview does this for you. To deploy the checked-out branch from your own machine instead, to a separate Worker so the one `main` deploys is never touched, use your own token (as above) and account ID:
+A pull request's preview does this for you. To deploy the checked-out branch from your own machine instead, to a separate Worker so the one `main` deploys is never touched, first deploy the api's trial (`./bin/mise run api:preview -- fortymm-api-trial`, `../api/README.md`, "Trying a branch by hand"), which the trial Worker forwards `/api/*` to. Then, with your own token (as above) and account ID:
 
 ```sh
 export CLOUDFLARE_ACCOUNT_ID=<account id>
@@ -107,7 +122,7 @@ export CLOUDFLARE_API_TOKEN=<token>
 ./bin/mise run web-client:preview -- fortymm-trial
 ```
 
-It deploys to `https://fortymm-trial.<account subdomain>.workers.dev`, then runs the same hosting checks against it (deep path, bundle, `/sw.js`, manifest, caching, the 404s, `nosniff`, opening offline). To run them again later: `./bin/mise run web-client:hosting-check -- https://fortymm-trial.<account subdomain>.workers.dev`. They check the address serves the build in `web-client/dist`, so run them from the checkout that deployed it, with that build in place. To remove the trial Worker: `./bin/mise run web-client:wrangler -- delete fortymm-trial`, or the dashboard: Workers & Pages, `fortymm-trial`, Settings, Delete.
+It deploys to `https://fortymm-trial.<account subdomain>.workers.dev`, then runs the same hosting checks against it (deep path, bundle, `/sw.js`, manifest, caching, the 404s, `nosniff`, opening offline, and the health page through the trial api). To run them again later: `./bin/mise run web-client:hosting-check -- https://fortymm-trial.<account subdomain>.workers.dev`. Against a Worker given no api, such as the production one, add `--no-api`: it checks the `/api/*` 404s instead of the health journey. They check the address serves the build in `web-client/dist`, so run them from the checkout that deployed it, with that build in place. To remove the trial Worker: `./bin/mise run web-client:wrangler -- delete fortymm-trial`, or the dashboard: Workers & Pages, `fortymm-trial`, Settings, Delete.
 
 ## Tests
 
@@ -118,13 +133,18 @@ It deploys to `https://fortymm-trial.<account subdomain>.workers.dev`, then runs
 | Type-level claims (the router's paths; the client's requests, the zod schemas' input and the mocks typed from the document) | `src/**/*.test-d.ts(x)` | `web-client:typecheck` |
 | The build step that writes the service worker (`offline/plugin.ts`: every emitted file is kept) | `offline/*.test.ts` | `web-client:test` |
 | What only a real browser shows about the production build by itself: opening with no connection, a new deployment reaching the device, installability | `e2e/tests/*.spec.ts`, page objects in `e2e/pages/` | `web-client:e2e` (Playwright, the last step of `web-client:validate`) |
-| How the build is hosted, by the Worker ("Hosting" below): what a person sees (a deep path gets the app; the bundle runs as served; the app opens offline after one visit; `/health` says it can't reach the api) in `../e2e/tests/hosting.spec.ts`, and its HTTP rules (headers, 404s) in `../e2e/tests/hosting-rules.spec.ts` | `../e2e/`, Playwright project `worker` | the stack-wide `e2e` task (CI's stage 2), against the local Workers runtime; `web-client:hosting-check`, against any address |
-| Wiring to the api (the hosted page reaches it, and an api answer is never kept: `../e2e/tests/health.spec.ts`), through an nginx stand-in until the Worker has a proxy | `../e2e/`, Playwright project `api-wiring` | the stack-wide `e2e` task |
+| How the build is hosted, by the Worker ("Hosting" above), whatever api it was given: what a person sees (a deep path gets the app; the bundle runs as served; the app opens offline after one visit) in `../e2e/tests/hosting.spec.ts`, and its HTTP rules (headers, 404s) in `../e2e/tests/hosting-rules.spec.ts` | `../e2e/`, Playwright project `worker` | the stack-wide `e2e` task (CI's stage 2), against the local Workers runtime; `web-client:hosting-check`, against any address |
+| A Worker given no api: `/api` and `/api/*` a plain 404 for every method; `/health` says the api's health is unknown | `../e2e/tests/hosting-no-api.spec.ts`, project `worker-no-api` | the `e2e` task; `web-client:hosting-check --no-api` |
+| The journey: the health page, through the Worker, shows the api and its database healthy | `../e2e/tests/health.spec.ts`, project `api-journey` | the `e2e` task, given the api's production image; `web-client:preview` (CI's `preview (web-client)`), given the pull request's api preview |
+| A Worker given the real api: the api's own status and document come back (200, 405, 404); an api answer is never kept on the device | `../e2e/tests/hosting-api.spec.ts`, project `worker-api` | the `e2e` task |
+| The proxy, byte for byte, against `api-echo`, a stand-in that answers with what it received (`../dev/api-echo/`): method, path, query, headers and body arrive unchanged; status and redirects come back unchanged; `/api/<a file of the build>` goes to the api; no other path is forwarded; no path, header or absolute target reaches another host | `../e2e/tests/hosting-proxy.spec.ts`, project `worker-proxy` | the `e2e` task |
+| A Worker given an api it can't reach: a plain 502 at once; `/health` says unknown | `../e2e/tests/hosting-unreachable.spec.ts`, project `worker-unreachable` | the `e2e` task |
+| Which api each Worker is given (`worker/scripts/api-origin.sh`) | `worker/` | `web-client:deploy-check` |
 | The Worker typechecks; its deployment's dry runs; the deploy's credential check; the preview delete's and `web-client:preview`'s refusals | `worker/` | `web-client:deploy-check` (last step of `web-client:validate`) |
 
 The browser suite (`e2e/`) drives the production build served by `vite preview` (`web-client-preview`), from the `web-client-e2e` service, which shares its network, so the app is at `http://localhost:4173`: a secure context, where service workers run. `web-client:e2e` copies the build to `e2e/.builds/current`, makes `e2e/.builds/next` from it (the page's title says "(next deployment)", and `sw.js` is rewritten by the same build step), and serves `e2e/.site`, which a test replaces with `deploy('current' | 'next')` (`e2e/pages/deployment.ts`) to publish a new deployment. Those directories are gitignored. The tests run one at a time, since the server is shared. A test opens the app by loading an address directly in a new page (`App.open(path)`), the way a tab or the home-screen icon does, and goes offline with `context.setOffline(true)`.
 
-The cross-app suite drives the Worker in the local Workers runtime (`web-client-worker`) for the hosting, and `web-client-hosting`, an nginx stand-in (`dev/web-client-hosting/`), only for the tests that need the api, since the Worker has no proxy yet. When the proxy lands, point `../e2e/tests/health.spec.ts` at the Worker and remove the stand-in.
+The cross-app suite drives the Worker in the local Workers runtime four times, each given a different api with `wrangler dev --var API_ORIGIN:<address>` (`../compose.dev.yaml`): `web-client-worker` none, `web-client-worker-api` the api's production image (`api-release`, with `api-db`), `web-client-worker-echo` the echo (`api-echo`), `web-client-worker-unreachable` a port nothing listens on. Each Playwright project gets one address (`../e2e/playwright.config.ts`). The echo is there because the real api has no route that would show a query or a body arriving; everything the api itself answers is tested through `web-client-worker-api`.
 
 A screen's page object has two kinds of method:
 

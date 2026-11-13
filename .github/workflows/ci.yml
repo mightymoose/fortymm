@@ -12,18 +12,20 @@
 #                    e2e/ (what can fail only because of how the apps are
 #                    served or connected), once every app is valid. One suite,
 #                    so no matrix.
-# preview:           on a pull request from this repository: web-client:preview,
-#                    the pull request's build to its own Worker on Cloudflare
-#                    (fortymm-pr-<number>), then the hosting checks against it.
-#                    Skipped where there are no secrets (a fork, Dependabot).
-# preview-api:       on the same pull requests: api:preview, the pull request's
-#                    api to its own Cloud Run service on Google Cloud
-#                    (fortymm-api-pr-<number>) with its own database
+# preview-api:       on a pull request from this repository: api:preview, the
+#                    pull request's api to its own Cloud Run service on Google
+#                    Cloud (fortymm-api-pr-<number>) with its own database
 #                    (pr_<number>), then api's end-to-end suite against it.
 #                    It signs in through Workload Identity Federation (no
 #                    stored key), so it is the only job here with
-#                    id-token: write. Skipped where the web client's preview
-#                    is, for the same reasons.
+#                    id-token: write. Skipped where there are no secrets or
+#                    identity (a fork, Dependabot).
+# preview:           on the same pull requests, once preview-api is up:
+#                    web-client:preview, the pull request's build to its own
+#                    Worker on Cloudflare (fortymm-pr-<number>), which forwards
+#                    /api/* to that pull request's api preview, then the
+#                    hosting checks against it, the health journey across
+#                    both previews included. Skipped where preview-api is.
 # ci-passed:         the one check to require on main. Its name stays fixed as
 #                    apps and stages are added.
 # deploy:            on a push to main, after ci-passed: web-client:deploy, the
@@ -132,15 +134,32 @@ jobs:
           retention-days: 14
 
   # Deploys the pull request's build to its own Worker, fortymm-pr-<number>,
-  # and runs the hosting checks against its address (they first wait until it
-  # serves this build: every pull request's first run is a first deploy). The
-  # address goes in the job summary. Only on a pull request from a branch of
-  # this repository, not opened by Dependabot: elsewhere the secrets are not
-  # given, so the job is skipped, and ci-passed accepts that. When it runs, a
-  # failure fails ci-passed. A comment with the address would need the
-  # pull-requests: write permission; the summary needs none.
+  # given that pull request's api preview, fortymm-api-pr-<number>, to forward
+  # /api/* to, and runs the hosting checks against its address (they first
+  # wait until it serves this build: every pull request's first run is a first
+  # deploy). They end with the journey across the two previews: the health
+  # page shows this pull request's api and its database healthy
+  # (e2e/tests/health.spec.ts).
+  #
+  # So it runs after preview-api, which leaves the api up and checked: the
+  # journey runs where the web client's preview is checked, by the same
+  # command a person runs for a trial, with no job of its own to rebuild the
+  # suite's image. It waits for the api's deploy (a few minutes) before
+  # deploying the Worker; a Worker deployed earlier would forward to an api
+  # still on the previous commit's build, or not there yet. If preview-api
+  # fails, this is skipped, and ci-passed fails on preview-api.
+  #
+  # The address goes in the job summary. Only on a pull request from a branch
+  # of this repository, not opened by Dependabot: elsewhere the secrets are
+  # not given, so this and preview-api are skipped, and ci-passed accepts
+  # that. When it runs, a failure fails ci-passed. A comment with the address
+  # would need the pull-requests: write permission; the summary needs none.
   preview:
     name: preview (web-client)
+    # Skipped (not run) when preview-api didn't succeed, skipped included,
+    # which is right: where preview-api is skipped, so is this, by the same
+    # condition.
+    needs: preview-api
     if: >-
       ${{ github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
@@ -185,8 +204,8 @@ jobs:
   # fortymm-api-pr-<number>, with its own database pr_<number> on the shared
   # preview instance, then runs api's end-to-end suite (api/e2e/) against its
   # address. A redeploy keeps the database. The address goes in the job
-  # summary. Same conditions as the web client's preview, above, and ci-passed
-  # treats the two alike. It signs in to Google Cloud through Workload
+  # summary. Same conditions as the web client's preview, above, which waits
+  # for this one, and ci-passed treats the two alike. It signs in to Google Cloud through Workload
   # Identity Federation: this job's OIDC token (id-token: write, given to this
   # job alone) becomes api-preview-deployer, which only GitHub Actions in this
   # repository can become; no key is stored anywhere, so nothing needs a
