@@ -7,7 +7,7 @@ from api.settings import Settings
 # socket's directory in the `host` query parameter, and the user in `user` (a URL
 # can't have a user without a host).
 CLOUD_SQL_SOCKET_URL = (
-    "postgresql:///pr_9?host=/cloudsql/fortymm:northamerica-northeast2:fortymm-api-previews"
+    "postgresql:///pr_9?host=/cloudsql/fortymm:northamerica-northeast2:fortymm-api-preview"
     "&user=api_preview"
 )
 

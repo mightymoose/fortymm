@@ -21,50 +21,30 @@
 # Run it with an owner's login: ./bin/mise run api:gcloud -- auth login.
 set -euo pipefail
 
-# ---- What the project holds. Change a value here, and nowhere else. --------
-# Everything here is for previews only, and named so: production will get its
-# own instance, role, secret and accounts beside these, and none of these
-# grants reach them.
-PROJECT=fortymm
-REGION=northamerica-northeast2
 
-# Who may deploy: GitHub Actions in this repository, and nothing else. The
-# numeric ID survives a rename and can't be taken by a new repository of the
-# same name (gh api repos/mightymoose/fortymm --jq .id).
-GITHUB_REPOSITORY=mightymoose/fortymm
-GITHUB_REPOSITORY_ID=1451920058
+# ---- What the project holds ----------------------------------------------
+# Every name shared with the preview scripts and the workflows is in
+# hosting.env, beside this script: change it there, and nowhere else. What
+# only the setup needs is below. Everything is for previews only, and named so:
+# production will get its own instance, role, secret and accounts beside these.
+# shellcheck source=hosting.env
+. "$(dirname "$0")/hosting.env"
 
-# The shared PostgreSQL instance. db-f1-micro is the smallest shared-core
-# tier (Enterprise edition only). One zone, no high availability, no backups:
+# The shared instance. db-f1-micro is the smallest shared-core tier
+# (Enterprise edition only). One zone, no high availability, no backups:
 # preview data is thrown away with its pull request.
-INSTANCE="fortymm-api-preview"
 DATABASE_VERSION=POSTGRES_18
 TIER=db-f1-micro
 STORAGE_GB=10
 
-# The one database role every preview connects as, and the secret holding its
-# password. Previews are separated by database, not by role.
-DATABASE_USER=api_preview
-PASSWORD_SECRET="api-preview-database-password"
-
-# Where the previews' images go.
-IMAGE_REPOSITORY="fortymm-api-preview"
-
-# The previews' Cloud Run services are named $SERVICE_PREFIX<number>. Cloud
-# Run ignores an IAM condition on a service's name (tried: even the names it
+# The previews' Cloud Run services are named $SERVICE_PREFIX<...>. Cloud Run
+# ignores an IAM condition on a service's name (tried: even the names it
 # allows are refused), so the services role holds for every service in the
 # project; the preview tasks' name guards keep the deployer to these.
-SERVICE_PREFIX="fortymm-api-pr-"
 
-# What GitHub Actions becomes (the deployer), and what the services run as.
-DEPLOYER="api-preview-deployer"
-RUNTIME="api-preview-runtime"
 # The deployer's two custom roles, one per kind of resource it touches.
 DATABASES_ROLE=apiPreviewDatabases
 SERVICES_ROLE=apiPreviewServices
-
-WORKLOAD_IDENTITY_POOL=github-actions
-WORKLOAD_IDENTITY_PROVIDER=fortymm
 
 APIS="artifactregistry.googleapis.com
 cloudresourcemanager.googleapis.com
@@ -104,8 +84,12 @@ iam.serviceAccountKeys.create
 secretmanager.versions.access"
 
 # ---- Derived names ---------------------------------------------------------
-DEPLOYER_EMAIL="$DEPLOYER@$PROJECT.iam.gserviceaccount.com"
-RUNTIME_EMAIL="$RUNTIME@$PROJECT.iam.gserviceaccount.com"
+DEPLOYER_EMAIL="$DEPLOYER"
+RUNTIME_EMAIL="$RUNTIME"
+DEPLOYER_ID="${DEPLOYER%%@*}"
+RUNTIME_ID="${RUNTIME%%@*}"
+PROVIDER_NAME="$WORKLOAD_IDENTITY_PROVIDER"
+PROVIDER_ID="${WORKLOAD_IDENTITY_PROVIDER##*/}"
 DATABASES_ROLE_NAME="projects/$PROJECT/roles/$DATABASES_ROLE"
 SERVICES_ROLE_NAME="projects/$PROJECT/roles/$SERVICES_ROLE"
 CONNECTION_NAME="$PROJECT:$REGION:$INSTANCE"
@@ -196,7 +180,10 @@ if ! number=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)
   exit 1
 fi
 PRINCIPAL_SET="principalSet://iam.googleapis.com/projects/$number/locations/global/workloadIdentityPools/$WORKLOAD_IDENTITY_POOL/attribute.repository/$GITHUB_REPOSITORY"
-PROVIDER_NAME="projects/$number/locations/global/workloadIdentityPools/$WORKLOAD_IDENTITY_POOL/providers/$WORKLOAD_IDENTITY_PROVIDER"
+if [ "$number" != "$PROJECT_NUMBER" ] || [ "$PROVIDER_NAME" != "projects/$number/locations/global/workloadIdentityPools/$WORKLOAD_IDENTITY_POOL/providers/$PROVIDER_ID" ]; then
+  echo "$name: hosting.env doesn't match the project: its number is $number, and the provider would be projects/$number/locations/global/workloadIdentityPools/$WORKLOAD_IDENTITY_POOL/providers/$PROVIDER_ID." >&2
+  exit 1
+fi
 ATTRIBUTE_CONDITION="assertion.repository_id == '$GITHUB_REPOSITORY_ID' && assertion.repository == '$GITHUB_REPOSITORY'"
 echo "$name: project $PROJECT ($number), region $REGION, as ${account:-the active credentials}"
 
@@ -222,12 +209,12 @@ fi
 # ---- Service accounts --------------------------------------------------------
 section "Service accounts"
 create_deployer() {
-  gcloud iam service-accounts create "$DEPLOYER" --quiet \
+  gcloud iam service-accounts create "$DEPLOYER_ID" --quiet \
     --display-name="api preview deployer" \
     --description="What GitHub Actions in $GITHUB_REPOSITORY becomes: deploys and deletes the api's pull request previews."
 }
 create_runtime() {
-  gcloud iam service-accounts create "$RUNTIME" --quiet \
+  gcloud iam service-accounts create "$RUNTIME_ID" --quiet \
     --display-name="api preview runtime" \
     --description="What the api's pull request previews run as: connects to the shared instance, reads the database password."
 }
@@ -378,7 +365,7 @@ create_pool() {
     --display-name="GitHub Actions" >/dev/null 2>&1
 }
 create_provider() {
-  gcloud iam workload-identity-pools providers create-oidc "$WORKLOAD_IDENTITY_PROVIDER" --quiet \
+  gcloud iam workload-identity-pools providers create-oidc "$PROVIDER_ID" --quiet \
     --location=global --workload-identity-pool="$WORKLOAD_IDENTITY_POOL" \
     --display-name="$GITHUB_REPOSITORY" \
     --issuer-uri="https://token.actions.githubusercontent.com" \
@@ -394,9 +381,9 @@ fi
 ensure "pool $WORKLOAD_IDENTITY_POOL" \
   "[ \"\$(gcloud iam workload-identity-pools describe $WORKLOAD_IDENTITY_POOL --location=global --format='value(state)')\" = ACTIVE ]" create_pool
 ensure "provider $PROVIDER_NAME" \
-  "gcloud iam workload-identity-pools providers describe $WORKLOAD_IDENTITY_PROVIDER --location=global --workload-identity-pool=$WORKLOAD_IDENTITY_POOL" \
+  "gcloud iam workload-identity-pools providers describe $PROVIDER_ID --location=global --workload-identity-pool=$WORKLOAD_IDENTITY_POOL" \
   create_provider
-provider=$(gcloud iam workload-identity-pools providers describe "$WORKLOAD_IDENTITY_PROVIDER" \
+provider=$(gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
   --location=global --workload-identity-pool="$WORKLOAD_IDENTITY_POOL" \
   --format='value[separator="|"](state,oidc.issuerUri,attributeCondition)' 2>/dev/null || true)
 if [ -n "$provider" ]; then
@@ -591,6 +578,6 @@ For CI (none of these is a secret):
   instance connection name  $CONNECTION_NAME
   database user             $DATABASE_USER
   password secret           $PASSWORD_SECRET
-  preview service names     $SERVICE_PREFIX<number>
+  preview service names     ${SERVICE_PREFIX}pr-<number>
 EOF
 
