@@ -23,6 +23,16 @@ Every conversion at the api boundary is done with zod, in the schema: telling a 
 - A browser that can't make or keep the key is a typed result (`{ ok: false, reason }`), never a thrown error, and never a key that isn't kept.
 - Feature code never signs (design 4.3); what makes records does.
 - Claims about the real key go in the browser suite (`e2e/tests/device-key.spec.ts`, through `e2e/harness/`); jsdom has no IndexedDB and no real `CryptoKey` to keep.
+- To learn which identity this device has without making one (a screen loading), use `keptPublicKey()`, never `deviceKey()`. Opening a page never mints an identity.
+
+## Records and users on this device
+
+`src/storage.ts` (README "Records and users on this device") is the only code that opens the `fortymm-storage` database. Its interface is two functions, `storeRecord(record)` and `loadUser(playerId)`; widen it only when a claim needs it.
+
+- The record's bytes are the source of truth; a row (the user) is a copy of what the core's getters read from it, rebuildable from the records. Never parse record bytes in the app.
+- A record and every row it mints are written in one transaction, with strict durability, inside the append lock (`appendLock`). Never write one without the other.
+- Failures are typed results (`{ ok: false, reason }`), never thrown, as in `device-key.ts`. A missing row is `null`, not a failure.
+- Claims about what is kept go in the browser suite (`e2e/tests/storage.spec.ts`, through `e2e/harness/storage.html`). A screen's component test replaces only the storage it reads (`vi.mock('../storage.ts')`, and `keptPublicKey` for the device's identity), as `src/routes/settings.test.tsx` does.
 
 ## The app is kept on the device
 
