@@ -50,8 +50,10 @@ PASSWORD_SECRET="api-preview-database-password"
 # Where the previews' images go.
 IMAGE_REPOSITORY="fortymm-api-preview"
 
-# The previews' Cloud Run services are named $SERVICE_PREFIX<something>
-# (CI: fortymm-api-pr-<number>); the deployer may touch no other service.
+# The previews' Cloud Run services are named $SERVICE_PREFIX<number>. Cloud
+# Run ignores an IAM condition on a service's name (tried: even the names it
+# allows are refused), so the services role holds for every service in the
+# project; the preview tasks' name guards keep the deployer to these.
 SERVICE_PREFIX="fortymm-api-pr-"
 
 # What GitHub Actions becomes (the deployer), and what the services run as.
@@ -75,18 +77,18 @@ sts.googleapis.com"
 
 # The deployer's roles. Databases: create and drop databases on the preview
 # instance, not the instance itself, its users or its settings. Services:
-# deploy, make public and delete the preview services.
+# deploy, make public (setIamPolicy: a deploy with --no-invoker-iam-check is
+# refused without it) and delete services; the least that a deploy, a
+# redeploy and a delete need (tried without each of list, getIamPolicy and
+# operations.get).
 DATABASES_PERMISSIONS="cloudsql.databases.create
 cloudsql.databases.delete
 cloudsql.databases.get
 cloudsql.databases.list
 cloudsql.instances.get"
-SERVICES_PERMISSIONS="run.operations.get
-run.services.create
+SERVICES_PERMISSIONS="run.services.create
 run.services.delete
 run.services.get
-run.services.getIamPolicy
-run.services.list
 run.services.setIamPolicy
 run.services.update"
 
@@ -107,12 +109,14 @@ RUNTIME_EMAIL="$RUNTIME@$PROJECT.iam.gserviceaccount.com"
 DATABASES_ROLE_NAME="projects/$PROJECT/roles/$DATABASES_ROLE"
 SERVICES_ROLE_NAME="projects/$PROJECT/roles/$SERVICES_ROLE"
 CONNECTION_NAME="$PROJECT:$REGION:$INSTANCE"
-# IAM conditions that narrow a project-level grant to the preview resources.
-# Cloud SQL's IAM is per project, and a condition on the instance's name is
-# the only way to narrow it. Cloud Run's create is checked on the region, not
-# on a service, so the services role can't be narrowed by name (README,
-# "Hosting").
-INSTANCE_CONDITION="resource.name == 'projects/$PROJECT/instances/$INSTANCE' && resource.service == 'sqladmin.googleapis.com'"
+# An IAM condition that narrows a project-level Cloud SQL grant to the preview
+# instance (Cloud SQL's IAM is per project; a condition on the instance's name
+# is the only way to narrow it). It matches the end of the name, the instance's
+# own (an instance's name can't contain "/"). The runtime's connection honours
+# it. Creating and dropping databases doesn't: with any condition on the name,
+# the instance's or one under it, the deployer was refused even after IAM had
+# settled, so the deployer's databases role holds on the whole project.
+INSTANCE_CONDITION="resource.service == 'sqladmin.googleapis.com' && resource.name.endsWith('/instances/$INSTANCE')"
 export CLOUDSDK_CORE_PROJECT="$PROJECT"
 
 # ---- Mode and output -------------------------------------------------------
@@ -453,7 +457,7 @@ binding() {
     exit 1
   fi
 }
-binding project "$PROJECT" "$DATABASES_ROLE_NAME" "serviceAccount:$DEPLOYER_EMAIL" "$INSTANCE_CONDITION" "only $INSTANCE"
+binding project "$PROJECT" "$DATABASES_ROLE_NAME" "serviceAccount:$DEPLOYER_EMAIL"
 binding project "$PROJECT" "$SERVICES_ROLE_NAME" "serviceAccount:$DEPLOYER_EMAIL"
 binding repository "$IMAGE_REPOSITORY" roles/artifactregistry.repoAdmin "serviceAccount:$DEPLOYER_EMAIL"
 binding service-account "$RUNTIME_EMAIL" roles/iam.serviceAccountUser "serviceAccount:$DEPLOYER_EMAIL"
@@ -510,21 +514,13 @@ if [ "$mode" = check ]; then
   if ! quietly gcloud auth print-access-token --impersonate-service-account="$DEPLOYER_EMAIL"; then
     missing "a token for the deployer: $account can't impersonate it (roles/iam.serviceAccountTokenCreator on it)"
   else
-    # The databases role holds only on the instance, which has no
-    # testIamPermissions of its own: the trial deployment proves it.
+    wanted=$(printf '%s\n%s\n' "$SERVICES_PERMISSIONS" "$DATABASES_PERMISSIONS" | sort)
     # shellcheck disable=SC2086
-    have=$(granted "$project_url" $SERVICES_PERMISSIONS)
-    if [ "$have" = "$(sort <<<"$SERVICES_PERMISSIONS")" ]; then
+    have=$(granted "$project_url" $wanted)
+    if [ "$have" = "$wanted" ]; then
       in_place "it may: $(paste -sd' ' <<<"$have") (project)"
     else
       missing "on the project, it holds only: $(paste -sd' ' <<<"$have")"
-    fi
-    # shellcheck disable=SC2086
-    have=$(granted "$project_url" $DATABASES_PERMISSIONS)
-    if [ -z "$have" ]; then
-      in_place "it may not: $(paste -sd' ' <<<"$DATABASES_PERMISSIONS") on the project as a whole (only on $INSTANCE)"
-    else
-      differs "on the project as a whole, it may: $(paste -sd' ' <<<"$have")"
     fi
     need="artifactregistry.repositories.uploadArtifacts
 artifactregistry.repositories.downloadArtifacts
@@ -550,12 +546,13 @@ artifactregistry.repositories.deleteArtifacts"
     else
       differs "on the project, it may: $(paste -sd' ' <<<"$have")"
     fi
-    for resource in "$repository_url=artifactregistry.repositories.delete" "$secret_url=secretmanager.versions.access" "$runtime_url=iam.serviceAccountKeys.create"; do
-      have=$(granted "${resource%%=*}" "${resource#*=}")
+    for pair in "$repository_url=artifactregistry.repositories.delete" "$secret_url=secretmanager.versions.access" "$runtime_url=iam.serviceAccountKeys.create"; do
+      url=${pair%%=*}
+      have=$(granted "$url" "${pair#*=}")
       if [ -z "$have" ]; then
-        in_place "it may not: ${resource#*=} (on ${resource%%=*##*/})"
+        in_place "it may not: ${pair#*=} (on ${url##*/})"
       else
-        differs "it may: $have (on ${resource%%=*})"
+        differs "it may: $have (on ${url##*/})"
       fi
     done
     # And for real: reading the password as the deployer must be refused.
