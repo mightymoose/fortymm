@@ -134,11 +134,12 @@ jobs:
   # Deploys the pull request's build to its own Worker, fortymm-pr-<number>,
   # and runs the hosting checks against its address (they first wait until it
   # serves this build: every pull request's first run is a first deploy). The
-  # address goes in the job summary. Only on a pull request from a branch of
+  # address goes in the job summary, and to preview-comment as the job's
+  # output (empty when nothing was deployed); this job never gets
+  # pull-requests: write itself. Only on a pull request from a branch of
   # this repository, not opened by Dependabot: elsewhere the secrets are not
   # given, so the job is skipped, and ci-passed accepts that. When it runs, a
-  # failure fails ci-passed. A comment with the address would need the
-  # pull-requests: write permission; the summary needs none.
+  # failure fails ci-passed.
   preview:
     name: preview (web-client)
     if: >-
@@ -147,6 +148,8 @@ jobs:
       github.actor != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      address: ${{ steps.address.outputs.address }}
     # One preview deploy at a time per pull request; a newer push replaces one
     # still waiting. preview-cleanup.yml shares the group.
     concurrency:
@@ -170,6 +173,13 @@ jobs:
           else
             echo "No preview was deployed." >>"$GITHUB_STEP_SUMMARY"
           fi
+      - name: Give the preview's address to the comment job
+        id: address
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -s web-client/worker/.wrangler/address ]; then
+            echo "address=$(head -n 1 web-client/worker/.wrangler/address)" >>"$GITHUB_OUTPUT"
+          fi
       - name: Upload the hosting checks' report
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -185,7 +195,7 @@ jobs:
   # fortymm-api-pr-<number>, with its own database pr_<number> on the shared
   # preview instance, then runs api's end-to-end suite (api/e2e/) against its
   # address. A redeploy keeps the database. The address goes in the job
-  # summary. Same conditions as the web client's preview, above, and ci-passed
+  # summary, and to preview-comment as the job's output. Same conditions as the web client's preview, above, and ci-passed
   # treats the two alike. It signs in to Google Cloud through Workload
   # Identity Federation: this job's OIDC token (id-token: write, given to this
   # job alone) becomes api-preview-deployer, which only GitHub Actions in this
@@ -202,6 +212,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    outputs:
+      address: ${{ steps.address.outputs.address }}
     # One preview deploy at a time per pull request; a newer push replaces one
     # still waiting. preview-cleanup.yml's api job shares the group.
     concurrency:
@@ -234,6 +246,13 @@ jobs:
           else
             echo "No api preview was deployed." >>"$GITHUB_STEP_SUMMARY"
           fi
+      - name: Give the preview's address to the comment job
+        id: address
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -s api/hosting/.preview/address ]; then
+            echo "address=$(head -n 1 api/hosting/.preview/address)" >>"$GITHUB_OUTPUT"
+          fi
       - name: Upload the end-to-end report
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -242,6 +261,60 @@ jobs:
           path: api/test-results/
           if-no-files-found: ignore
           retention-days: 14
+
+  # Puts the two previews' addresses on the pull request: one comment, found by
+  # a hidden marker and updated on every push, or created on the first
+  # (.github/scripts/preview-comment.sh). The previews pass their addresses as
+  # job outputs; one that deployed nothing reads "no preview was deployed".
+  # The permissions are split so that no job holds both a way to deploy and a
+  # way to write on the pull request: this is the only job with
+  # pull-requests: write, and it has no secrets, no id-token and no checkout of
+  # the pull request's code. It checks out the base commit's
+  # .github/scripts only, so the script that runs with the token is one already
+  # merged (a pull request that changes it sees the change after merge; where
+  # the base has no script yet, the job leaves a notice and succeeds). It runs
+  # under the previews' condition, even when one failed, and never where they
+  # are skipped. It is no merge gate: ci-passed doesn't need it, so its failure
+  # or absence doesn't block a merge. .github/scripts/check-workflows.sh
+  # (./bin/mise run workflows) fails if any of this stops being true.
+  preview-comment:
+    name: preview comment
+    needs: [preview, preview-api]
+    if: >-
+      ${{ !cancelled() && github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    # The newest run's addresses win.
+    concurrency:
+      group: preview-comment-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Comment the previews' addresses on the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          WEB_CLIENT_ADDRESS: ${{ needs.preview.outputs.address }}
+          API_ADDRESS: ${{ needs.preview-api.outputs.address }}
+        # The base commit predates the script only on the pull request that
+        # adds it: there, say so and stop, without failing.
+        run: |
+          if [ ! -f .github/scripts/preview-comment.sh ]; then
+            echo "::notice::The base commit has no .github/scripts/preview-comment.sh yet, so no comment; the next pull request gets one."
+            exit 0
+          fi
+          bash .github/scripts/preview-comment.sh
 
   ci-passed:
     name: ci-passed
