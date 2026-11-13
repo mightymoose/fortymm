@@ -16,5 +16,5 @@ createRoot(document.getElementById('root')!).render(
 
 keepAppOnDevice()
 
-// In the background: the app above renders without waiting for it.
+// In the background: the first paint never waits for it.
 void launchAtStartup()

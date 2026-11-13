@@ -28,7 +28,7 @@ Every conversion at the api boundary is done with zod, in the schema: telling a 
 
 ## The first launch
 
-`src/first-launch.ts` (README "The first launch") makes this device's key, hello and user, once, at app startup (`main.tsx`), after the app renders.
+`src/first-launch.ts` (README "The first launch") makes this device's key, hello and user, once, at app startup (`main.tsx`), in the background, without delaying the first paint.
 
 - The app never waits for it: no screen awaits it, and it never throws. A failure leaves no user, and the next start tries again.
 - Everything it reads and writes goes through one `withDeviceKey` callback, with `store`: "is there a user for this key?", then the hello. Two tabs at once end with one key, one hello and one user.

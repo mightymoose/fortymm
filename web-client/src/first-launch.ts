@@ -8,8 +8,10 @@ import type { StoreFailure } from './storage.ts'
 // the user it mints. Every later launch finds that user and does nothing.
 // Nothing syncs yet: the stored hello waits for sync.
 //
-// It runs at every app start (main.tsx), after the app has rendered, and
-// the app never waits for it. A launch that fails leaves no user (/settings
+// It starts at every app start (main.tsx), in the background, without
+// delaying the first paint: main.tsx asks React to render first, and nothing
+// on screen waits for the launch (its core fetch may begin before the page
+// has content). A launch that fails leaves no user (/settings
 // then says there is no account yet), and the next start tries again.
 
 // The environment number in every record this app makes (core/FORMAT.md,
