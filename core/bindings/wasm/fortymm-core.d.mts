@@ -29,6 +29,14 @@ export class Core {
   signerAccountId(record: Uint8Array): Uint8Array
   signerOwnPlayerId(record: Uint8Array): Uint8Array
 
+  // Making a record: the core builds the body, the platform signs it
+  // (WebCrypto's raw r||s, converted with signatureFromRaw), and assemble
+  // puts the record together and verifies it (throws if it does not).
+  // `random` is 8 bytes from the platform's random generator; `clock` is
+  // milliseconds since the Unix epoch, or null.
+  helloBody(environment: number, publicKey: Uint8Array, random: Uint8Array, clock?: number | null): Uint8Array
+  assemble(body: Uint8Array, signature: Uint8Array): Uint8Array
+
   // Keys: the 33 bytes a record stores.
   accountId(publicKey: Uint8Array): Uint8Array
   ownPlayerId(publicKey: Uint8Array): Uint8Array

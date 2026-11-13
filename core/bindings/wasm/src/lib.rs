@@ -21,7 +21,10 @@
 
 use std::cell::RefCell;
 
-use fortymm_core::{Parcel, PlayerId, PublicKey, Record, Signature, Software};
+use fortymm_core::{
+    AssembleError, ClockReading, Draft, Environment, Parcel, PlayerId, PublicKey, Record, Signature,
+    Software,
+};
 
 const OK: i32 = 0;
 const INVALID: i32 = 1;
@@ -296,25 +299,20 @@ pub unsafe extern "C" fn fmm_parcel_records(pointer: *const u8, length: usize) -
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fmm_parcel_build(pointer: *const u8, length: usize) -> i32 {
     let bytes = unsafe { input(pointer, length) };
-    let Some((environment, mut rest)) = bytes.split_first_chunk::<8>() else {
+    let Some((environment, rest)) = bytes.split_first_chunk::<8>() else {
         return fail(INVALID, "no environment");
     };
+    let Some(items) = unframe(rest) else {
+        return fail(INVALID, "truncated record list");
+    };
     let mut records = Vec::new();
-    while let Some((size, after)) = rest.split_first_chunk::<4>() {
-        let size = u32::from_be_bytes(*size) as usize;
-        if after.len() < size {
-            return fail(INVALID, "truncated record list");
-        }
-        match Record::decode(&after[..size]) {
+    for item in items {
+        match Record::decode(item) {
             Ok(record) => records.push(record),
             Err(error) => return fail(INVALID, error),
         }
-        rest = &after[size..];
     }
-    if !rest.is_empty() {
-        return fail(INVALID, "truncated record list");
-    }
-    let environment = fortymm_core::Environment(u64::from_be_bytes(*environment));
+    let environment = Environment(u64::from_be_bytes(*environment));
     match Parcel::new(environment, records) {
         Ok(parcel) => done(parcel.to_binary()),
         Err(error) => fail(INVALID, error),
@@ -335,6 +333,89 @@ pub unsafe extern "C" fn fmm_record_id(pointer: *const u8, length: usize) -> i32
     with_record(unsafe { input(pointer, length) }, |r| {
         done(r.id(&Software).as_bytes().to_vec())
     })
+}
+
+/// Items laid out as `fmm_parcel_records` writes them: each as its length
+/// (4 bytes, big-endian), then its bytes. None if the layout is broken.
+fn unframe(mut bytes: &[u8]) -> Option<Vec<&[u8]>> {
+    let mut items = Vec::new();
+    while let Some((size, after)) = bytes.split_first_chunk::<4>() {
+        let size = u32::from_be_bytes(*size) as usize;
+        if after.len() < size {
+            return None;
+        }
+        items.push(&after[..size]);
+        bytes = &after[size..];
+    }
+    bytes.is_empty().then_some(items)
+}
+
+// Making a record (design section 4.4): the core builds the body, the
+// platform signs it with its own key store, and the core assembles the record
+// from the body and the converted signature, and verifies it.
+
+/// The body of a `hello`, to sign. Input: the environment (8 bytes,
+/// big-endian), whether there is a clock reading (1 byte, 1 or 0), the clock
+/// reading in milliseconds since the Unix epoch (8 bytes, big-endian; ignored
+/// when there is none), then two items laid out as `fmm_parcel_records`
+/// writes them: the signer's 33-byte compressed key and the 8-byte random
+/// value. Output: the body.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_hello_body(pointer: *const u8, length: usize) -> i32 {
+    let bytes = unsafe { input(pointer, length) };
+    let Some((environment, rest)) = bytes.split_first_chunk::<8>() else {
+        return fail(INVALID, "no environment");
+    };
+    let Some((&[has_clock], rest)) = rest.split_first_chunk::<1>() else {
+        return fail(INVALID, "no clock flag");
+    };
+    let Some((clock, rest)) = rest.split_first_chunk::<8>() else {
+        return fail(INVALID, "no clock reading");
+    };
+    let Some([key, random]) = unframe(rest).and_then(|items| <[&[u8]; 2]>::try_from(items).ok())
+    else {
+        return fail(INVALID, "expected a key and a random value");
+    };
+    let Some(signer) = PublicKey::from_sec1_compressed(key) else {
+        return fail(INVALID, "not a compressed P-256 key");
+    };
+    let Ok(random) = <[u8; 8]>::try_from(random) else {
+        return fail(INVALID, "the random value is 8 bytes");
+    };
+    let clock = match has_clock {
+        0 => None,
+        1 => Some(ClockReading::from_unix_millis(u64::from_be_bytes(*clock))),
+        _ => return fail(INVALID, "the clock flag is 0 or 1"),
+    };
+    let environment = Environment(u64::from_be_bytes(*environment));
+    match Draft::hello().body(environment, signer, random, clock) {
+        Ok(body) => done(body),
+        Err(error) => fail(INVALID, error),
+    }
+}
+
+/// Assemble a record from a body and its signature in the stored 64-byte
+/// form (see `fmm_signature_from_raw`), laid out as `fmm_parcel_records`
+/// writes them, and verify it. Output: the standalone record. Status 1 if
+/// the body or the signature is not valid, 4 if the signature does not
+/// verify.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_record_assemble(pointer: *const u8, length: usize) -> i32 {
+    let bytes = unsafe { input(pointer, length) };
+    let Some([body, signature]) =
+        unframe(bytes).and_then(|items| <[&[u8]; 2]>::try_from(items).ok())
+    else {
+        return fail(INVALID, "expected a body and a signature");
+    };
+    let signature = match Signature::from_stored(signature) {
+        Ok(signature) => signature,
+        Err(error) => return fail(INVALID, error),
+    };
+    match Record::assemble_verified(body.to_vec(), signature, &Software) {
+        Ok(record) => done(record.to_bytes()),
+        Err(AssembleError::BadSignature) => fail(BAD_SIGNATURE, AssembleError::BadSignature),
+        Err(error) => fail(INVALID, error),
+    }
 }
 
 /// Verify the record's signature: 0 if it verifies, 4 if not.

@@ -9,7 +9,9 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
-use fmm::{Environment, Parcel, PlayerId, PublicKey, Record, Signature, Software};
+use fmm::{
+    ClockReading, Draft, Environment, Parcel, PlayerId, PublicKey, Record, Signature, Software,
+};
 
 create_exception!(fortymm_core, Malformed, PyValueError);
 create_exception!(fortymm_core, Damaged, PyValueError);
@@ -285,6 +287,35 @@ fn own_player_id<'py>(py: Python<'py>, public_key: &[u8]) -> PyResult<Bound<'py,
     ))
 }
 
+/// The body of a `hello` introducing a 33-byte compressed public key, to
+/// sign: for the environment, with an 8-byte random value and, optionally,
+/// the clock in milliseconds since the Unix epoch. Assemble the signed record
+/// with `Record.from_parts` and check it with `verify()`. Raises Malformed
+/// for a key not in the stored form or a random value not 8 bytes long.
+#[pyfunction]
+#[pyo3(signature = (environment, public_key, random, clock=None))]
+fn hello_body<'py>(
+    py: Python<'py>,
+    environment: u64,
+    public_key: &[u8],
+    random: &[u8],
+    clock: Option<u64>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let signer = key(public_key)?;
+    let random: [u8; 8] = random
+        .try_into()
+        .map_err(|_| malformed("the random value is 8 bytes"))?;
+    Draft::hello()
+        .body(
+            Environment(environment),
+            signer,
+            random,
+            clock.map(ClockReading::from_unix_millis),
+        )
+        .map(|body| bytes(py, &body))
+        .map_err(malformed)
+}
+
 /// The parcel checksum of some bytes.
 #[pyfunction]
 fn checksum(data: &[u8]) -> u32 {
@@ -315,6 +346,7 @@ fn fortymm_core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(account_id, module)?)?;
     module.add_function(wrap_pyfunction!(own_player_id, module)?)?;
     module.add_function(wrap_pyfunction!(checksum, module)?)?;
+    module.add_function(wrap_pyfunction!(hello_body, module)?)?;
     module.add_function(wrap_pyfunction!(username, module)?)?;
     module.add("FORMAT_VERSION", fmm::layout::FORMAT_VERSION)?;
     Ok(())

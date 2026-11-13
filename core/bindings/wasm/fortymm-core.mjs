@@ -83,6 +83,32 @@ export class Core {
   signerAccountId(record) { return this.accountId(this.signer(record)); }
   signerOwnPlayerId(record) { return this.ownPlayerId(this.signer(record)); }
 
+  // Making a record (design section 4.4): the core builds the body, the
+  // platform signs it with its own key (WebCrypto: ECDSA P-256 with SHA-256,
+  // which gives raw r||s; convert it with `signatureFromRaw`), and `assemble`
+  // puts the record together and verifies it.
+  //
+  // The body of a `hello` introducing `publicKey` (33 bytes, compressed),
+  // with the 8-byte `random` value from the platform's random generator and,
+  // optionally, the device clock in milliseconds since the Unix epoch.
+  helloBody(environment, publicKey, random, clock = null) {
+    const head = new Uint8Array(17);
+    const view = new DataView(head.buffer);
+    view.setBigUint64(0, uint64(environment, "helloBody: environment"));
+    if (clock !== null) {
+      view.setUint8(8, 1);
+      view.setBigUint64(9, uint64(clock, "helloBody: clock"));
+    }
+    return this.call("fmm_hello_body", concat([head, frame([publicKey, random])])).out;
+  }
+  // The standalone record from a body and its stored 64-byte signature.
+  // Throws if the body is not valid or the signature does not verify.
+  assemble(body, signature) {
+    const { status, out } = this.call("fmm_record_assemble", frame([body, signature]));
+    if (status === BAD_SIGNATURE) throw new Error(`assemble: ${new TextDecoder().decode(out)}`);
+    return out;
+  }
+
   // Keys: the 33 bytes a record stores.
   accountId(publicKey) { return this.call("fmm_account_id", publicKey).out; }
   ownPlayerId(publicKey) { return this.call("fmm_own_player_id", publicKey).out; }
@@ -116,6 +142,13 @@ export class Core {
     new DataView(head.buffer).setUint32(0, maxChars);
     return unframe(this.call("fmm_parcel_split", concat([head, binary])).out);
   }
+}
+
+function uint64(value, what) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${what} ${value} is not a whole number from 0`);
+  }
+  return BigInt(value);
 }
 
 function frame(items) {
