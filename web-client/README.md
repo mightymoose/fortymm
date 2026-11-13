@@ -33,6 +33,22 @@ To add a screen, add a route file that exports `Route = createFileRoute('/path')
 - **Where the api is.** At `/api` on the app's own origin. Whatever serves the app forwards `/api/*` to the api with `/api` stripped, so `/api/v1/health` reaches the api's `/v1/health`: Vite's `server.proxy` in dev (`vite.config.ts`, to the `api` service) and `web-client-hosting`'s nginx in the cross-app suite. The production hosting, the Worker ("Hosting" below), answers `/api` and `/api/*` with a 404 until its proxy to the api lands. So no route file may produce a URL starting with `/api`.
 - **Screens that load data** use a route `loader` that calls the `src/api/` function, and a `pendingComponent` for while it's on the way (see `src/routes/health.tsx`). Turn every answer, including "couldn't reach the api", into data the component shows; don't let the loader throw for an answer the api can give.
 
+## The shared core
+
+The core (`../core/`, the Rust library) runs in the browser as a WebAssembly module with a small hand-written wrapper. Web client code calls it like this:
+
+```ts
+import { loadCore } from '../core/load.ts'
+
+const core = await loadCore()
+core.username(playerId, 4) // synchronous once loaded
+```
+
+- **Where it comes from.** `core:wasm` builds the module and publishes it with the wrapper (`fortymm-core.mjs`) and its types (`fortymm-core.d.mts`) to `/opt/core/wasm` in the `core-cache` volume. The `web-client` service mounts the volume read-only at `/opt/core`, and the app imports it as `fortymm-core/...`: an alias in `vite.config.ts` (with `server.fs.allow`, so the dev server serves it) and a path in `tsconfig.app.json`, so the types are the core's own. `web-client:up`, `:typecheck`, `:test` and `:build` run `core:wasm` first; nothing else needs setting up.
+- **Loading.** `src/core/load.ts` fetches the module and instantiates it once per page, and every caller gets the same `Core`. A load that fails is forgotten, so the next caller tries again. The build emits the module as `dist/assets/fortymm-core-<hash>.wasm` (about 139 kB, 62 kB gzipped), so the service worker keeps it with every other file and the core loads with no connection, and the hosting serves it like any file under `/assets/` (`application/wasm`, cached for a year).
+- **Tests.** `src/test/setup.ts` replaces `load.ts` in component tests with one that reads the same real module from disk, since jsdom can't fetch it. A test makes loading fail with `vi.mocked(loadCore).mockRejectedValue(...)`; it goes back to the real core after each test. `src/core/load.test.ts` tests the real `load.ts`, with MSW serving the module, and `src/core/load.test-d.ts` proves the wrapper is typed from `fortymm-core.d.mts`.
+- **Where it shows.** `/health` says whether the core loaded, with the username it gives a fixed player id, one of the core's golden vectors (`../core/vectors/vectors.json`, "usernames"). If it can't load, the page says so and still gives the api's answer.
+
 ## Opening with no connection
 
 The app is a web page the browser has to download, so it keeps a copy on the device: after one visit with a connection it opens and works with the network off, from a tab or from the home screen. People score matches in sports halls with no signal.
@@ -117,8 +133,8 @@ It deploys to `https://fortymm-trial.<account subdomain>.workers.dev`, then runs
 | Its page object | `src/routes/<route>.page.ts` | used by the test above |
 | Type-level claims (the router's paths; the client's requests, the zod schemas' input and the mocks typed from the document) | `src/**/*.test-d.ts(x)` | `web-client:typecheck` |
 | The build step that writes the service worker (`offline/plugin.ts`: every emitted file is kept) | `offline/*.test.ts` | `web-client:test` |
-| What only a real browser shows about the production build by itself: opening with no connection, a new deployment reaching the device, installability | `e2e/tests/*.spec.ts`, page objects in `e2e/pages/` | `web-client:e2e` (Playwright, the last step of `web-client:validate`) |
-| How the build is hosted, by the Worker ("Hosting" below): what a person sees (a deep path gets the app; the bundle runs as served; the app opens offline after one visit; `/health` says it can't reach the api) in `../e2e/tests/hosting.spec.ts`, and its HTTP rules (headers, 404s) in `../e2e/tests/hosting-rules.spec.ts` | `../e2e/`, Playwright project `worker` | the stack-wide `e2e` task (CI's stage 2), against the local Workers runtime; `web-client:hosting-check`, against any address |
+| What only a real browser shows about the production build by itself: opening with no connection, a new deployment reaching the device, installability, the shipped app loading the shared core (online and offline) | `e2e/tests/*.spec.ts`, page objects in `e2e/pages/` | `web-client:e2e` (Playwright, the last step of `web-client:validate`) |
+| How the build is hosted, by the Worker ("Hosting" below): what a person sees (a deep path gets the app; the bundle runs as served; the app opens offline after one visit; `/health` says it can't reach the api, and loads the shared core as served) in `../e2e/tests/hosting.spec.ts`, and its HTTP rules (headers, 404s) in `../e2e/tests/hosting-rules.spec.ts` | `../e2e/`, Playwright project `worker` | the stack-wide `e2e` task (CI's stage 2), against the local Workers runtime; `web-client:hosting-check`, against any address |
 | Wiring to the api (the hosted page reaches it, and an api answer is never kept: `../e2e/tests/health.spec.ts`), through an nginx stand-in until the Worker has a proxy | `../e2e/`, Playwright project `api-wiring` | the stack-wide `e2e` task |
 | The Worker typechecks; its deployment's dry runs; the deploy's credential check; the preview delete's and `web-client:preview`'s refusals | `worker/` | `web-client:deploy-check` (last step of `web-client:validate`) |
 

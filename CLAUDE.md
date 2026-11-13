@@ -12,7 +12,7 @@ Run with `./bin/mise run <task>`. Pass arguments after `--`.
 
 Stack-wide tasks act on every app in the stack:
 
-- `up`: start every app and its services (`web-client`, `api`, `api-db`), then print their URLs.
+- `up`: start every app and its services (`web-client`, `api`, `api-db`), then print their URLs. It runs `core:wasm` first, since `web-client` loads the core.
 - `down`: stop the stack. Keeps built images and dependency volumes.
 - `teardown`: remove everything the stack uses, e2e services included: containers, networks, volumes (the database's data too) and built images.
 - `ports`: print every published port as a URL (`postgresql://` for the database, `http://` otherwise). Host ports are random and change when an app restarts.
@@ -22,7 +22,7 @@ Stack-wide tasks act on every app in the stack:
 
 `web-client` tasks act on the Vite + React app in `web-client/` only:
 
-- `web-client:up`: start only `web-client` (Vite dev server, hot reload), then print its URL.
+- `web-client:up`: start only `web-client` (Vite dev server, hot reload), then print its URL. Runs `core:wasm` first.
 - `web-client:down`: stop only `web-client`.
 - `web-client:logs`: follow `web-client`'s logs.
 - `web-client:shell`: open a shell in a `web-client` container.
@@ -34,7 +34,8 @@ Stack-wide tasks act on every app in the stack:
 - `web-client:lint`: lint (oxlint).
 - `web-client:typecheck`: typecheck (`tsc -b`).
 - `web-client:test`: component tests (Vitest, Testing Library, jsdom).
-- `web-client:build`: production build into `web-client/dist`. It includes the service worker, `dist/sw.js`, which lists every file of the build.
+- `web-client:build`: production build into `web-client/dist`. It includes the service worker, `dist/sw.js`, which lists every file of the build, and the core's WebAssembly module (`dist/assets/fortymm-core-<hash>.wasm`).
+- `web-client:up`, `:typecheck`, `:test` and `:build` first run `core:wasm`, and so does everything that runs them (`web-client:validate`, `web-client:e2e`, the worker tasks, `web-client:deploy` and `:preview`, `up`, `e2e`): the web client reads the core's browser build (the module, its wrapper `fortymm-core.mjs` and its types `fortymm-core.d.mts`) from the `core-cache` volume, mounted read-only at `/opt/core` in the `web-client` service, and imports it as `fortymm-core/...` (an alias in `web-client/vite.config.ts`, a path in `web-client/tsconfig.app.json`).
 - `web-client:e2e`: the web client's own browser suite in `web-client/e2e/` (Playwright). It makes the production build, prepares the builds the suite deploys (`web-client/scripts/e2e-deployments.ts`: the build, and a later "next" deployment of it), serves them with `vite preview` (`web-client-preview`), typechecks and runs the suite from `web-client-e2e`, then stops what it started. It needs no other app.
 - `web-client:icons`: render the install icons `web-client/public/icons/*.png` from the app's icon, `web-client/public/favicon.svg`, with Chromium (`web-client-icons`, the browser suite's image). Run it after changing the icon, look at the PNGs, and commit them.
 - `web-client:validate`: route tree check, api types check, lint, typecheck, component tests, `web-client:e2e` (the production build and the browser suite), then `web-client:deploy-check`, one after another. CI's stage 1 calls this.
@@ -57,6 +58,7 @@ How `web-client` code and tests are laid out (details in `web-client/README.md`)
 - The web client calls the api only through the typed client in `web-client/src/api/client.ts` (openapi-fetch, which types the request from the generated `schema.gen.ts`); a call that turns an answer into what the app needs goes next to it (`web-client/src/api/health.ts`), and parses the body with zod. The rules for that boundary are in `web-client/CLAUDE.md`. The browser reaches the api at `/api` on the app's own origin, and whatever serves the app forwards `/api/*` to the api's paths (`/api/v1/health` to `/v1/health`): Vite's proxy in dev, `web-client-hosting` in the cross-app suite. The production hosting, the Worker, doesn't yet: it answers `/api` and `/api/*` with a 404, and its proxy to the api goes where `web-client/worker/src/index.ts` says. No route of the app may start with `/api`.
 - The hosting is the Worker in `web-client/worker/`: `wrangler.jsonc` (assets from `../dist`; the Worker runs first for every request) and `src/index.ts`, which holds every rule: the app's page for any path that isn't a file, the 404s (`/api/*`, a missing file under `/assets/`), and every header. Its rules are tested in `e2e/` (project `worker`), against the local Workers runtime or a deployment. Details in `web-client/README.md`, "Hosting".
 - In component tests, MSW stands in for the api (`web-client/src/test/api/server.ts`, started by `web-client/src/test/setup.ts`). A test says how the api answers with `server.use(...)` and a handler from `web-client/src/test/api/<resource>.ts`, typed from the same document. A request no handler answers fails the test.
+- Web client code calls the shared core with `const core = await loadCore()` (`web-client/src/core/load.ts`), which fetches and instantiates the module once per page; the wrapper's methods are then synchronous. In component tests, `web-client/src/test/setup.ts` replaces `load.ts` with one that reads the same real module from disk (jsdom can't fetch it); a test makes loading fail with `vi.mocked(loadCore).mockRejectedValue(...)`. `/health` shows whether the core loaded, with the username it gives a fixed player id (a golden vector).
 - Type-level tests go in `*.test-d.ts` or `*.test-d.tsx`, checked by `tsc -b` (`web-client/src/api/client.test-d.ts` proves the client's requests, the zod schemas' input and the mocks are typed from the document).
 - The app keeps itself on the device so it opens with no connection: a service worker (`web-client/offline/service-worker.ts`, written into the build as `sw.js` by `web-client/offline/plugin.ts`, registered in production only by `web-client/src/keep-on-device.ts`). Requests under `/api/` are never answered from the kept copy. It is installable: `web-client/public/manifest.webmanifest`, and the iPhone icon link in `web-client/index.html`. Details in `web-client/README.md`.
 - Anything the router or a screen decides, such as which page a URL shows, is a component test. The web client's browser suite, `web-client/e2e/`, holds only what needs a real browser and the production build by itself: opening with no connection, updating to a new deployment, installability. It drives `vite preview` at `localhost` (a secure context, where service workers run), with one test per claim. What depends on how the build is hosted (a deep path gets the app; the bundle loads and mounts as served; the app opens offline as served; the hosting's headers and 404s) or on the api (the hosted page reaches it; an api answer is never kept) is in the cross-app suite, `e2e/`.
@@ -113,7 +115,7 @@ How `api` code and tests are laid out (details in `api/README.md`):
 - `core:format-check`: check the formatting without changing files.
 - `core:test`: run the tests (`cargo test`). Arguments go to cargo: `./bin/mise run core:test -- --test sizes -- --nocapture` prints the measured parcel sizes.
 - `core:build`: release build of the library for the container's own platform.
-- `core:wasm`: build the WebAssembly module for browsers (`fortymm-core.wasm`, with the cryptography compiled in), shrink it with `wasm-opt`, print its size, then run the golden vectors through it from Node with WebCrypto hidden.
+- `core:wasm`: build the WebAssembly module for browsers (`fortymm-core.wasm`, with the cryptography compiled in), shrink it with `wasm-opt`, print its size, then run the golden vectors through it from Node with WebCrypto hidden. Once they pass, it publishes the module, the wrapper `fortymm-core.mjs` and its types `fortymm-core.d.mts` together in `/opt/core/wasm` (each renamed into place, so a reader never sees half a file): the browser build the web client loads.
 - `core:python`: build the Python module for the server (stable ABI, Python 3.12 and later), then run the golden vectors through it with the same Python as `api`. The module and its type stub `fortymm_core.pyi` go to `/opt/core/python`.
 - `core:validate`: format check, lint, tests, release build, `core:wasm`, then `core:python`, one after another. CI's stage 1 calls this.
 
