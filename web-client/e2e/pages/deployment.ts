@@ -7,8 +7,9 @@ import { join } from 'node:path'
 // - next:    the same build, deployed later: its page's title says
 //            "(next deployment)", and its sw.js is rewritten for it, so the
 //            browser sees a new version.
-// - harness: the build with a test-only page, /device-key.html, through
-//            which a test calls the device key module (../harness/).
+// - harness: the build with test-only pages, /device-key.html and
+//            /storage.html, through which a test calls the device key and
+//            storage modules (../harness/).
 export type Build = 'current' | 'next' | 'harness'
 
 const builds = '.builds'
