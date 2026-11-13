@@ -96,21 +96,40 @@ export class App {
 // in a page that is already open. goto() only navigates; a test waits for what
 // it expects to see.
 
+// The start page is blank; its one element is a heading for screen readers.
 export class StartPage {
   readonly heading: Locator
   private readonly page: Page
 
   constructor(page: Page) {
     this.page = page
-    this.heading = page.getByRole('heading', { name: 'Get started' })
+    this.heading = page.getByRole('heading', { level: 1, name: 'FortyMM' })
   }
 
   async goto() {
     await this.page.goto('/')
   }
+}
 
-  counter(count: number): Locator {
-    return this.page.getByRole('button', { name: `Count is ${count}` })
+// Where each design system component will be checked against the design
+// system. For now only its header: the wordmark and the page's title.
+export class DesignSystemPage {
+  readonly wordmark: Locator
+  readonly heading: Locator
+  private readonly page: Page
+
+  constructor(page: Page) {
+    this.page = page
+    const header = page.getByRole('banner')
+    this.wordmark = header.getByRole('img', { name: 'FortyMM' })
+    this.heading = header.getByRole('heading', {
+      level: 1,
+      name: 'Design system',
+    })
+  }
+
+  async goto() {
+    await this.page.goto('/design-system')
   }
 }
 
