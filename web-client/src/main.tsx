@@ -1,7 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { RouterProvider } from '@tanstack/react-router'
-import './index.css'
+import './theme/theme.css'
 import { launchAtStartup } from './first-launch.ts'
 import { keepAppOnDevice } from './keep-on-device.ts'
 import { createAppRouter } from './router.ts'

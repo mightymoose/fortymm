@@ -7,7 +7,8 @@ The fortymm web client: Vite, React, TypeScript and [TanStack Router](https://ta
 Each screen is a file in `src/routes/`. The file name is the URL (`index.tsx` is `/`; `about.tsx` would be `/about`). See TanStack Router's [file naming conventions](https://tanstack.com/router/latest/docs/framework/react/routing/file-naming-conventions).
 
 - `src/routes/__root.tsx` is the root route: the layout every screen renders inside, and the not-found page shown for any URL that matches no route.
-- `src/routes/index.tsx` is the start page at `/`.
+- `src/routes/index.tsx` is the start page at `/`. It is blank, on the theme's background; its one element is a heading for screen readers.
+- `src/routes/design-system.tsx` is the design system page at `/design-system` ("The theme" below).
 - `src/routes/settings.tsx` is the account settings page at `/settings` ("The account settings page" below).
 - `src/router.ts` creates the router and registers it with the type checker, so a `<Link>` or `navigate()` to a path with no route file fails `web-client:typecheck`.
 
@@ -139,7 +140,24 @@ The app is a web page the browser has to download, so it keeps a copy on the dev
 
 `public/manifest.webmanifest` (linked from `index.html`) names the app `fortymm` and opens it in its own window (`display: standalone`) at `/`. Browsers offer to install it, and on an iPhone it can be added to the home screen with Share, then "Add to Home Screen". There it opens as its own app, and Safari no longer clears its storage after a week without use.
 
-The icon is `public/favicon.svg`: the design system's logo mark, a flat ball-500 disc (`#FF7A1A`), with "40" in on-accent ink (`#0B0D12`), set in Space Grotesk Bold. The "40" is outlines, not text, since an SVG favicon can't load a web font. `scripts/icon-mark.ts` writes the file: it fetches Space Grotesk Bold from Google Fonts (SIL Open Font License; the font file isn't kept) and reads the two glyphs' outlines itself (`./bin/mise run web-client:exec -- node scripts/icon-mark.ts`). The install icons in `public/icons/` are rendered from `favicon.svg` by `./bin/mise run web-client:icons` (Chromium, `e2e/scripts/render-icons.ts`): 192 and 512 transparent around the disc; a maskable 512 with the disc inside the safe zone on the design system's bg-app (`#0B0D12`); and `apple-touch-icon-180.png` for iPhones, opaque on bg-app. After changing the icon, run the task, look at the PNGs and commit them. The theme colour is ball-500; the background (the splash screen) is the page's white, since the app's pages are not dark yet.
+The icon is `public/favicon.svg`: the design system's logo mark, a flat ball-500 disc (`#FF7A1A`), with "40" in on-accent ink (`#0B0D12`), set in Space Grotesk Bold. The "40" is outlines, not text, since an SVG favicon can't load a web font. `scripts/icon-mark.ts` writes the file: it fetches Space Grotesk Bold from Google Fonts (SIL Open Font License; the font file isn't kept) and reads the two glyphs' outlines itself (`./bin/mise run web-client:exec -- node scripts/icon-mark.ts`). The install icons in `public/icons/` are rendered from `favicon.svg` by `./bin/mise run web-client:icons` (Chromium, `e2e/scripts/render-icons.ts`): 192 and 512 transparent around the disc; a maskable 512 with the disc inside the safe zone on the design system's bg-app (`#0B0D12`); and `apple-touch-icon-180.png` for iPhones, opaque on bg-app. After changing the icon, run the task, look at the PNGs and commit them. The theme colour (`theme-color` in `index.html`, `theme_color` in the manifest) and the splash screen's background (`background_color`) are the page's background, bg-app (`#0B0D12`).
+
+## The theme
+
+Every screen wears the [FortyMM design system](https://claude.ai/artifact/JRzfvUpavyG2qR4nWUrWoA) (an artifact of type Design System): dark only, flat surfaces, orange (`--accent`) only for actions and selection.
+
+| What | Where |
+| --- | --- |
+| The tokens: colours, type styles, spacing, radii, shadows, font sizes, line heights, font stacks (`--bg-app`, `--fg-1`, `--accent`, `--font-ui`...) | `src/theme/tokens.css`, a copy of the artifact's |
+| The three typefaces, Space Grotesk (UI text), Bebas Neue (the wordmark only) and JetBrains Mono (numbers), as woff2, with their SIL Open Font Licenses | `src/theme/fonts/` |
+| Where the tokens apply: the font faces, bg-app on `html` and `body` (so it fills the viewport and any overscroll), `color-scheme: dark`, the type roles on `h1`-`h3` and `p`, links and the focus ring | `src/theme/theme.css`, imported once by `src/main.tsx` |
+| The page's colour before the stylesheet loads (no white flash), and the browser's colours around the app | `index.html` (inline `html` style, `color-scheme` and `theme-color`), `public/manifest.webmanifest` |
+
+- **Fonts are files of the build.** `theme.css` points at them, so Vite emits them into `dist/assets/` and the service worker keeps them with everything else: the app never asks a font service, and its fonts load with no connection.
+- **Components use the tokens**, never hex values or font names of their own.
+- **Re-syncing from the artifact.** `tokens.css` is the artifact's `project/tokens.css` (generated there from `project/tokens.json`) without its `@font-face` rules, which point at the artifact's own font files. To take a new version: read the artifact's `project/tokens.css` (Claude's Artifact tool, `action: "read"`, `paths: ["project/tokens.css"]`), replace everything below the comment at the top of `src/theme/tokens.css` with it, and drop its `@font-face` lines. If bg-app changed, change `index.html` and the manifest too (the browser suite's `theme.spec.ts` fails until they agree). If the artifact adds a font file, convert it to woff2 (fontTools, `TTFont(path).flavor = 'woff2'`), put it in `src/theme/fonts/` with its licence, and add its `@font-face` to `theme.css`. Space Grotesk isn't in the artifact (it loads it from Google Fonts); ours is `SpaceGrotesk[wght].ttf` from [google/fonts](https://github.com/google/fonts/tree/main/ofl/spacegrotesk), converted the same way.
+- **`/design-system`** (`src/routes/design-system.tsx`) is where each component of the design system will be shown as the app builds it, to check against the artifact. Today it has only its header: the wordmark, "FortyMM" in Bebas Neue (the `scoreboard-display` style), and its title in Space Grotesk.
+- **Tests.** jsdom loads no CSS or fonts, so the theme's claims are in the browser suite, `e2e/tests/theme.spec.ts`: every screen on bg-app with `color-scheme: dark`; the three fonts loading from the build and nothing fetched from another origin; the header's computed font families; the theme colours matching bg-app.
 
 ## Hosting
 
@@ -203,7 +221,7 @@ It deploys to `https://fortymm-trial.<account subdomain>.workers.dev`, then runs
 | Its page object | `src/routes/<route>.page.ts` | used by the test above |
 | Type-level claims (the router's paths; the client's requests, the zod schemas' input and the mocks typed from the document) | `src/**/*.test-d.ts(x)` | `web-client:typecheck` |
 | The build step that writes the service worker (`offline/plugin.ts`: every emitted file is kept) | `offline/*.test.ts` | `web-client:test` |
-| What only a real browser shows about the production build by itself: opening with no connection, a new deployment reaching the device, installability, the shipped app loading the shared core (online and offline), this device's signing key and the records and users kept in IndexedDB (through the test-only pages in `e2e/harness/`), the first launch at app startup, and `/settings` after it | `e2e/tests/*.spec.ts`, page objects in `e2e/pages/` | `web-client:e2e` (Playwright, the last step of `web-client:validate`) |
+| What only a real browser shows about the production build by itself: opening with no connection, a new deployment reaching the device, installability, the theme (every screen's background and color scheme, the fonts loading from the build, the theme colours), the shipped app loading the shared core (online and offline), this device's signing key and the records and users kept in IndexedDB (through the test-only pages in `e2e/harness/`), the first launch at app startup, and `/settings` after it | `e2e/tests/*.spec.ts`, page objects in `e2e/pages/` | `web-client:e2e` (Playwright, the last step of `web-client:validate`) |
 | How the build is hosted, by the Worker ("Hosting" below): what a person sees (a deep path gets the app; the bundle runs as served; the app opens offline after one visit; `/health` says it can't reach the api, and loads the shared core as served) in `../e2e/tests/hosting.spec.ts`, and its HTTP rules (headers, 404s) in `../e2e/tests/hosting-rules.spec.ts` | `../e2e/`, Playwright project `worker` | the stack-wide `e2e` task (CI's stage 2), against the local Workers runtime; `web-client:hosting-check`, against any address |
 | Wiring to the api (the hosted page reaches it, and an api answer is never kept: `../e2e/tests/health.spec.ts`), through an nginx stand-in until the Worker has a proxy | `../e2e/`, Playwright project `api-wiring` | the stack-wide `e2e` task |
 | The Worker typechecks; its deployment's dry runs; the deploy's credential check; the preview delete's and `web-client:preview`'s refusals | `worker/` | `web-client:deploy-check` (last step of `web-client:validate`) |
@@ -215,16 +233,16 @@ The cross-app suite drives the Worker in the local Workers runtime (`web-client-
 A screen's page object has two kinds of method:
 
 - `render()` mounts the whole app at the screen's URL, through `renderRoute(path)` in `src/test/render-route.tsx`: the real route tree and router configuration, with an in-memory history. (`NotFoundPage.render(path)` takes any URL with no route, defaulting to `/no/such/page`.)
-- The rest only find elements, by role and accessible name (`heading()`, `counter()`).
+- The rest only find elements, by role and accessible name (`heading()`, `linkToStart()`).
 
 The test does the interactions itself, with user-event, so they read in its body:
 
 ```tsx
 const user = userEvent.setup()
-const start = new StartPage()
-await start.render()
-await user.click(await start.counter())
-expect(await start.counter()).toHaveAccessibleName('Count is 1')
+const notFound = new NotFoundPage()
+await notFound.render()
+await user.click(await notFound.linkToStart())
+expect(await new StartPage().heading()).toBeInTheDocument()
 ```
 
 ### A screen that calls the api

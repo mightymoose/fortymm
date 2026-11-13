@@ -2,25 +2,17 @@ import { screen } from '@testing-library/react'
 import { renderRoute } from '../test/render-route.tsx'
 
 // The start page (src/routes/index.tsx): how to open it, and what a person
-// sees on it. Interactions belong in the test, with user-event.
+// sees on it. It is blank: its one element is a heading for screen readers.
 export class StartPage {
   render() {
     return renderRoute('/')
   }
 
   heading() {
-    return screen.findByRole('heading', { name: 'Get started' })
+    return screen.findByRole('heading', { level: 1, name: 'FortyMM' })
   }
 
-  counter() {
-    return screen.findByRole('button', { name: /^Count is \d+$/ })
-  }
-
-  linkToHealth() {
-    return screen.findByRole('link', { name: 'Check the API’s health' })
-  }
-
-  linkToSettings() {
-    return screen.findByRole('link', { name: 'Account settings' })
+  images() {
+    return screen.queryAllByRole('img')
   }
 }

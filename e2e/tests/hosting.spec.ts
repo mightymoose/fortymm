@@ -24,8 +24,6 @@ test('the hosting serves the app at a deep path, and the bundle runs', async ({
 
   await notFound.linkToStart.click()
   await expect(start.heading).toBeVisible()
-  await start.counter(0).click()
-  await expect(start.counter(1)).toBeVisible()
 
   expect(pageErrors).toEqual([])
 })
@@ -71,8 +69,6 @@ test('after one visit, the hosted app opens with no connection, at a deep path t
   const start = new StartPage(reopened)
   await reopened.goto('/')
   await expect(start.heading).toBeVisible()
-  await start.counter(0).click()
-  await expect(start.counter(1)).toBeVisible()
 
   const notFound = new NotFoundPage(reopened)
   await notFound.open('/no/such/page')

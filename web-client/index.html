@@ -9,7 +9,16 @@
          web-client:icons (README.md, "Installing"). -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png" />
-    <meta name="theme-color" content="#FF7A1A" />
+    <!-- The theme's bg-app (ink-950, src/theme/tokens.css), here too so the
+         page is dark before the stylesheet loads: no white flash. -->
+    <meta name="theme-color" content="#0B0D12" />
+    <meta name="color-scheme" content="dark" />
+    <style>
+      html {
+        color-scheme: dark;
+        background: #0b0d12;
+      }
+    </style>
     <title>fortymm</title>
   </head>
   <body>
