@@ -1,22 +1,14 @@
-import {
-  expect,
-  test,
-  type APIRequestContext,
-  type APIResponse,
-} from '@playwright/test'
+import { expect, test, type APIRequestContext } from '@playwright/test'
+import { isTheAppPage } from '../pages/answers.ts'
 
 // The HTTP rules of the web client's production hosting, the Worker in
-// web-client/worker/ (src/index.ts says why each one). No person sees these
-// until they go wrong: a stale sw.js leaves phones on an old version, a
-// script answered with the app's page breaks it, an api path answered with
-// the app's page looks like an answer from the api. Run against the local
-// Workers runtime by the e2e task, or a deployment (web-client:hosting-check).
-
-// The page every unknown path gets, recognised by the element the app mounts
-// in (web-client/index.html).
-async function isTheAppPage(response: APIResponse): Promise<boolean> {
-  return (await response.text()).includes('<div id="root">')
-}
+// web-client/worker/ (src/index.ts says why each one), that hold whatever api
+// it was given. No person sees these until they go wrong: a stale sw.js
+// leaves phones on an old version, a script answered with the app's page
+// breaks it. Run against the local Workers runtime by the e2e task, or a
+// deployment (web-client:hosting-check). What /api/* gets depends on the api
+// the Worker was given: hosting-no-api.spec.ts, hosting-api.spec.ts,
+// hosting-proxy.spec.ts, hosting-unreachable.spec.ts.
 
 // A file of the build whose name carries a hash of its content: the script
 // the app's page loads.
@@ -86,23 +78,6 @@ test('a missing file under /assets/ is a 404, not the app’s page', async ({
   expect(await isTheAppPage(response)).toBe(false)
 })
 
-// The page loads, GET and HEAD: the only methods any other unknown path
-// answers with the app's page, so the only ones the /api rule changes until
-// the proxy exists. Other methods never get the app's page from any path
-// (the POST test below).
-for (const method of ['GET', 'HEAD']) {
-  for (const path of ['/api', '/api/v1/health']) {
-    test(`${method} ${path} is a 404, not the app’s page`, async ({
-      request,
-    }) => {
-      const response = await request.fetch(path, { method })
-
-      expect(response.status()).toBe(404)
-      expect(await isTheAppPage(response)).toBe(false)
-    })
-  }
-}
-
 // The app's page is for page loads only. A form or a script posting to a
 // path the build doesn't have gets a 404, not the page and not an error.
 test('a POST to a path that is not a file is a 404, not the app’s page', async ({
@@ -126,7 +101,6 @@ test('every response carries X-Content-Type-Options: nosniff', async ({
     '/favicon.svg',
     await hashedScript(request),
     '/assets/no-such-file.js',
-    '/api/v1/health',
   ]
 
   const missing = []

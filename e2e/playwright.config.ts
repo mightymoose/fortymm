@@ -1,41 +1,69 @@
 import { defineConfig, devices, type Project } from '@playwright/test'
 
 // The cross-app suite: what can fail only because of how the apps are served
-// or connected, such as the hosting in front of the web client. Anything one
-// app can prove by itself belongs in that app's own validate. Run it with
-// ./bin/mise run e2e.
+// or connected, such as the hosting in front of the web client and its proxy
+// to the api. Anything one app can prove by itself belongs in that app's own
+// validate. Run it with ./bin/mise run e2e.
 //
-// Two projects, one per thing that serves the web client's production build
-// (set by compose.dev.yaml; a project whose URL is empty is left out):
-// - worker (WORKER_URL): the web client's production hosting, the Worker in
-//   web-client/worker/, in the local Workers runtime (web-client-worker). Its
-//   rules: tests/hosting*.spec.ts. ./bin/mise run web-client:hosting-check
-//   runs this project alone against any address, such as a deployment.
-// - api-wiring (STAND_IN_URL): web-client-hosting, an nginx stand-in that
-//   forwards /api/* to the api, which the Worker can't do yet. Only the
-//   tests that need the api: tests/health.spec.ts.
-const workerURL = process.env.WORKER_URL
-const standInURL = process.env.STAND_IN_URL
+// Every project drives the web client's production hosting, the Worker in
+// web-client/worker/, at an address set by compose.dev.yaml (a project whose
+// address is empty is left out). What a Worker does with /api/* depends on
+// the api it was given (its API_ORIGIN), so each kind has its own address:
+//
+// - worker (WORKER_URL): the rules every Worker keeps, whatever its api:
+//   tests/hosting.spec.ts and tests/hosting-rules.spec.ts.
+// - worker-no-api (NO_API_WORKER_URL): a Worker given no api, as the
+//   production one: /api/* is a plain 404. tests/hosting-no-api.spec.ts.
+// - api-journey (API_WORKER_URL): a Worker given a real api: the health page
+//   shows the api and its database healthy. tests/health.spec.ts.
+// - worker-api (API_WORKER_URL): the same Worker, its other rules with a real
+//   api: the api's own answers, never kept by the app. tests/hosting-api.spec.ts.
+// - worker-proxy (ECHO_WORKER_URL): a Worker given api-echo, which answers
+//   with what it received: what is forwarded, and to where.
+//   tests/hosting-proxy.spec.ts.
+// - worker-unreachable (UNREACHABLE_WORKER_URL): a Worker given an api it
+//   can't reach. tests/hosting-unreachable.spec.ts.
+//
+// The e2e task sets every address, to the local Workers runtime.
+// web-client:hosting-check runs worker and api-journey (or worker-no-api)
+// against a deployment.
+//
+// Every project runs only once its address serves this checkout's build
+// (tests/hosting-serves-build.setup.ts, one setup project per address).
+const addresses = {
+  worker: process.env.WORKER_URL,
+  'worker-no-api': process.env.NO_API_WORKER_URL,
+  'api-journey': process.env.API_WORKER_URL,
+  'worker-api': process.env.API_WORKER_URL,
+  'worker-proxy': process.env.ECHO_WORKER_URL,
+  'worker-unreachable': process.env.UNREACHABLE_WORKER_URL,
+}
+const tests: Record<keyof typeof addresses, RegExp> = {
+  worker: /\/hosting(-rules)?\.spec\.ts$/,
+  'worker-no-api': /\/hosting-no-api\.spec\.ts$/,
+  'api-journey': /\/health\.spec\.ts$/,
+  'worker-api': /\/hosting-api\.spec\.ts$/,
+  'worker-proxy': /\/hosting-proxy\.spec\.ts$/,
+  'worker-unreachable': /\/hosting-unreachable\.spec\.ts$/,
+}
 
 const projects: Project[] = []
-if (workerURL) {
-  // Every hosting check runs only once the address serves this checkout's
-  // build (tests/hosting-serves-build.setup.ts).
-  projects.push(
-    project('worker-serves-build', workerURL, /hosting-serves-build\.setup\.ts/),
-    {
-      ...project('worker', workerURL, /hosting.*\.spec\.ts/),
-      dependencies: ['worker-serves-build'],
-    },
-  )
-}
-if (standInURL) {
-  projects.push(project('api-wiring', standInURL, /health\.spec\.ts/))
+const setups = new Map<string, string>()
+for (const [name, address] of Object.entries(addresses)) {
+  if (!address) continue
+  let setup = setups.get(address)
+  if (!setup) {
+    setup = `serves-build ${new URL(address).host}`
+    setups.set(address, setup)
+    projects.push(project(setup, address, /hosting-serves-build\.setup\.ts$/))
+  }
+  projects.push({
+    ...project(name, address, tests[name as keyof typeof addresses]),
+    dependencies: [setup],
+  })
 }
 if (projects.length === 0) {
-  throw new Error(
-    'Neither WORKER_URL nor STAND_IN_URL is set; run ./bin/mise run e2e',
-  )
+  throw new Error('No Worker address is set; run ./bin/mise run e2e')
 }
 
 export default defineConfig({

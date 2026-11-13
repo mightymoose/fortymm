@@ -175,7 +175,9 @@ Without a login, both stop first and say so. `api:deploy-check`, in `api:validat
 4. deploys the service `fortymm-api-pr-<number>`, pinned to the digest it just pushed, so a redeploy always serves the new build;
 5. runs the end-to-end suite (`e2e/`, the health journey) against its address (`api:preview-check`). A preview that fails it fails the task, the job and `ci-passed`.
 
-The address goes in the job's summary (the run's page, Summary). It is known from the name: `https://fortymm-api-pr-<number>-89514061125.northamerica-northeast2.run.app`, that is `https://<service>-<project number>.<region>.run.app`. Cloud Run lists it in the `run.googleapis.com/urls` annotation, beside an older random one (`status.url`); `hosting/preview.sh` fails if it's missing, so the Worker's proxy can rely on it. One preview deploy runs at a time per pull request.
+The address goes in the job's summary (the run's page, Summary). It is known from the name: `https://fortymm-api-pr-<number>-89514061125.northamerica-northeast2.run.app`, that is `https://<service>-<project number>.<region>.run.app`, made in one place, `hosting/preview-address.sh`. Cloud Run lists it in the `run.googleapis.com/urls` annotation, beside an older random one (`status.url`); `hosting/preview.sh` fails if it's missing. One preview deploy runs at a time per pull request.
+
+**The web client's preview of the same pull request forwards to it.** Once this job is done, CI's `preview (web-client)` job deploys the pull request's web client to the Worker `fortymm-pr-<number>`, which forwards `/api/*` to this address with `/api` stripped (the same `hosting/preview-address.sh` gives the Worker the address), then checks the health page there shows this api and its database healthy. `../web-client/README.md`, "Hosting", has the Worker's side. The preview is public, so the Worker needs no credential to call it.
 
 How the service reaches its database:
 - `DATABASE_URL=postgresql:///pr_<number>?host=/cloudsql/fortymm:northamerica-northeast2:fortymm-api-preview&user=api_preview`. It names no host: the socket's directory goes in `host` and the user in `user`, since a URL can't have a user without a host. `src/api/settings.py` accepts this form.
@@ -199,13 +201,13 @@ How the service reaches its database:
 ./bin/mise run api:preview -- fortymm-api-trial
 ```
 
-It deploys the checked-out branch to `https://fortymm-api-trial-89514061125.northamerica-northeast2.run.app`, with the database `trial`, acting as the deployer (impersonated), and runs the suite against it. To run the suite again: `./bin/mise run api:preview-check -- <address>`. `api:preview-delete` refuses the trial, so remove it by hand, in this order: `./bin/mise run api:gcloud -- run services delete fortymm-api-trial --region=northamerica-northeast2 --project=fortymm`, then `... sql databases delete trial --instance=fortymm-api-preview --project=fortymm`, then `... artifacts packages delete trial --repository=fortymm-api-preview --location=northamerica-northeast2 --project=fortymm`.
+It deploys the checked-out branch to `https://fortymm-api-trial-89514061125.northamerica-northeast2.run.app`, with the database `trial`, acting as the deployer (impersonated), and runs the suite against it. The web client's trial Worker (`./bin/mise run web-client:preview -- fortymm-trial`) forwards `/api/*` to it. To run the suite again: `./bin/mise run api:preview-check -- <address>`. `api:preview-delete` refuses the trial, so remove it by hand, in this order: `./bin/mise run api:gcloud -- run services delete fortymm-api-trial --region=northamerica-northeast2 --project=fortymm`, then `... sql databases delete trial --instance=fortymm-api-preview --project=fortymm`, then `... artifacts packages delete trial --repository=fortymm-api-preview --location=northamerica-northeast2 --project=fortymm`.
 
 If pull request #7 lands, a preview's build will also need `core/` as a second build context, and its service the `ENVIRONMENT` setting (`--set-env-vars`, e.g. `uat`), both in `hosting/preview.sh` and the `api:preview` task.
 
 ### Removing everything
 
-First remove the `preview-api` job from `.github/workflows/ci.yml` (and it from `ci-passed`'s `needs`), and the `delete-preview-api` job from `preview-cleanup.yml`, or the next pull request deploys again (and fails). Then do these in order, as an owner. Each command runs as `./bin/mise run api:gcloud -- <command> --project=fortymm`:
+First remove the `preview-api` job from `.github/workflows/ci.yml` (and it from `ci-passed`'s `needs` and the `preview` job's `needs`; the web client's previews would then need another api to forward to, or `--no-api` checks), and the `delete-preview-api` job from `preview-cleanup.yml`, or the next pull request deploys again (and fails). Then do these in order, as an owner. Each command runs as `./bin/mise run api:gcloud -- <command> --project=fortymm`:
 
 1. Every preview: `run services list --region=northamerica-northeast2`, then `./bin/mise run api:preview-delete -- <name>` for each `fortymm-api-pr-<number>`, and the trial by hand ("Previews", above).
 2. The instance, with every preview database in it: `sql instances patch fortymm-api-preview --no-deletion-protection`, then `sql instances delete fortymm-api-preview`. Its name can't be reused for about a week.

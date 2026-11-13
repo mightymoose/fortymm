@@ -16,8 +16,9 @@
 #                  production image), web-client-preview (serves a
 #                  web-client build to its own suite), web-client-worker
 #                  (web-client's production hosting in the local Workers
-#                  runtime) or web-client-hosting (an nginx stand-in for it
-#                  that forwards /api/* to the api, until the Worker can)
+#                  runtime; web-client-worker-<api> is the same Worker given
+#                  an api) or api-echo (a stand-in for the api that answers
+#                  with what it received)
 #
 # Tools a task runs once, such as api-oasdiff, are in the `tools` profile.
 
@@ -153,10 +154,11 @@ services:
   # web-client's production hosting, the Worker in web-client/worker/, in the
   # local Workers runtime (wrangler dev): the same configuration Cloudflare
   # runs, serving the production build in web-client/dist (made by
-  # web-client:build). The cross-app suite's hosting tests drive it
-  # (web-client:worker-up starts it alone). Its image also runs Wrangler for
-  # web-client:deploy-check and web-client:deploy.
-  web-client-worker:
+  # web-client:build), and like the production Worker given no api (its
+  # API_ORIGIN is empty), so /api/* is a 404. The cross-app suite's hosting
+  # tests drive it (web-client:worker-up starts it alone). Its image also runs
+  # Wrangler for web-client:deploy-check and web-client:deploy.
+  web-client-worker: &web-client-worker
     profiles: [e2e]
     build:
       context: ./dev/web-client-worker
@@ -177,24 +179,55 @@ services:
       start_period: 120s
       start_interval: 1s
 
-  # Stands in for web-client's production hosting where the Worker can't yet:
-  # the Worker has no proxy to the api, so the cross-app suite's api-wiring
-  # tests (e2e/tests/health.spec.ts) go through this nginx instead. It serves
-  # web-client/dist and forwards /api/* to api-release, stripping /api, as the
-  # Worker must once its proxy lands (dev/web-client-hosting/default.conf).
-  # Delete it then, and point those tests at web-client-worker.
-  web-client-hosting:
-    profiles: [e2e]
-    build:
-      context: ./dev/web-client-hosting
-    volumes:
-      - ./web-client/dist:/usr/share/nginx/html:ro
+  # The same Worker, given an api, as a pull request's preview is given its
+  # own (wrangler dev --var, as wrangler deploy --var): each forwards /api/*
+  # to its api, with /api stripped. Only the cross-app suite starts them.
+  # Each keeps its runtime's state in its own /tmp, so they don't share
+  # web-client/worker/.wrangler.
+  #
+  # Given api-release, api's production image with its api-db: the health
+  # journey and the api's own answers through the Worker.
+  web-client-worker-api:
+    <<: *web-client-worker
+    command: &wrangler-dev-with-api ["sh", "-c", 'exec npx wrangler dev --ip 0.0.0.0 --port 8787 --show-interactive-dev-session=false --persist-to /tmp/wrangler-state --var "API_ORIGIN:$$API_ORIGIN"']
+    environment:
+      API_ORIGIN: http://api-release:8000
     depends_on:
-      # nginx resolves the api's name when it starts.
       api-release:
         condition: service_healthy
+
+  # Given api-echo, which answers with what it received: the proxy's rules,
+  # byte for byte.
+  web-client-worker-echo:
+    <<: *web-client-worker
+    command: *wrangler-dev-with-api
+    environment:
+      API_ORIGIN: http://api-echo:8080
+    depends_on:
+      api-echo:
+        condition: service_healthy
+
+  # Given an api that can't be reached: a port nothing listens on, on a host
+  # that exists (api-echo's).
+  web-client-worker-unreachable:
+    <<: *web-client-worker
+    command: *wrangler-dev-with-api
+    environment:
+      API_ORIGIN: http://api-echo:9
+    depends_on:
+      api-echo:
+        condition: service_healthy
+
+  # Stands in for the api where the suite must see what the Worker forwarded:
+  # it answers every request with what it received (dev/api-echo/server.mjs).
+  # Not the api: the api's own answers through the Worker are tested against
+  # api-release.
+  api-echo:
+    profiles: [e2e]
+    build:
+      context: ./dev/api-echo
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
       interval: 5s
       timeout: 2s
       retries: 3
@@ -238,9 +271,11 @@ services:
 
   # Playwright for the cross-app suite in e2e/ (the `e2e` task, CI's stage 2):
   # what can fail only because of how the apps are served or connected. It
-  # drives web-client-worker (the hosting's rules) and web-client-hosting,
-  # which forwards /api/* to api-release (api's production image) and its
-  # api-db (the api wiring); the e2e task stops all four.
+  # drives the Worker in the local Workers runtime given no api
+  # (web-client-worker), the real one (web-client-worker-api, to api-release
+  # and its api-db), the echo (web-client-worker-echo) and one it can't reach
+  # (web-client-worker-unreachable); the e2e task stops them all. One address
+  # per Playwright project (e2e/playwright.config.ts).
   # web-client:hosting-check runs it with --no-deps against another address.
   e2e:
     profiles: [e2e]
@@ -252,7 +287,10 @@ services:
     ipc: host
     environment:
       WORKER_URL: http://web-client-worker:8787
-      STAND_IN_URL: http://web-client-hosting
+      NO_API_WORKER_URL: http://web-client-worker:8787
+      API_WORKER_URL: http://web-client-worker-api:8787
+      ECHO_WORKER_URL: http://web-client-worker-echo:8787
+      UNREACHABLE_WORKER_URL: http://web-client-worker-unreachable:8787
       CI: ${CI:-}
     volumes:
       - ./e2e:/app
@@ -262,7 +300,11 @@ services:
     depends_on:
       web-client-worker:
         condition: service_healthy
-      web-client-hosting:
+      web-client-worker-api:
+        condition: service_healthy
+      web-client-worker-echo:
+        condition: service_healthy
+      web-client-worker-unreachable:
         condition: service_healthy
 
   # ---- tools ----------------------------------------------------------------

@@ -1,5 +1,4 @@
 import { expect, test } from '@playwright/test'
-import { HealthPage } from '../pages/health-page.ts'
 import { waitUntilAppIsKept } from '../pages/kept-app.ts'
 import { NotFoundPage } from '../pages/not-found-page.ts'
 import { StartPage } from '../pages/start-page.ts'
@@ -28,18 +27,6 @@ test('the hosting serves the app at a deep path, and the bundle runs', async ({
   await expect(start.counter(1)).toBeVisible()
 
   expect(pageErrors).toEqual([])
-})
-
-// The hosting has no proxy to the api yet: /api/* is a 404, never the app's
-// page, so the health page, loaded directly, says it can't reach the api.
-test('the hosted health page says it can’t reach the api, which the hosting does not serve yet', async ({
-  page,
-}) => {
-  const health = new HealthPage(page)
-
-  await health.open()
-
-  await expect(health.unknown).toBeVisible()
 })
 
 // The service worker keeps the app as the hosting serves it: every file of
