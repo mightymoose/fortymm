@@ -16,7 +16,10 @@ use fortymm_core::cbor::Value;
 use fortymm_core::ids::label;
 use fortymm_core::layout::username::MAX_SUFFIX_LENGTH;
 use fortymm_core::parcel::checksum;
-use fortymm_core::{Content, Draft, Kind, Parcel, PlayerId, Record, Signature};
+use fortymm_core::{
+    ClockReading, Content, Draft, Environment, Kind, Parcel, PlayerId, PublicKey, Record,
+    Signature,
+};
 use serde_json::{Value as Json, json};
 
 const PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/vectors/vectors.json");
@@ -222,6 +225,84 @@ fn unverifiable_records() -> Vec<(&'static str, Vec<u8>)> {
     ]
 }
 
+/// Hellos made the way a platform makes one (design section 4.4): the core
+/// builds the body from the key, the environment, the random value and the
+/// clock reading; the platform signs it (here as WebCrypto does, raw r||s);
+/// the core converts the signature, assembles the record and verifies it.
+/// Each build makes the body and the record from these inputs and must get
+/// exactly these bytes.
+fn made_hellos() -> Vec<Json> {
+    let fixtures = fixtures();
+    let [alice, bob, carol, _] = &fixtures.keys;
+    let cases = [
+        ("hello", alice, ENV, random(1), None),
+        (
+            "hello-with-clock",
+            bob,
+            ENV,
+            random(40),
+            Some(1_794_355_200_000u64),
+        ),
+        ("hello-production", carol, Environment::PRODUCTION, random(41), None),
+    ];
+    cases
+        .into_iter()
+        .map(|(name, key, environment, random, clock)| {
+            let body = Draft::hello()
+                .body(
+                    environment,
+                    key.public(),
+                    random,
+                    clock.map(ClockReading::from_unix_millis),
+                )
+                .unwrap();
+            let raw = key.sign_raw(&body);
+            let signature = Signature::from_raw(&raw).unwrap();
+            let record = Record::assemble_verified(body.clone(), signature, &CRYPTO).unwrap();
+            if name == "hello" {
+                // The same inputs as the fixture, so the same record.
+                assert_eq!(&record, fixtures.get("hello"));
+            }
+            json!({
+                "name": name,
+                "environment": environment.0,
+                "signer": hex(key.public().as_bytes()),
+                "random": hex(&random),
+                "clock": clock,
+                "body": hex(&body),
+                "raw_signature": hex(&raw),
+                "record": hex(&record.to_bytes()),
+            })
+        })
+        .collect()
+}
+
+/// Inputs a hello cannot be made from: a key that is not in the stored form
+/// (33 bytes, starting 02 or 03), or a random value that is not 8 bytes.
+fn invalid_hello_inputs() -> Vec<Json> {
+    let fixtures = fixtures();
+    let key = fixtures.keys[0].public();
+    let key = key.as_bytes();
+    let mut uncompressed_prefix = key.to_vec();
+    uncompressed_prefix[0] = 0x04;
+    let good_random = hex(&random(1));
+    let cases = [
+        ("signer-32-bytes", hex(&key[..32]), good_random.clone()),
+        ("signer-34-bytes", hex(&[key.as_slice(), &[0]].concat()), good_random.clone()),
+        ("signer-uncompressed-prefix", hex(&uncompressed_prefix), good_random.clone()),
+        ("signer-empty", String::new(), good_random),
+        ("random-7-bytes", hex(key), hex(&random(1)[..7])),
+        ("random-9-bytes", hex(key), hex(&[random(1).as_slice(), &[0]].concat())),
+        ("random-empty", hex(key), String::new()),
+    ];
+    cases
+        .into_iter()
+        .map(|(name, signer, random)| {
+            json!({"name": name, "environment": ENV.0, "signer": signer, "random": random})
+        })
+        .collect()
+}
+
 fn parcel_json(name: &str, parcel: &Parcel) -> Json {
     json!({
         "name": name,
@@ -384,6 +465,8 @@ fn build() -> Json {
         "records": records,
         "invalid_records": invalid_records().into_iter().map(|(name, bytes)| json!({"name": name, "record": hex(&bytes)})).collect::<Vec<_>>(),
         "unverifiable_records": unverifiable_records().into_iter().map(|(name, bytes)| json!({"name": name, "record": hex(&bytes)})).collect::<Vec<_>>(),
+        "made_hellos": made_hellos(),
+        "invalid_hello_inputs": invalid_hello_inputs(),
         "parcels": parcels,
         "damaged_parcel_texts": damaged,
         "harmless_parcel_texts": harmless,
@@ -482,6 +565,36 @@ fn vectors_check_from_the_file_alone() {
     for entry in file["unverifiable_records"].as_array().unwrap() {
         let record = Record::decode(&unhex(entry["record"].as_str().unwrap())).unwrap();
         assert!(record.verify(&CRYPTO).is_err(), "{}", entry["name"]);
+    }
+    for entry in file["made_hellos"].as_array().unwrap() {
+        let name = &entry["name"];
+        let signer = PublicKey::from_sec1_compressed(&unhex(entry["signer"].as_str().unwrap()))
+            .unwrap();
+        let random: [u8; 8] = unhex(entry["random"].as_str().unwrap())
+            .try_into()
+            .unwrap();
+        let clock = entry["clock"].as_u64().map(ClockReading::from_unix_millis);
+        let environment = Environment(entry["environment"].as_u64().unwrap());
+        let body = Draft::hello()
+            .body(environment, signer, random, clock)
+            .unwrap();
+        assert_eq!(json!(hex(&body)), entry["body"], "{name}: body");
+        let signature = Signature::from_raw(&unhex(entry["raw_signature"].as_str().unwrap()))
+            .unwrap();
+        let record = Record::assemble_verified(body, signature, &CRYPTO).unwrap();
+        assert_eq!(json!(hex(&record.to_bytes())), entry["record"], "{name}: record");
+        // Read back as a hello: it introduces its signer and names no match.
+        assert_eq!(record.kind(), Some(Kind::Hello), "{name}: kind");
+        assert_eq!(record.introduced_key(), Some(signer), "{name}: introduced key");
+        assert_eq!(record.signer(), signer, "{name}: signer");
+        assert!(record.match_id(&CRYPTO).is_none(), "{name}: match id");
+        assert!(record.sides().is_none(), "{name}: sides");
+        assert!(record.terms().is_none(), "{name}: terms");
+    }
+    for entry in file["invalid_hello_inputs"].as_array().unwrap() {
+        let signer = PublicKey::from_sec1_compressed(&unhex(entry["signer"].as_str().unwrap()));
+        let random = <[u8; 8]>::try_from(unhex(entry["random"].as_str().unwrap()));
+        assert!(signer.is_none() || random.is_err(), "{}", entry["name"]);
     }
     for entry in file["parcels"].as_array().unwrap() {
         for form in ["text", "link"] {
