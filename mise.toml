@@ -29,7 +29,7 @@ DEV_PORTS_FORMAT = "{% raw %}{{range .Publishers}}{{if .PublishedPort}}{{$.Servi
 description = "Start every app in the stack and print their URLs"
 # web-client loads the core's browser build, which core:wasm makes.
 depends = ["core:wasm"]
-run ="docker compose up --detach --build --wait"
+run = "docker compose up --detach --build --wait"
 depends_post = ["ports"]
 
 # `--profile "*"` includes the e2e-only services, so nothing is left behind.
@@ -129,17 +129,17 @@ run = "docker compose --profile tools run --rm --build web-client-openapi sh scr
 [tasks."web-client:typecheck"]
 description = "Typecheck web-client (tsc -b)"
 depends = ["core:wasm"]
-run ="docker compose run --rm web-client npx tsc -b"
+run = "docker compose run --rm web-client npx tsc -b"
 
 [tasks."web-client:test"]
 description = "Run web-client's component tests (Vitest, Testing Library, jsdom)"
 depends = ["core:wasm"]
-run ="docker compose run --rm web-client npm test"
+run = "docker compose run --rm web-client npm test"
 
 [tasks."web-client:build"]
 description = "Production build of web-client into web-client/dist"
 depends = ["core:wasm"]
-run ="docker compose run --rm web-client npm run build"
+run = "docker compose run --rm web-client npm run build"
 
 # web-client's own browser suite (web-client/e2e/, Playwright): what only a
 # real browser shows about the production build by itself, such as opening
