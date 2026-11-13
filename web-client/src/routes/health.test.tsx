@@ -76,6 +76,21 @@ test('/health says the shared core loaded, with the username the core gives play
   expect(await page.coreLoaded()).toHaveTextContent(/\bmerry-otter-0rdf\b/)
 })
 
+// The core doesn't wait for the api, which can take seconds to fail (a host
+// that doesn't resolve) or never answer.
+test('/health shows the shared core’s answer while the api’s answer is still on its way', async () => {
+  const { handler, release } = healthyWhenReleased()
+  server.use(handler)
+  const page = new HealthPage()
+  await page.render()
+
+  expect(await page.coreLoaded()).toHaveTextContent(/\bmerry-otter-0rdf\b/)
+  expect(await page.checking()).toBeVisible()
+
+  release()
+  expect(await page.healthy()).toBeVisible()
+})
+
 test('/health says the shared core did not load when loading it fails, and still gives the api’s answer', async () => {
   vi.mocked(loadCore).mockRejectedValue(new Error('no module'))
   server.use(healthy())
