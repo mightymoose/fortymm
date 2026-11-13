@@ -22,14 +22,14 @@ test('after one visit, the start page opens with no connection, and its counter 
   page,
 }) => {
   const app = new App(page)
-  await app.open('/')
+  await new StartPage(page).goto()
   await app.waitUntilKept()
   await page.close()
   await context.setOffline(true)
 
   const reopened = await context.newPage()
   const start = new StartPage(reopened)
-  await new App(reopened).open('/')
+  await start.goto()
 
   await expect(start.heading).toBeVisible()
   await start.counter(0).click()
@@ -44,14 +44,14 @@ test('after a visit to the start page only, /health opens with no connection, an
   page,
 }) => {
   const app = new App(page)
-  await app.open('/')
+  await new StartPage(page).goto()
   await app.waitUntilKept()
   await page.close()
   await context.setOffline(true)
 
   const reopened = await context.newPage()
   const health = new HealthPage(reopened)
-  await new App(reopened).open('/health')
+  await health.goto()
 
   await expect(health.heading).toBeVisible()
   await expect(health.unknown).toBeVisible()
@@ -64,14 +64,14 @@ test('after a visit to the start page only, /health opens with no connection, an
   page,
 }) => {
   const app = new App(page)
-  await app.open('/')
+  await new StartPage(page).goto()
   await app.waitUntilKept()
   await page.close()
   await context.setOffline(true)
 
   const reopened = await context.newPage()
   const health = new HealthPage(reopened)
-  await new App(reopened).open('/health')
+  await health.goto()
 
   await expect(health.coreLoaded).toContainText(/\bmerry-otter-0rdf\b/)
 })
@@ -81,13 +81,13 @@ test('with no connection, an unknown path opens the app’s not-found page', asy
   page,
 }) => {
   const app = new App(page)
-  await app.open('/')
+  await new StartPage(page).goto()
   await app.waitUntilKept()
   await page.close()
   await context.setOffline(true)
 
   const reopened = await context.newPage()
-  await new App(reopened).open('/no/such/page')
+  await new NotFoundPage(reopened).goto()
 
   await expect(new NotFoundPage(reopened).heading).toBeVisible()
 })
@@ -102,7 +102,7 @@ test('a new deployment is kept on a visit and shown at the next opening with no 
 }) => {
   const app = new App(page)
   const start = new StartPage(page)
-  await app.open('/')
+  await start.goto()
   await app.waitUntilKept()
   await start.counter(0).click()
   await start.counter(1).click()
@@ -111,7 +111,7 @@ test('a new deployment is kept on a visit and shown at the next opening with no 
   await deploy('next')
   const visit = await context.newPage()
   const visitApp = new App(visit)
-  await visitApp.open('/')
+  await new StartPage(visit).goto()
   await visitApp.waitUntilNewVersionIsKept()
 
   await expect(start.counter(2)).toBeVisible()
@@ -122,7 +122,7 @@ test('a new deployment is kept on a visit and shown at the next opening with no 
   await waitUntilNewVersionTakesOver(context)
   await context.setOffline(true)
   const reopened = await context.newPage()
-  await new App(reopened).open('/')
+  await new StartPage(reopened).goto()
 
   await expect(reopened).toHaveTitle('fortymm (next deployment)')
   await expect(new StartPage(reopened).heading).toBeVisible()

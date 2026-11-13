@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { App, SettingsPage } from '../pages/app.ts'
+import { App, SettingsPage, StartPage } from '../pages/app.ts'
 import { deploy } from '../pages/deployment.ts'
 import { DeviceKeyHarness } from '../pages/device-key.ts'
 import { StorageHarness } from '../pages/storage.ts'
@@ -21,10 +21,10 @@ test('after the app’s first start, /settings shows the username the core gives
   page,
 }) => {
   const app = new App(page)
-  await app.open('/')
+  await new StartPage(page).goto()
   await app.firstLaunch()
 
-  await app.open('/settings')
+  await new SettingsPage(page).goto()
 
   const settings = new SettingsPage(page)
   await expect(settings.heading).toBeVisible()
@@ -39,10 +39,10 @@ test('after a reload, and opened with no connection after one visit, /settings s
   page,
 }) => {
   const app = new App(page)
-  await app.open('/')
+  await new StartPage(page).goto()
   expect(await app.firstLaunch()).toEqual({ ok: true, outcome: 'made' })
   await app.waitUntilKept()
-  await app.open('/settings')
+  await new SettingsPage(page).goto()
   const username = await new SettingsPage(page).username.textContent()
   expect(username).toMatch(/\S/)
   const keys = new DeviceKeyHarness(await context.newPage())
@@ -57,7 +57,7 @@ test('after a reload, and opened with no connection after one visit, /settings s
   await context.setOffline(true)
   const offline = await context.newPage()
   const offlineApp = new App(offline)
-  await offlineApp.open('/settings')
+  await new SettingsPage(offline).goto()
 
   await expect(new SettingsPage(offline).username).toHaveText(username!)
   expect(await offlineApp.firstLaunch()).toEqual({ ok: true, outcome: 'kept' })
