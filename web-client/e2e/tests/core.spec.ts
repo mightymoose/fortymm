@@ -17,5 +17,5 @@ test('the shipped app’s /health loads the shared core and shows its answer', a
   const health = new HealthPage(page)
   await new App(page).open('/health')
 
-  await expect(health.coreLoaded).toContainText('merry-otter-0rdf')
+  await expect(health.coreLoaded).toContainText(/\bmerry-otter-0rdf\b/)
 })

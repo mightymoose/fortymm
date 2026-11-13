@@ -73,7 +73,7 @@ test('/health says the shared core loaded, with the username the core gives play
   const page = new HealthPage()
   await page.render()
 
-  expect(await page.coreLoaded()).toHaveTextContent('merry-otter-0rdf')
+  expect(await page.coreLoaded()).toHaveTextContent(/\bmerry-otter-0rdf\b/)
 })
 
 test('/health says the shared core did not load when loading it fails, and still gives the api’s answer', async () => {
