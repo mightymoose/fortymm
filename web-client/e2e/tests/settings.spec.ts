@@ -114,69 +114,6 @@ test('with the launch held back by another tab holding the append lock, a first 
   await holder.releaseAppendLock()
 })
 
-test('a device left at storage version 1, with a key and a stored user, keeps both through the upgrade, and the next start marks the user as this device’s, so /settings shows its username', async ({
-  context,
-  page,
-}) => {
-  const storage = new StorageHarness(page)
-  await storage.open()
-  const expected = await storage.buildVersion1Device()
-  await storage.releaseVersion1()
-  expect(await storage.version()).toBe(1)
-
-  const opened = await context.newPage()
-  const app = new App(opened)
-  await new StartPage(opened).goto()
-  expect(await app.firstLaunch()).toEqual({ ok: true, outcome: 'kept' })
-  await new SettingsPage(opened).goto()
-
-  await expect(new SettingsPage(opened).username).toHaveText(expected.username)
-  expect(await storage.version()).toBe(2)
-  expect(await storage.kept()).toEqual({ records: 1, users: 1 })
-  expect(await storage.loadMe()).toEqual({
-    ok: true,
-    user: { ...expected, unconfirmed: true },
-  })
-  const keys = new DeviceKeyHarness(await context.newPage())
-  await keys.open()
-  expect(await keys.keysKept()).toBe(1)
-  expect(await keys.publicKey()).toBe(expected.publicKey)
-})
-
-test('the upgrade waits for another tab that holds version 1 open, and runs once it lets go: /settings shows the username', async ({
-  context,
-  page,
-}) => {
-  const storage = new StorageHarness(page)
-  await storage.open()
-  const expected = await storage.buildVersion1Device()
-
-  const opened = await context.newPage()
-  await new SettingsPage(opened).goto()
-  await page.waitForTimeout(1_000)
-  await storage.releaseVersion1()
-
-  await expect(new SettingsPage(opened).username).toHaveText(expected.username)
-  expect(await storage.version()).toBe(2)
-})
-
-test('when another tab never lets go of version 1, /settings doesn’t hang: it says it can’t read this device’s storage', async ({
-  context,
-  page,
-}) => {
-  const storage = new StorageHarness(page)
-  await storage.open()
-  await storage.buildVersion1Device()
-
-  const opened = await context.newPage()
-  await new SettingsPage(opened).goto()
-
-  await expect(new SettingsPage(opened).storageUnavailable).toBeVisible({
-    timeout: 15_000,
-  })
-  await storage.releaseVersion1()
-})
-
 test.describe('with the shared core held back', () => {
   // So the page fetches the core itself, where the route below holds it,
   // rather than from the service worker's kept copy.

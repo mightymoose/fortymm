@@ -1,7 +1,7 @@
 import type { Core } from 'fortymm-core/fortymm-core.mjs'
 import { loadCore } from './core/load.ts'
 import { storedSignature, withDeviceKey, type DeviceKeyFailure } from './device-key.ts'
-import type { StoreFailure, StoreMeResult } from './storage.ts'
+import type { StoreFailure } from './storage.ts'
 
 // The first launch on a device (design 4.3, 4.4 and 5.4): the device's key
 // is made, and the device makes and signs its own hello and stores it, with
@@ -28,7 +28,7 @@ export type FirstLaunchResult =
   | { ok: true; outcome: 'made' | 'kept' }
   | {
       ok: false
-      reason: DeviceKeyFailure | StoreFailure | Extract<StoreMeResult, { ok: false }>['reason']
+      reason: DeviceKeyFailure | StoreFailure
     }
 
 // The name of the User Timing mark the app sets once the launch at startup
@@ -46,15 +46,9 @@ export async function firstLaunch(): Promise<FirstLaunchResult> {
     return { ok: false, reason: 'core-unavailable' }
   }
   const result = await withDeviceKey(async (key, store): Promise<FirstLaunchResult> => {
-    const own = hex(core.ownPlayerId(key.publicKey))
-    const kept = await store.loadUser(own)
+    const kept = await store.loadUser(hex(core.ownPlayerId(key.publicKey)))
     if (!kept.ok) return kept
-    if (kept.user !== null) {
-      // A user stored before the me pointer existed gets it now; otherwise
-      // this writes nothing.
-      const pointed = await store.storeMe(own)
-      return pointed.ok ? { ok: true, outcome: 'kept' } : pointed
-    }
+    if (kept.user !== null) return { ok: true, outcome: 'kept' }
 
     let hello: Uint8Array
     try {

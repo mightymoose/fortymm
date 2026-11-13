@@ -31,18 +31,17 @@ Every conversion at the api boundary is done with zod, in the schema: telling a 
 `src/first-launch.ts` (README "The first launch") makes this device's key, hello and user, once, at app startup (`main.tsx`), in the background, without delaying the first paint.
 
 - The first paint never waits for it, and it never throws. A failure leaves no user, and the next start tries again. A screen that finds no account yet may wait for it with `startupLaunchSettled()`, which is bounded (`startupLaunchBound`, 5 seconds) and never starts a launch; `/settings` does. Nothing else awaits it.
-- Everything it reads and writes goes through one `withDeviceKey` callback, with `store`: "is there a user for this key?" (if so, `store.storeMe` marks it as this device's, for a device whose user was stored before the pointer existed), then the hello, stored with `{ me: true }`. Two tabs at once end with one key, one hello and one user.
+- Everything it reads and writes goes through one `withDeviceKey` callback, with `store`: "is there a user for this key?", then the hello, stored with `{ me: true }`. Two tabs at once end with one key, one hello and one user.
 - Its environment number is `environment` there, a placeholder (development, 3) until real environments exist. Records made elsewhere use the same constant.
 - Its claims are in the browser suite (`e2e/tests/first-launch.spec.ts`, and `/settings` after it in `e2e/tests/settings.spec.ts`), through the shipped app.
 
 ## Records and users on this device
 
-`src/storage.ts` (README "Records and users on this device") is the only code that opens the `fortymm-storage` database. Its interface is three functions, `storeRecord(record)`, `loadUser(playerId)` and `loadMe()`; widen it only when a claim needs it. `heldStore` is `storeRecord` (which takes `{ me: true }` there), `loadUser` and `storeMe(playerId)` without a lock of their own, for `withDeviceKey` to hand its callback, and for nothing else: only the code holding the device key says which user is this device's.
+`src/storage.ts` (README "Records and users on this device") is the only code that opens the `fortymm-storage` database. Its interface is three functions, `storeRecord(record)`, `loadUser(playerId)` and `loadMe()`; widen it only when a claim needs it. `heldStore` is `storeRecord` (which takes `{ me: true }` there) and `loadUser` without a lock of their own, for `withDeviceKey` to hand its callback, and for nothing else: only the code holding the device key says which user is this device's.
 
 - The record's bytes are the source of truth; a row (the user) is a copy of what the core's getters read from it, rebuildable from the records. Never parse record bytes in the app.
 - A record and every row it mints are written in one transaction, with strict durability, inside the append lock (`appendLock`). Never write one without the other.
-- The "me" pointer (store `me`) says which stored user is this device's. It is written in the same transaction as that user (`storeRecord(record, { me: true })`), or by `storeMe` in a transaction that finds the user there, so it never points at a user that isn't stored. `loadMe` reads it and the user in one transaction, with no lock.
-- Changing the stores is a version bump in `openStorage`, upgrading from every older version without losing what it holds (`fortymm-storage` is at 2). Every connection closes on `versionchange`, and an open blocked by another tab gives up after a bound, as `storage-unavailable`.
+- The "me" pointer (store `me`) says which stored user is this device's. It is written in the same transaction as that user (`storeRecord(record, { me: true })`), so it never points at a user that isn't stored. `loadMe` reads it and the user in one transaction, with no lock.
 - Failures are typed results (`{ ok: false, reason }`), never thrown, as in `device-key.ts`. A missing row is `null`, not a failure.
 - Claims about what is kept go in the browser suite (`e2e/tests/storage.spec.ts`, through `e2e/harness/storage.html`). A screen's component test replaces only the storage it reads (`vi.mock('../storage.ts')`, `loadMe` for this device's user), as `src/routes/settings.test.tsx` does.
 
