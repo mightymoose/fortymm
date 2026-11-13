@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { App } from '../pages/app.ts'
+import { blockedSiteData } from '../pages/blocked-site-data.ts'
 import { DeviceKeyHarness } from '../pages/device-key.ts'
 import { deploy } from '../pages/deployment.ts'
 
@@ -210,4 +211,32 @@ test('when withDeviceKey’s callback throws, withDeviceKey throws its error, an
     later: { ok: true, value: 'ran' },
     locksAfter: { held: 0, pending: 0 },
   })
+})
+
+test('when the browser blocks site data, the result is storage-unavailable, not a thrown error', async ({
+  baseURL,
+}) => {
+  const blocked = await blockedSiteData(baseURL!)
+  try {
+    const harness = new DeviceKeyHarness(await blocked.context.newPage())
+    await harness.open()
+
+    expect(await harness.publicKey()).toBe('failed: storage-unavailable')
+  } finally {
+    await blocked.close()
+  }
+})
+
+test('when WebCrypto can’t export the public key, the result is signing-unavailable, not a thrown error', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(crypto.subtle, 'exportKey', {
+      value: () => Promise.reject(new DOMException('No export here', 'OperationError')),
+    })
+  })
+  const harness = new DeviceKeyHarness(page)
+  await harness.open()
+
+  expect(await harness.publicKey()).toBe('failed: signing-unavailable')
 })

@@ -113,6 +113,21 @@ test('when IndexedDB refuses to open, the result is storage-unavailable, and no 
   expect(made).not.toHaveBeenCalled()
 })
 
+test('when the browser denies the lock request (site data blocked), the result is storage-unavailable, not a thrown error, and no key is made', async () => {
+  const made = keysMade()
+  vi.stubGlobal('indexedDB', refusingIndexedDB)
+  vi.stubGlobal('navigator', {
+    ...navigator,
+    locks: {
+      request: () =>
+        Promise.reject(new DOMException('The request was denied.', 'SecurityError')),
+    },
+  })
+
+  expect(await withDeviceKey(callback)).toEqual({ ok: false, reason: 'storage-unavailable' })
+  expect(made).not.toHaveBeenCalled()
+})
+
 test('with no Web Locks, the result is locks-unavailable, and no key is made', async () => {
   const made = keysMade()
   vi.stubGlobal('indexedDB', refusingIndexedDB)

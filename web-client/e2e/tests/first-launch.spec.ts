@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { App, SettingsPage, StartPage } from '../pages/app.ts'
+import { blockedSiteData } from '../pages/blocked-site-data.ts'
 import { deploy } from '../pages/deployment.ts'
 import { DeviceKeyHarness } from '../pages/device-key.ts'
 import { StorageHarness } from '../pages/storage.ts'
@@ -124,6 +125,37 @@ test('the app renders while its launch is held back, and the launch finishes onc
 
   expect(await app.firstLaunch()).toEqual({ ok: true, outcome: 'made' })
   expect(await storage.kept()).toEqual({ records: 1, users: 1 })
+})
+
+test('the start page appears while the shared core is still loading', async ({
+  context,
+  page,
+}) => {
+  // The core's module arrives 10 seconds late; the page must not wait for it.
+  await context.route('**/*.wasm', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 10_000))
+    await route.continue().catch(() => {})
+  })
+
+  await new App(page).open('/')
+
+  await expect(new StartPage(page).heading).toBeVisible({ timeout: 3_000 })
+})
+
+test('when the browser blocks site data, the app keeps running, and the launch is storage-unavailable', async ({
+  baseURL,
+}) => {
+  const blocked = await blockedSiteData(baseURL!)
+  try {
+    const page = await blocked.context.newPage()
+    const app = new App(page)
+    await app.open('/')
+
+    expect(await app.firstLaunch()).toEqual({ ok: false, reason: 'storage-unavailable' })
+    await expect(new StartPage(page).heading).toBeVisible()
+  } finally {
+    await blocked.close()
+  }
 })
 
 test('when IndexedDB refuses to store the user, the app keeps running, no hello or user is kept, and /settings says there is no account yet', async ({
