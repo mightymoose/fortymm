@@ -16,15 +16,25 @@
 #                    the pull request's build to its own Worker on Cloudflare
 #                    (fortymm-pr-<number>), then the hosting checks against it.
 #                    Skipped where there are no secrets (a fork, Dependabot).
+# preview-api:       on the same pull requests: api:preview, the pull request's
+#                    api to its own Cloud Run service on Google Cloud
+#                    (fortymm-api-pr-<number>) with its own database
+#                    (pr_<number>), then api's end-to-end suite against it.
+#                    It signs in through Workload Identity Federation (no
+#                    stored key), so it is the only job here with
+#                    id-token: write. Skipped where the web client's preview
+#                    is, for the same reasons.
 # ci-passed:         the one check to require on main. Its name stays fixed as
 #                    apps and stages are added.
 # deploy:            on a push to main, after ci-passed: web-client:deploy, the
 #                    web client to its production Worker on Cloudflare. Nothing
 #                    is tested against production; the preview was.
 # The preview, the deploy, and preview-cleanup.yml (which deletes a pull
-# request's preview when it closes) are the only jobs with the Cloudflare
-# secrets. Pull requests run on pull_request, never pull_request_target, so a
-# fork's code never runs with them.
+# request's previews when it closes) are the only jobs with the Cloudflare
+# secrets; preview-api and preview-cleanup.yml's api job are the only ones that
+# can become Google Cloud's api-preview-deployer. Pull requests run on
+# pull_request, never pull_request_target, so a fork's code never runs with
+# either.
 name: CI
 
 on:
@@ -171,9 +181,71 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # Deploys the pull request's api to its own Cloud Run service,
+  # fortymm-api-pr-<number>, with its own database pr_<number> on the shared
+  # preview instance, then runs api's end-to-end suite (api/e2e/) against its
+  # address. A redeploy keeps the database. The address goes in the job
+  # summary. Same conditions as the web client's preview, above, and ci-passed
+  # treats the two alike. It signs in to Google Cloud through Workload
+  # Identity Federation: this job's OIDC token (id-token: write, given to this
+  # job alone) becomes api-preview-deployer, which only GitHub Actions in this
+  # repository can become; no key is stored anywhere, so nothing needs a
+  # secret. The names come from api/hosting/hosting.env.
+  preview-api:
+    name: preview (api)
+    if: >-
+      ${{ github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+    # One preview deploy at a time per pull request; a newer push replaces one
+    # still waiting. preview-cleanup.yml's api job shares the group.
+    concurrency:
+      group: preview-api-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read the hosting's names (api/hosting/hosting.env)
+        id: hosting
+        run: grep -E '^(WORKLOAD_IDENTITY_PROVIDER|DEPLOYER)=' api/hosting/hosting.env >>"$GITHUB_OUTPUT"
+      # Writes a credential file (no key: it trades this job's OIDC token for
+      # the deployer's) and names it in CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE,
+      # which api:preview mounts into the api-hosting container.
+      - name: Sign in to Google Cloud as the deployer
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ steps.hosting.outputs.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ steps.hosting.outputs.DEPLOYER }}
+      - name: ./bin/mise run api:preview -- fortymm-api-pr-${{ github.event.pull_request.number }}
+        env:
+          SERVICE: fortymm-api-pr-${{ github.event.pull_request.number }}
+        run: ./bin/mise run api:preview -- "$SERVICE"
+      - name: Show the preview's address
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -s api/hosting/.preview/address ]; then
+            echo "Preview of this pull request's api: $(cat api/hosting/.preview/address)" >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo "No api preview was deployed." >>"$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload the end-to-end report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: preview-api-report
+          path: api/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
   ci-passed:
     name: ci-passed
-    needs: [validate, openapi-breaking, e2e, preview]
+    needs: [validate, openapi-breaking, e2e, preview, preview-api]
     # Run even when a stage failed or was skipped, so this check always reports.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
@@ -182,19 +254,19 @@ jobs:
       - name: Require every stage to have succeeded
         env:
           NEEDS: ${{ toJSON(needs) }}
-          # The preview's condition, above: where it holds, the preview must
-          # have succeeded; elsewhere (a fork, Dependabot, a push to main) it
-          # is skipped, and that's fine.
+          # The previews' condition, above (the same for both): where it holds,
+          # both previews must have succeeded; elsewhere (a fork, Dependabot, a
+          # push to main) they are skipped, and that's fine.
           PREVIEW_EXPECTED: >-
             ${{ github.event_name == 'pull_request' &&
             github.event.pull_request.head.repo.full_name == github.repository &&
             github.actor != 'dependabot[bot]' }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
-          echo "preview required: $PREVIEW_EXPECTED"
+          echo "previews required: $PREVIEW_EXPECTED"
           jq -e --argjson expected "$PREVIEW_EXPECTED" 'all(to_entries[];
             .value.result == "success" or
-            (.key == "preview" and .value.result == "skipped" and ($expected | not)))' <<<"$NEEDS" >/dev/null
+            ((.key == "preview" or .key == "preview-api") and .value.result == "skipped" and ($expected | not)))' <<<"$NEEDS" >/dev/null
 
   # Deploys web-client to its production Worker on Cloudflare (workers.dev):
   # on a push to main only, once ci-passed has succeeded. Never on a pull
