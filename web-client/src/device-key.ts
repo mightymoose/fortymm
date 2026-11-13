@@ -1,4 +1,5 @@
 import type { Core } from 'fortymm-core/fortymm-core.mjs'
+import { appendLock, heldStore, type Store } from './storage.ts'
 
 // This device's signing key (design sections 4.4 and 5.4, the Web row): a
 // WebCrypto ECDSA P-256 key pair, made once, on first use, with a private key
@@ -7,8 +8,9 @@ import type { Core } from 'fortymm-core/fortymm-core.mjs'
 // it. The core never touches the private key: it gets the public key and the
 // signatures, in the forms records store.
 //
-// Only what makes records (the journal, later) signs with it; feature code
-// never does (design section 4.3).
+// Only what makes records (the first launch's hello, src/first-launch.ts;
+// the journal, later) signs with it; feature code never does (design
+// section 4.3).
 //
 // The browser can delete the key with the rest of the site's storage (a
 // cleared site, a private window closing, Safari's eviction): the next call
@@ -41,8 +43,8 @@ export type DeviceKeyFailure =
   | 'storage-unavailable'
   | 'locks-unavailable'
 
-export type DeviceKeyResult =
-  | { ok: true; key: DeviceKey }
+export type WithDeviceKeyResult<T> =
+  | { ok: true; value: T }
   | { ok: false; reason: DeviceKeyFailure }
 
 // Where the key is kept: a database of its own, with one store and one entry.
@@ -50,24 +52,44 @@ export const keyDatabase = 'fortymm-device-key'
 export const keyStore = 'keys'
 export const keyEntry = 'signing'
 
-// The lock that makes key creation one at a time across every tab, worker
-// and the service worker of the origin. The design runs key creation inside
-// the journal's append lock (section 5.4); the journal will append under this
-// same name.
-export const appendLock = 'fortymm-journal-append'
-
 const algorithm = { name: 'ECDSA', namedCurve: 'P-256' } as const
 const signing = { name: 'ECDSA', hash: 'SHA-256' } as const
 
-// This device's key: the kept one, or, if there is none, a new one, made and
-// kept first. Two callers at once, in one page or in two tabs, get the same
-// key: creation runs inside the append lock and looks again for a kept key
+// Runs callback with this device's key, inside the journal's append lock
+// (appendLock, design 5.4): the kept key, or, if none is kept, a new one,
+// made and kept first. Two callers at once, in one page or in two tabs, get
+// the same key, since creation runs inside the lock and looks for a kept key
 // once it holds it.
-export async function deviceKey(): Promise<DeviceKeyResult> {
+//
+// The callback also gets store: storeRecord and loadUser taking no lock of
+// their own, since the lock is held. Inside the callback, write with store,
+// never the public storeRecord, which would wait for the lock the callback
+// holds (Web Locks are not re-entrant). Keep callbacks short: every append,
+// in every tab, waits for them.
+//
+// The lock is released once the callback settles. A callback that throws
+// makes withDeviceKey throw the same error, the lock released.
+export async function withDeviceKey<T>(
+  callback: (key: DeviceKey, store: Store) => Promise<T>,
+): Promise<WithDeviceKeyResult<T>> {
   if (globalThis.crypto?.subtle === undefined) return failure('signing-unavailable')
   if (globalThis.indexedDB === undefined) return failure('storage-unavailable')
   if (globalThis.navigator?.locks === undefined) return failure('locks-unavailable')
 
+  return navigator.locks.request(
+    appendLock,
+    async (): Promise<WithDeviceKeyResult<T>> => {
+      const made = await keptOrMadeKey()
+      if (!made.ok) return made
+      return { ok: true, value: await callback(await keyOf(made.pair), heldStore) }
+    },
+  )
+}
+
+// Inside the lock: the kept key pair, or a new one, made and kept.
+async function keptOrMadeKey(): Promise<
+  { ok: true; pair: KeptPair } | { ok: false; reason: DeviceKeyFailure }
+> {
   let database: IDBDatabase
   try {
     database = await openKeyDatabase()
@@ -75,14 +97,7 @@ export async function deviceKey(): Promise<DeviceKeyResult> {
     return failure('storage-unavailable')
   }
   try {
-    const kept = await readPair(database).catch(() => null)
-    if (kept === null) return failure('storage-unavailable')
-    if (kept !== undefined) return { ok: true, key: await keyOf(kept) }
-
-    const made = await navigator.locks.request(appendLock, () =>
-      keptOrMade(database),
-    )
-    return made.ok ? { ok: true, key: await keyOf(made.pair) } : made
+    return await keptOrMade(database)
   } finally {
     database.close()
   }

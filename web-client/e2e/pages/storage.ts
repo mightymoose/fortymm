@@ -33,6 +33,7 @@ type Harness = {
     kept: KeptRecord
     counts: Counts
   }>
+  expectedUser(): Promise<Expected>
   loadUser(playerId: string): Promise<Loaded>
   kept(): Promise<Counts>
 }
@@ -59,6 +60,14 @@ export class StorageHarness {
           times,
         ),
       times,
+    )
+  }
+
+  // What the core gives for this device's key; makes the key if none is
+  // kept.
+  expectedUser() {
+    return this.page.evaluate(() =>
+      (window as unknown as { storageHarness: Harness }).storageHarness.expectedUser(),
     )
   }
 

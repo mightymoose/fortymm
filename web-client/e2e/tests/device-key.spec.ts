@@ -177,3 +177,37 @@ test('opened with no connection after one visit with one, the kept key still sig
     verifiesOtherBytes: false,
   })
 })
+
+test('inside withDeviceKey’s callback, the store it gets stores a hello and loads its user without waiting on a lock, and the lock is released after', async ({
+  page,
+}) => {
+  const harness = new DeviceKeyHarness(page)
+  await harness.open()
+
+  const { result, locksAfter } = await harness.storeInsideCallback()
+
+  expect(result).toEqual({
+    ok: true,
+    value: {
+      stored: { ok: true },
+      username: expect.any(String),
+      expectedUsername: expect.any(String),
+      locksInside: { held: 1, pending: 0 },
+    },
+  })
+  if (result.ok) expect(result.value.username).toBe(result.value.expectedUsername)
+  expect(locksAfter).toEqual({ held: 0, pending: 0 })
+})
+
+test('when withDeviceKey’s callback throws, withDeviceKey throws its error, and the lock is released: a later call runs', async ({
+  page,
+}) => {
+  const harness = new DeviceKeyHarness(page)
+  await harness.open()
+
+  expect(await harness.throwingCallbackThenAnother()).toEqual({
+    thrown: 'The callback failed',
+    later: { ok: true, value: 'ran' },
+    locksAfter: { held: 0, pending: 0 },
+  })
+})

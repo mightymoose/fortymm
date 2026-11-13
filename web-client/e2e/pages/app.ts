@@ -32,6 +32,10 @@ export async function waitUntilNewVersionTakesOver(context: BrowserContext) {
     .toBe(true)
 }
 
+// The User Timing mark the app sets once its launch at startup has settled
+// (firstLaunchMark in src/first-launch.ts).
+const firstLaunchMark = 'fortymm:first-launch'
+
 // The app as a person opens it: by loading an address directly (typed, a
 // bookmark, a reload or the home-screen icon), so the browser answers the
 // request, not the router in a page that is already open.
@@ -44,6 +48,22 @@ export class App {
 
   async open(path: string) {
     await this.page.goto(path)
+  }
+
+  // Waits until the launch at this opening's startup has settled
+  // (src/first-launch.ts sets the mark) and gives its result: made (stored
+  // this device's hello), kept (a user was already stored), or a failure.
+  async firstLaunch(): Promise<
+    { ok: true; outcome: 'made' | 'kept' } | { ok: false; reason: string }
+  > {
+    const handle = await this.page.waitForFunction(
+      (name) => performance.getEntriesByName(name)[0] ?? null,
+      firstLaunchMark,
+    )
+    return this.page.evaluate(
+      (mark) => (mark as PerformanceMark).detail,
+      handle,
+    )
   }
 
   // After a visit with a connection: wait until the browser has kept the app
