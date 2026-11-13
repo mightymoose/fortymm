@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# A stand-in for gcloud, for tests/describe-answers.sh: it answers the
+# describes the preview scripts make as each case asks, logs every command
+# that would change something, and changes nothing.
+#
+# STAND_IN_SERVICE, STAND_IN_DATABASE, STAND_IN_PACKAGE: found | absent | error,
+# how the describe of the service, the database and the image package
+# answers. absent is gcloud's own not-found message for each (taken from real
+# runs); error is another failure, such as a 503 or a permission change.
+# STAND_IN_LOG: where to log the commands that would change something.
+set -u
+args="$*"
+log() { echo "$args" >>"$STAND_IN_LOG"; }
+answer() { # <state> <not-found message>
+  case "$1" in
+    found) exit 0 ;;
+    absent) echo "$2" >&2; exit 1 ;;
+    *) echo "ERROR: (gcloud) HTTPError 503: The service is currently unavailable." >&2; exit 1 ;;
+  esac
+}
+case "$args" in
+  "auth print-access-token"*) echo stand-in-token ;;
+  "run services describe"*) answer "$STAND_IN_SERVICE" "ERROR: (gcloud.run.services.describe) Cannot find service [${4:-}]" ;;
+  "sql databases describe"*) answer "$STAND_IN_DATABASE" "ERROR: (gcloud.sql.databases.describe) HTTPError 404: Not Found." ;;
+  "artifacts packages describe"*) answer "$STAND_IN_PACKAGE" "ERROR: (gcloud.artifacts.packages.describe) NOT_FOUND: Requested entity was not found." ;;
+  *) log ;;
+esac

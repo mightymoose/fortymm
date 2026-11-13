@@ -1,0 +1,10 @@
+#!/bin/sh
+# A stand-in for the Docker CLI, for tests/describe-answers.sh: a push prints
+# a digest as docker push does; nothing reaches a registry.
+case "$1" in
+  # Reads the password from standard input, as docker login --password-stdin
+  # does (else the token's writer would get SIGPIPE).
+  login) cat >/dev/null ;;
+  push) echo "pr-9: digest: sha256:$(printf '0%.0s' $(seq 64)) size: 1234" ;;
+esac
+exit 0

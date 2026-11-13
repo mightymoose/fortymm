@@ -1,14 +1,20 @@
-# When a pull request closes, merged or not, deletes its preview: the Worker
-# fortymm-pr-<number> that ci.yml's preview job deployed. A checkout plus one
-# ./bin/mise run command, like every CI job. web-client:preview-delete refuses
-# any name but fortymm-pr-<number>, and a preview that was never deployed is
-# not an error.
+# When a pull request closes, merged or not, deletes its previews:
+# - delete preview (web-client): the Worker fortymm-pr-<number> that ci.yml's
+#   preview job deployed. web-client:preview-delete refuses any name but
+#   fortymm-pr-<number>.
+# - delete preview (api): the Cloud Run service fortymm-api-pr-<number>, its
+#   database pr_<number> and its image package, that ci.yml's preview-api job
+#   deployed. api:preview-delete refuses any name but fortymm-api-pr-<number>,
+#   before anything reaches Google Cloud.
+# Each is a checkout plus one ./bin/mise run command, like every CI job, and a
+# preview that was never deployed (or is already gone) is not an error.
 #
 # Its own workflow, so a closed pull request starts nothing in ci.yml. It runs
 # on pull_request, never pull_request_target: a fork's pull request gets no
-# secrets, and is skipped here as in ci.yml's preview job (it never had a
-# preview). One of the three jobs with the Cloudflare secrets (ci.yml says
-# which).
+# secrets and no Google Cloud identity, and is skipped here as in ci.yml's
+# preview jobs (it never had a preview). The web client's job is one of the
+# three with the Cloudflare secrets; the api's is one of the two that sign in
+# as Google Cloud's api-preview-deployer (ci.yml says which).
 name: Preview cleanup
 
 on:
@@ -41,3 +47,37 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           WORKER: fortymm-pr-${{ github.event.pull_request.number }}
         run: ./bin/mise run web-client:preview-delete -- "$WORKER"
+
+  delete-preview-api:
+    name: delete preview (api)
+    if: >-
+      ${{ github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Signs in through Workload Identity Federation, as ci.yml's preview-api
+    # job does: this job alone here gets id-token: write.
+    permissions:
+      contents: read
+      id-token: write
+    # The api preview job's group: a preview deploy still running finishes
+    # first, and one still waiting is replaced by this.
+    concurrency:
+      group: preview-api-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read the hosting's names (api/hosting/hosting.env)
+        id: hosting
+        run: grep -E '^(WORKLOAD_IDENTITY_PROVIDER|DEPLOYER)=' api/hosting/hosting.env >>"$GITHUB_OUTPUT"
+      - name: Sign in to Google Cloud as the deployer
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ steps.hosting.outputs.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ steps.hosting.outputs.DEPLOYER }}
+      - name: ./bin/mise run api:preview-delete -- fortymm-api-pr-${{ github.event.pull_request.number }}
+        env:
+          SERVICE: fortymm-api-pr-${{ github.event.pull_request.number }}
+        run: ./bin/mise run api:preview-delete -- "$SERVICE"

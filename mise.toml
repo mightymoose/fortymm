@@ -440,7 +440,7 @@ docker compose run --rm api pytest
 # against the shipped image is part of validating the api: it is something the
 # api proves by itself, with the database it owns.
 [tasks."api:validate"]
-description = "Validate api: lockfile, lint, formatting, typecheck, OpenAPI drift, tests, and its shipped image"
+description = "Validate api: lockfile, lint, formatting, typecheck, OpenAPI drift, tests, its shipped image, and its hosting setup's credential check"
 run = [
   { task = "api:lock-check" },
   { task = "api:lint" },
@@ -449,6 +449,7 @@ run = [
   { task = "api:openapi-check" },
   { task = "api:test" },
   { task = "api:e2e" },
+  { task = "api:deploy-check" },
 ]
 
 # Builds api's production image, runs it as api-release against api-db, runs
@@ -461,6 +462,98 @@ trap 'docker compose --profile e2e rm --stop --force api-release; [ -n "$db_was_
 docker compose --profile e2e build api-release api-e2e
 docker compose --profile e2e run --rm api-e2e
 """
+
+# ---- api's hosting ----------------------------------------------------------
+# The Google Cloud project the api's pull request previews run in: a Cloud
+# Run service and a database on one shared Cloud SQL instance per pull
+# request. gcloud runs in the api-hosting service's image, with its login in
+# the api-hosting-gcloud volume. api/README.md, "Hosting", has the details.
+
+# Any gcloud command, with the kept login: ./bin/mise run api:gcloud -- auth
+# login, then e.g. ./bin/mise run api:gcloud -- run services list.
+[tasks."api:gcloud"]
+description = "Run a gcloud command for api's hosting, with the login kept in a Docker volume: ./bin/mise run api:gcloud -- auth login"
+run = "docker compose --profile tools run --rm --build api-hosting gcloud"
+
+# Creates what the previews need in the project and changes nothing already in
+# place (api/hosting/setup.sh); a second run changes nothing and says so.
+# Needs an owner's login (api:gcloud -- auth login).
+[tasks."api:hosting-setup"]
+description = "Prepare the Google Cloud project for api's pull request previews; re-runnable, changes nothing already in place"
+run = "docker compose --profile tools run --rm --build api-hosting bash setup.sh"
+
+# Changes nothing: reports each item the setup makes as in place, missing or
+# different, then asks Google Cloud, as the deployer, what it may and may not
+# do. Fails if anything is missing or wrong.
+[tasks."api:hosting-check"]
+description = "Check the Google Cloud project has everything api's previews need, and the deployer no more, changing nothing"
+run = "docker compose --profile tools run --rm --build api-hosting bash setup.sh --check"
+
+# A pull request's preview, or a trial: builds api's production image for
+# linux/amd64, pushes it to the preview's own image package, creates the
+# preview's database if it doesn't exist (a redeploy keeps it), deploys the
+# Cloud Run service pinned to the pushed digest (api/hosting/preview.sh), then
+# runs api's end-to-end suite against its address (api:preview-check). It
+# writes the address to api/hosting/.preview/address (CI's job summary reads
+# it). The name is checked first, before anything else runs
+# (api/hosting/preview-name.sh): fortymm-api-pr-<number> (CI's preview job),
+# or fortymm-api-trial to try a branch by hand. As the deployer: in CI through
+# Workload Identity Federation (google-github-actions/auth's credential file,
+# which api/hosting/run.sh mounts), on a laptop by impersonating it with the
+# kept login.
+[tasks."api:preview"]
+description = "Deploy a preview of api to Cloud Run with its own database, then run api's end-to-end suite against it: ./bin/mise run api:preview -- fortymm-api-pr-9"
+usage = 'arg "<service>" help="The preview: fortymm-api-pr-<number>, or fortymm-api-trial"'
+run = """
+set -o pipefail
+sh api/hosting/preview-name.sh "$usage_service" >/dev/null
+mkdir -p api/hosting/.preview
+rm -f api/hosting/.preview/address
+image="$COMPOSE_PROJECT_NAME-api-preview:local"
+docker build --platform linux/amd64 --provenance=false --sbom=false --tag "$image" api
+docker compose --profile tools build api-hosting
+log=$(mktemp)
+trap 'rm -f "$log"' EXIT
+sh api/hosting/run.sh bash preview.sh "$usage_service" "$image" "$(git rev-parse --short=12 HEAD)" | tee "$log"
+address=$(sed -n 's/^api:preview: address //p' "$log")
+echo "$address" > api/hosting/.preview/address
+./bin/mise run api:preview-check -- "$address"
+"""
+
+# api's end-to-end suite (api/e2e/: the health journey, the database
+# answering) against a deployed address instead of api-release. api:preview
+# runs it last, so a preview that fails it fails the task.
+[tasks."api:preview-check"]
+description = "Run api's end-to-end suite against a deployed address: ./bin/mise run api:preview-check -- https://fortymm-api-pr-9-89514061125.northamerica-northeast2.run.app"
+usage = 'arg "<address>" help="The deployed api, e.g. https://fortymm-api-pr-9-89514061125.northamerica-northeast2.run.app"'
+run = """
+docker compose --profile e2e build api-e2e
+docker compose --profile e2e run --rm --no-deps -e BASE_URL="$usage_address" api-e2e
+"""
+
+# Deletes a pull request's preview: its service, then its database, then its
+# image package (api/hosting/delete-preview.sh). Only ever
+# fortymm-api-pr-<number>: any other name is refused on the host, before the
+# container starts. Something already gone is not an error. CI's cleanup
+# workflow runs it when a pull request closes.
+[tasks."api:preview-delete"]
+description = "Delete a pull request's api preview (service, database, image), only ever fortymm-api-pr-<number>: ./bin/mise run api:preview-delete -- fortymm-api-pr-9"
+usage = 'arg "<service>" help="The preview to delete: fortymm-api-pr-<number>"'
+run = """
+sh api/hosting/preview-name.sh --deletable "$usage_service" >/dev/null
+docker compose --profile tools build api-hosting
+sh api/hosting/run.sh bash delete-preview.sh "$usage_service"
+"""
+
+# What can be proven about api's hosting without credentials
+# (api/hosting/deploy-check.sh): the setup, the check, the preview and the
+# preview delete stop, saying what is missing, before reading or changing
+# anything in Google Cloud; the preview names map to their own databases; and
+# the delete refuses every name but fortymm-api-pr-<number> before the
+# container starts. The last step of api:validate.
+[tasks."api:deploy-check"]
+description = "Check, without credentials, api's hosting scripts: they stop before touching Google Cloud, and the preview names and refusals"
+run = "sh api/hosting/deploy-check.sh"
 
 # ---- core -------------------------------------------------------------------
 # The shared core library (Rust) in core/. It is a library, so there is no
