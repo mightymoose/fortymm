@@ -16,6 +16,15 @@
   "workers_dev": true,
   "preview_urls": false,
   "send_metrics": false,
+  "vars": {
+    // The api /api/* is forwarded to (src/index.ts), as an origin
+    // (https://host). Empty here, so the production Worker, deployed with
+    // this file alone, has none and answers /api/* with a 404: there is no
+    // production api. A preview is given its pull request's api at deploy
+    // (scripts/api-origin.sh, then `wrangler deploy --var`); the cross-app
+    // suite's local Workers are given theirs with `wrangler dev --var`.
+    "API_ORIGIN": ""
+  },
   "assets": {
     "directory": "../dist",
     "binding": "ASSETS",

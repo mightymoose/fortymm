@@ -68,9 +68,9 @@ gcloud run deploy "$service" --quiet \
   --min-instances=0 --max-instances=1 \
   2>&1 | grep -v -e "^WARNING: This command is using service account impersonation" -e "^Skipped validating Cloud SQL API"
 
-# The address made from the service's name, which Cloud Run lists beside an
-# older random one: https://<service>-<project number>.<region>.run.app.
-address="https://$service-$PROJECT_NUMBER.$REGION.run.app"
+# The address made from the service's name (preview-address.sh), which Cloud
+# Run lists beside an older random one.
+address=$(sh "$here/preview-address.sh" "$service")
 urls=$(gcloud run services describe "$service" --region="$REGION" \
   --format='value(metadata.annotations["run.googleapis.com/urls"])')
 if ! grep -qF "\"$address\"" <<<"$urls"; then

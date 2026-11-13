@@ -2,9 +2,16 @@
 // binding, web-client/dist; see wrangler.jsonc) and decides, for every
 // request:
 //
-// - /api and /api/*: the api's, never the app's page. The proxy to the api
-//   (api.fortymm.com, with /api stripped) is not built yet, so for now every
-//   method gets a plain 404.
+// - /api and /api/*: the api's, never a file of the build or the app's page.
+//   A Worker given an api (API_ORIGIN, set at deploy: a pull request's
+//   preview gets its own api preview, scripts/api-origin.sh) forwards them
+//   to it with /api stripped: /api/v1/health?x=1 goes to
+//   <API_ORIGIN>/v1/health?x=1, with the method, headers (but Host) and body,
+//   and the api's answer comes back as it is, its redirects included. Only
+//   the path and query come from the request; the scheme, host and port are
+//   always API_ORIGIN's. An api that can't be reached gets a plain 502. A
+//   Worker given none (the production one: there is no production api yet)
+//   answers every method with a plain 404.
 // - A file of the build: that file.
 // - Any other path: the app's page (index.html), and the router decides what
 //   it shows, its own not-found page included. Except under /assets/, and for
@@ -40,12 +47,10 @@ export default {
     const { pathname } = new URL(request.url)
 
     if (pathname === '/api' || pathname.startsWith('/api/')) {
-      // The proxy to the api goes here.
       return withHeaders(
-        new Response('Not found\n', {
-          status: 404,
-          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-        }),
+        env.API_ORIGIN
+          ? await toApi(request, env.API_ORIGIN)
+          : plain(404, 'Not found\n'),
       )
     }
 
@@ -66,6 +71,42 @@ export default {
     return withHeaders(file)
   },
 } satisfies ExportedHandler<Env>
+
+// The request, sent to the api: its path with /api stripped, and its query,
+// on API_ORIGIN's scheme, host and port. The target is the path set on a URL
+// of the api, never the path resolved against the api's address, so no path
+// (//host/x, /@host/x, /http://host/x) can name another host. Host must be
+// the api's own (Cloud Run routes by it): the local Workers runtime sets it
+// from the target whatever the request had, and it is dropped here so the
+// edge does too. Redirects are handed back, not followed.
+async function toApi(request: Request, apiOrigin: string): Promise<Response> {
+  const from = new URL(request.url)
+  const to = new URL(apiOrigin)
+  to.pathname = from.pathname.slice('/api'.length) || '/'
+  to.search = from.search
+  const headers = new Headers(request.headers)
+  headers.delete('Host')
+  try {
+    return await fetch(to, {
+      method: request.method,
+      headers,
+      body: request.body,
+      redirect: 'manual',
+    })
+  } catch {
+    // Not reached at all (refused, no such host): an error the web client
+    // treats like any answer it doesn't understand (its health page says
+    // the api's health is unknown).
+    return plain(502, 'The api can’t be reached\n')
+  }
+}
+
+function plain(status: number, text: string): Response {
+  return new Response(text, {
+    status,
+    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+  })
+}
 
 // Only a page load (GET or HEAD) gets the app's page; any other method keeps
 // the assets' own answer.
