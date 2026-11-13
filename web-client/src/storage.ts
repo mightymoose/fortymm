@@ -36,7 +36,7 @@ export type User = {
 // - not-a-hello: the record is damaged, its signature doesn't verify, or it
 //   is of another kind. A hello is the only kind stored for now.
 export type StorageFailure = 'storage-unavailable' | 'locks-unavailable'
-export type StoreFailure = StorageFailure | 'core-unavailable' | 'not-a-hello'| 'not-a-hello'
+export type StoreFailure = StorageFailure | 'core-unavailable' | 'not-a-hello'
 
 export type StoreResult = { ok: true } | { ok: false; reason: StoreFailure }
 export type LoadUserResult =
