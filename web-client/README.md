@@ -49,6 +49,28 @@ core.username(playerId, 4) // synchronous once loaded
 - **Tests.** `src/test/setup.ts` replaces `load.ts` in component tests with one that reads the same real module from disk, since jsdom can't fetch it. A test makes loading fail with `vi.mocked(loadCore).mockRejectedValue(...)`; it goes back to the real core after each test. `src/core/load.test.ts` tests the real `load.ts`, with MSW serving the module, and `src/core/load.test-d.ts` proves the wrapper is typed from `fortymm-core.d.mts`.
 - **Where it shows.** `/health` says whether the core loaded, with the username it gives a fixed player id, one of the core's golden vectors (`../core/vectors/vectors.json`, "usernames"). If it can't load, the page says so and still gives the api's answer.
 
+## This device's signing key
+
+Records are signed on the device that makes them (design sections 4.4 and 5.4, the Web row). `src/device-key.ts` holds this device's key:
+
+```ts
+import { deviceKey, storedSignature } from '../device-key.ts'
+
+const result = await deviceKey()
+if (!result.ok) return result.reason // 'signing-unavailable' | 'storage-unavailable' | 'locks-unavailable'
+result.key.publicKey                 // 33 bytes, compressed: what a record stores
+const raw = await result.key.sign(bytes)   // WebCrypto's 64-byte r||s
+storedSignature(core, raw)                 // the core's signatureFromRaw: what a record stores
+```
+
+- **The key.** A WebCrypto ECDSA P-256 key pair, made on the first call and kept in IndexedDB (database `fortymm-device-key`, store `keys`, entry `signing`) as the `CryptoKey` objects themselves. The private key is made non-extractable: script on the origin can ask it to sign, but can't read or export it. The core never sees it; it gets the public key and signatures. Every later call, after a reload and with no connection, gets the same key.
+- **The public key** is exported uncompressed (65 bytes, `04`) and compressed in `compressedPublicKey` to the 33 bytes (`02` or `03`) records store and the core's `accountId` and `ownPlayerId` take.
+- **One key, however many callers.** Creation runs inside the Web Lock `fortymm-journal-append`, the lock the journal's appends will take (design 5.4), and looks again for a kept key once it holds it. Two calls at once, in one page or in two tabs, get one key.
+- **Failures are answers.** `deviceKey()` never throws for a browser that can't keep a key, and never hands out a key it couldn't keep: `signing-unavailable` (no WebCrypto, as in an insecure context, or no P-256), `storage-unavailable` (no IndexedDB, or it refused to open, read or store), `locks-unavailable` (no Web Locks).
+- **Who signs.** Only what makes records (the journal, later). Feature code never signs (design 4.3).
+- **Honest limit.** The browser deletes the key with the rest of the site's storage (cleared data, a private window closing, Safari's eviction of a site not on the home screen); the next call then makes a new key. Asking for persistent storage is not done yet.
+- **Tests.** Compression (against two known points, one of each parity) and the failures when an API is missing or IndexedDB refuses to open are in `src/device-key.test.ts`. Everything about the real key (kept and reused across a reload, non-extractable, accepted by the core, signatures that verify with the core, one key for two callers in a page or two tabs, the failures when P-256 or storing is refused, signing after opening with no connection) is in the browser suite, `e2e/tests/device-key.spec.ts`. No screen uses the key yet, so those tests go through a test-only page, `e2e/harness/device-key.html`, which `scripts/e2e-deployments.ts` builds from the app's own modules into a deployment of its own (`harness`); the production build doesn't contain it.
+
 ## Opening with no connection
 
 The app is a web page the browser has to download, so it keeps a copy on the device: after one visit with a connection it opens and works with the network off, from a tab or from the home screen. People score matches in sports halls with no signal.
@@ -133,12 +155,12 @@ It deploys to `https://fortymm-trial.<account subdomain>.workers.dev`, then runs
 | Its page object | `src/routes/<route>.page.ts` | used by the test above |
 | Type-level claims (the router's paths; the client's requests, the zod schemas' input and the mocks typed from the document) | `src/**/*.test-d.ts(x)` | `web-client:typecheck` |
 | The build step that writes the service worker (`offline/plugin.ts`: every emitted file is kept) | `offline/*.test.ts` | `web-client:test` |
-| What only a real browser shows about the production build by itself: opening with no connection, a new deployment reaching the device, installability, the shipped app loading the shared core (online and offline) | `e2e/tests/*.spec.ts`, page objects in `e2e/pages/` | `web-client:e2e` (Playwright, the last step of `web-client:validate`) |
+| What only a real browser shows about the production build by itself: opening with no connection, a new deployment reaching the device, installability, the shipped app loading the shared core (online and offline), this device's signing key (through the test-only page in `e2e/harness/`) | `e2e/tests/*.spec.ts`, page objects in `e2e/pages/` | `web-client:e2e` (Playwright, the last step of `web-client:validate`) |
 | How the build is hosted, by the Worker ("Hosting" below): what a person sees (a deep path gets the app; the bundle runs as served; the app opens offline after one visit; `/health` says it can't reach the api, and loads the shared core as served) in `../e2e/tests/hosting.spec.ts`, and its HTTP rules (headers, 404s) in `../e2e/tests/hosting-rules.spec.ts` | `../e2e/`, Playwright project `worker` | the stack-wide `e2e` task (CI's stage 2), against the local Workers runtime; `web-client:hosting-check`, against any address |
 | Wiring to the api (the hosted page reaches it, and an api answer is never kept: `../e2e/tests/health.spec.ts`), through an nginx stand-in until the Worker has a proxy | `../e2e/`, Playwright project `api-wiring` | the stack-wide `e2e` task |
 | The Worker typechecks; its deployment's dry runs; the deploy's credential check; the preview delete's and `web-client:preview`'s refusals | `worker/` | `web-client:deploy-check` (last step of `web-client:validate`) |
 
-The browser suite (`e2e/`) drives the production build served by `vite preview` (`web-client-preview`), from the `web-client-e2e` service, which shares its network, so the app is at `http://localhost:4173`: a secure context, where service workers run. `web-client:e2e` copies the build to `e2e/.builds/current`, makes `e2e/.builds/next` from it (the page's title says "(next deployment)", and `sw.js` is rewritten by the same build step), and serves `e2e/.site`, which a test replaces with `deploy('current' | 'next')` (`e2e/pages/deployment.ts`) to publish a new deployment. Those directories are gitignored. The tests run one at a time, since the server is shared. A test opens the app by loading an address directly in a new page (`App.open(path)`), the way a tab or the home-screen icon does, and goes offline with `context.setOffline(true)`.
+The browser suite (`e2e/`) drives the production build served by `vite preview` (`web-client-preview`), from the `web-client-e2e` service, which shares its network, so the app is at `http://localhost:4173`: a secure context, where service workers run. `web-client:e2e` copies the build to `e2e/.builds/current`, makes `e2e/.builds/next` from it (the page's title says "(next deployment)", and `sw.js` is rewritten by the same build step) and `e2e/.builds/harness` (the build plus the test-only `/device-key.html`, its files under `/harness/`, with `sw.js` rewritten so it is kept too), and serves `e2e/.site`, which a test replaces with `deploy('current' | 'next' | 'harness')` (`e2e/pages/deployment.ts`) to publish a new deployment. Those directories are gitignored. The tests run one at a time, since the server is shared. A test opens the app by loading an address directly in a new page (`App.open(path)`), the way a tab or the home-screen icon does, and goes offline with `context.setOffline(true)`.
 
 The cross-app suite drives the Worker in the local Workers runtime (`web-client-worker`) for the hosting, and `web-client-hosting`, an nginx stand-in (`dev/web-client-hosting/`), only for the tests that need the api, since the Worker has no proxy yet. When the proxy lands, point `../e2e/tests/health.spec.ts` at the Worker and remove the stand-in.
 
