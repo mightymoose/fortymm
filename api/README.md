@@ -184,7 +184,7 @@ These are the steps step 2's tasks will take. They were tried by hand, as the de
 6. **Tear down in this order:**
    1. the service: `gcloud run services delete`;
    2. the database: `gcloud sql databases delete` (a database with open connections can't be dropped);
-   3. the image: `gcloud artifacts docker images delete <image> --delete-tags`.
+   3. the image: `gcloud artifacts docker images delete <image> --delete-tags`. That leaves the untagged manifests a Docker Desktop or OrbStack build pushes with it (the platform image and its attestation). The trial found two, and deleted them by digest (`gcloud artifacts docker images list <repository>`, then `delete <repository>/api@<digest>`). Building with `--provenance=false` should push a single manifest.
 
 In CI, `google-github-actions/auth` gives gcloud the deployer's credentials. It needs `workload_identity_provider: projects/89514061125/locations/global/workloadIdentityPools/github-actions/providers/fortymm`, `service_account: api-preview-deployer@fortymm.iam.gserviceaccount.com`, and `permissions: id-token: write` on the job. The credentials must reach the `api-hosting` container: the credential file the action writes, through `CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE`. The provider's condition above is what limits this to `mightymoose/fortymm`; the first preview run will be its first real proof.
 
