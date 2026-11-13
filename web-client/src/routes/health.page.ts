@@ -29,4 +29,13 @@ export class HealthPage {
   unknown() {
     return screen.findByRole('heading', { name: 'The API’s health is unknown' })
   }
+
+  // The core's answer, a live region named by its title.
+  coreLoaded() {
+    return screen.findByRole('status', { name: 'The shared core loaded' })
+  }
+
+  coreNotLoaded() {
+    return screen.findByRole('status', { name: 'The shared core did not load' })
+  }
 }

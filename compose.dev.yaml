@@ -47,6 +47,12 @@ services:
     volumes:
       - ./web-client:/app
       - web-client-node-modules:/app/node_modules
+      # The core's browser build (the WebAssembly module, its wrapper and the
+      # wrapper's types), which core:wasm writes to /opt/core/wasm in the
+      # core-cache volume. Read-only: only the core service writes it. The
+      # web-client tasks that read it (up, typecheck, test, build) run
+      # core:wasm first (mise.toml).
+      - core-cache:/opt/core:ro
     ports:
       # Host port chosen by Docker, so several checkouts can run at once.
       - "127.0.0.1::5173"

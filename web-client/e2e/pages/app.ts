@@ -91,11 +91,16 @@ export class StartPage {
 export class HealthPage {
   readonly heading: Locator
   readonly unknown: Locator
+  // The shared core's answer: the generated username of a fixed player id.
+  readonly coreLoaded: Locator
 
   constructor(page: Page) {
     this.heading = page.getByRole('heading', { name: 'API health' })
     this.unknown = page.getByRole('heading', {
       name: 'The API’s health is unknown',
+    })
+    this.coreLoaded = page.getByRole('status', {
+      name: 'The shared core loaded',
     })
   }
 }
