@@ -95,6 +95,52 @@ Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: tr
     check(!(core.verify(unhex(v.record))), `unverifiable ${v.name}: does not verify`);
     checks += 1;
   }
+  // A hello made as the browser makes one: body from the inputs, WebCrypto's
+  // raw signature converted, record assembled and verified. Same bytes as
+  // Rust, then read back as a hello.
+  for (const v of vectors.made_hellos) {
+    const signer = unhex(v.signer);
+    const body = core.helloBody(v.environment, signer, unhex(v.random), v.clock);
+    check(hex(body) === v.body, `made ${v.name}: body`);
+    const record = core.assemble(body, core.signatureFromRaw(unhex(v.raw_signature)));
+    check(hex(record) === v.record, `made ${v.name}: record`);
+    check(core.verify(record), `made ${v.name}: verifies`);
+    check(hex(core.introducedKey(record) ?? []) === v.signer, `made ${v.name}: introduces its signer`);
+    check(hex(core.signer(record)) === v.signer, `made ${v.name}: signer`);
+    for (const getter of ["matchId", "sides", "terms", "repeatsPlayer", "creator", "extraPlayerId"]) {
+      check(core[getter](record) === null, `made ${v.name}: ${getter} is null`);
+    }
+    checks += 11;
+  }
+  // A hello cannot be made from a malformed key or a random value of the
+  // wrong length. A bad key fails as it does everywhere else a key is taken
+  // (accountId), with the same reason.
+  const reason = (run) => {
+    try { run(); } catch (error) { return error instanceof Damaged ? "Damaged" : error.message.replace(/^\w+: /, ""); }
+    return null;
+  };
+  for (const v of vectors.invalid_hello_inputs) {
+    const got = reason(() => core.helloBody(v.environment, unhex(v.signer), unhex(v.random)));
+    const expected = v.name.startsWith("signer-")
+      ? reason(() => core.accountId(unhex(v.signer)))
+      : "the random value is 8 bytes";
+    check(got !== null && got === expected, `invalid hello input ${v.name}: refused with ${got}, expected ${expected}`);
+    checks += 1;
+  }
+  for (const [what, environment, clock] of [["environment", -1, null], ["environment", 2.5, null], ["clock", 2, -1], ["clock", 2, 2 ** 53]]) {
+    const v = vectors.made_hellos[0];
+    const got = reason(() => core.helloBody(environment, unhex(v.signer), unhex(v.random), clock));
+    check(got?.startsWith(`${what} `), `helloBody ${what} ${environment} ${clock}: refused with ${got}`);
+    checks += 1;
+  }
+  // assemble refuses a body whose signature does not verify.
+  for (const v of vectors.unverifiable_records) {
+    const record = unhex(v.record);
+    const got = reason(() => core.assemble(core.body(record), core.signature(record)));
+    check(got !== null && got !== "Damaged", `assemble unverifiable ${v.name}: refused`);
+    checks += 1;
+  }
+
   for (const v of vectors.parcels) {
     for (const form of ["text", "link"]) {
       const binary = core.parse(v[form]);

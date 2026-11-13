@@ -159,6 +159,41 @@ for v in vectors["invalid_records"]:
 for v in vectors["unverifiable_records"]:
     check(not core.Record.decode(unhex(v["record"])).verify(), f"unverifiable {v['name']}")
 
+# A hello made from its inputs: the same body and record as Rust, read back
+# as a hello that introduces its signer.
+for v in vectors["made_hellos"]:
+    name = v["name"]
+    signer = unhex(v["signer"])
+    body = core.hello_body(v["environment"], signer, unhex(v["random"]), v["clock"])
+    check(body.hex() == v["body"], f"made {name}: body")
+    record = core.Record.from_parts(body, core.signature_from_raw(unhex(v["raw_signature"])))
+    check(record.to_bytes().hex() == v["record"], f"made {name}: record")
+    check(record.verify(), f"made {name}: verifies")
+    check(record.kind_name == "hello", f"made {name}: kind")
+    check(record.introduced_key == signer == record.signer, f"made {name}: introduces its signer")
+    check(
+        (record.match_id(), record.sides, record.terms, record.creator) == (None, None, None, None),
+        f"made {name}: names no match",
+    )
+
+
+def refusal(run) -> str | None:
+    try:
+        run()
+    except core.Malformed as error:
+        return str(error)
+    return None
+
+
+# A bad key fails as it does wherever a key is taken (account_id).
+for v in vectors["invalid_hello_inputs"]:
+    got = refusal(lambda: core.hello_body(v["environment"], unhex(v["signer"]), unhex(v["random"])))
+    if v["name"].startswith("signer-"):
+        expected = refusal(lambda: core.account_id(unhex(v["signer"])))
+    else:
+        expected = "the random value is 8 bytes"
+    check(got is not None and got == expected, f"invalid hello input {v['name']}: {got}, expected {expected}")
+
 by_name = {}
 for v in vectors["parcels"]:
     by_name[v["name"]] = v
