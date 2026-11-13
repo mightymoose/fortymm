@@ -55,23 +55,30 @@ core.username(playerId, 4) // synchronous once loaded
 Records are signed on the device that makes them (design sections 4.4 and 5.4, the Web row). `src/device-key.ts` holds this device's key:
 
 ```ts
-import { deviceKey, storedSignature } from '../device-key.ts'
+import { storedSignature, withDeviceKey } from '../device-key.ts'
 
-const result = await deviceKey()
+const result = await withDeviceKey(async (key, store) => {
+  key.publicKey                       // 33 bytes, compressed: what a record stores
+  const raw = await key.sign(bytes)   // WebCrypto's 64-byte r||s
+  storedSignature(core, raw)          // the core's signatureFromRaw: what a record stores
+  return store.storeRecord(record)    // store: storeRecord and loadUser, taking no lock
+})
 if (!result.ok) return result.reason // 'signing-unavailable' | 'storage-unavailable' | 'locks-unavailable'
-result.key.publicKey                 // 33 bytes, compressed: what a record stores
-const raw = await result.key.sign(bytes)   // WebCrypto's 64-byte r||s
-storedSignature(core, raw)                 // the core's signatureFromRaw: what a record stores
+result.value                         // what the callback returned
 ```
 
-- **The key.** A WebCrypto ECDSA P-256 key pair, made on the first call and kept in IndexedDB (database `fortymm-device-key`, store `keys`, entry `signing`) as the `CryptoKey` objects themselves. The private key is made non-extractable: script on the origin can ask it to sign, but can't read or export it. The core never sees it; it gets the public key and signatures. Every later call, after a reload and with no connection, gets the same key.
+- **One lock.** `withDeviceKey` takes the Web Lock `fortymm-journal-append` (`appendLock`, in `src/storage.ts`), the lock every write to storage and the journal's appends take (design 5.4). Inside it, it gets the kept key, or makes and keeps one, then calls the callback with the key and `store`, and releases the lock when the callback settles, even when it throws (`withDeviceKey` then throws the same error).
+- **Inside the callback, use `store`.** It is `storeRecord` and `loadUser` taking no lock of their own (`heldStore` in `src/storage.ts`), since the lock is held. The public `storeRecord` would wait for that lock, for ever: Web Locks are not re-entrant. Don't keep `store` past the callback.
+- **Keep callbacks short.** Every write to storage, in every tab, waits for them.
+
+- **The key.** A WebCrypto ECDSA P-256 key pair, made on the first call (the first launch, in practice) and kept in IndexedDB (database `fortymm-device-key`, store `keys`, entry `signing`) as the `CryptoKey` objects themselves. The private key is made non-extractable: script on the origin can ask it to sign, but can't read or export it. The core never sees it; it gets the public key and signatures. Every later call, after a reload and with no connection, gets the same key.
 - **The public key** is exported uncompressed (65 bytes, `04`) and compressed in `compressedPublicKey` to the 33 bytes (`02` or `03`) records store and the core's `accountId` and `ownPlayerId` take.
-- **One key, however many callers.** Creation runs inside the Web Lock `fortymm-journal-append`, the lock the journal's appends will take (design 5.4), and looks again for a kept key once it holds it. Two calls at once, in one page or in two tabs, get one key.
-- **Failures are answers.** `deviceKey()` never throws for a browser that can't keep a key, and never hands out a key it couldn't keep: `signing-unavailable` (no WebCrypto, as in an insecure context, or no P-256), `storage-unavailable` (no IndexedDB, or it refused to open, read or store), `locks-unavailable` (no Web Locks).
+- **One key, however many callers.** Creation runs inside the append lock, and looks for a kept key once it holds it. Two calls at once, in one page or in two tabs, get one key.
+- **Failures are answers.** `withDeviceKey` never throws for a browser that can't keep a key, and never hands out a key it couldn't keep: `signing-unavailable` (no WebCrypto, as in an insecure context, or no P-256), `storage-unavailable` (no IndexedDB, or it refused to open, read or store), `locks-unavailable` (no Web Locks).
 - **Reading without making.** `keptPublicKey()` gives the kept key's public key (the same 33 bytes), or `null` when no key is kept, or `storage-unavailable`. It never makes or writes a key, so a screen can find which identity the device has (`/settings` does) without creating one.
 - **Who signs.** Only what makes records (the journal, later). Feature code never signs (design 4.3).
 - **Honest limit.** The browser deletes the key with the rest of the site's storage (cleared data, a private window closing, Safari's eviction of a site not on the home screen); the next call then makes a new key. Asking for persistent storage is not done yet.
-- **Tests.** Compression (against two known points, one of each parity) and the failures when an API is missing or IndexedDB refuses to open are in `src/device-key.test.ts`. Everything about the real key (kept and reused across a reload, non-extractable, accepted by the core, signatures that verify with the core, one key for two callers in a page or two tabs, the failures when P-256 or storing is refused, signing after opening with no connection, `keptPublicKey()` making no key) is in the browser suite, `e2e/tests/device-key.spec.ts`. No screen signs yet, so those tests go through a test-only page, `e2e/harness/device-key.html`, which `scripts/e2e-deployments.ts` builds from the app's own modules into a deployment of its own (`harness`); the production build doesn't contain it.
+- **Tests.** Compression (against two known points, one of each parity) and the failures when an API is missing or IndexedDB refuses to open are in `src/device-key.test.ts`. Everything about the real key (kept and reused across a reload, non-extractable, accepted by the core, signatures that verify with the core, one key for two callers in a page or two tabs, the failures when P-256 or storing is refused, signing after opening with no connection, `keptPublicKey()` making no key, `store` inside the callback working without waiting on the lock, and the lock released after a callback that throws) is in the browser suite, `e2e/tests/device-key.spec.ts`. No screen signs, so those tests go through a test-only page, `e2e/harness/device-key.html`, which `scripts/e2e-deployments.ts` builds from the app's own modules into a deployment of its own (`harness`); the production build doesn't contain it.
 
 ## Records and users on this device
 
@@ -90,12 +97,24 @@ await loadUser(playerIdHex)  // { ok: true, user: User | null } | { ok: false, r
 - **Hellos only, for now.** A hello is the only kind that mints a row, and the only kind stored: anything else, a hello whose signature doesn't verify, or bytes that aren't a record, is refused (`not-a-hello`) before storage is opened.
 - **The core.** `storeRecord` loads the shared core itself (`loadCore()`); callers pass only the record.
 - **Failures are answers.** Neither function throws for a browser that can't store: `storage-unavailable` (no IndexedDB, or it refused to open, read or write), `locks-unavailable` (no Web Locks), `core-unavailable` (the core didn't load), `not-a-hello`. `loadUser` for a player with no row gives `user: null`, not a failure.
-- **Not yet.** The order records entered (design 5.4's counter), record states (held, acknowledged), and other kinds of record come with the journal. Nothing in the app calls `storeRecord` yet: the first launch will store its hello.
+- **Not yet.** The order records entered (design 5.4's counter), record states (held, acknowledged), and other kinds of record come with the journal. The first launch stores the device's own hello (below), through `withDeviceKey`'s `store`.
 - **Tests.** The refusals and the failures when the core, IndexedDB or Web Locks is missing or refuses are in `src/storage.test.ts`. What is kept in real IndexedDB (the user a hello mints, after a reload and with no connection; the record and row written together; kept once; none for an unknown player) is in the browser suite, `e2e/tests/storage.spec.ts`, through the test-only page `e2e/harness/storage.html` in the `harness` deployment.
 
 ### The account settings page
 
-`/settings` (`src/routes/settings.tsx`, linked from the start page) shows this device's username. Its loader reads the kept public key with `keptPublicKey()`, asks the core for its own player id (`ownPlayerId`), and loads that user with `loadUser`. With no key kept, or no user stored for it, the page says there is no account yet, and makes neither: opening a page never mints an identity. When storage can't be read it says so, and when the core doesn't load it says that; the loader never throws. Its rendering is tested in `src/routes/settings.test.tsx`, with `keptPublicKey` and `loadUser` replaced; the page over real storage (a stored username shown after a reload and with no connection, and a fresh device left with no key and no user) in `e2e/tests/settings.spec.ts`.
+`/settings` (`src/routes/settings.tsx`, linked from the start page) shows this device's username. Its loader reads the kept public key with `keptPublicKey()`, asks the core for its own player id (`ownPlayerId`), and loads that user with `loadUser`. With no key kept, or no user stored for it (the first launch failed, or hasn't finished), the page says there is no account yet, and makes neither: opening a page never mints an identity; the first launch at app startup does. When storage can't be read it says so, and when the core doesn't load it says that; the loader never throws. Its rendering is tested in `src/routes/settings.test.tsx`, with `keptPublicKey` and `loadUser` replaced; the page over real storage, after the app's own first launch (the username shown, then after a reload and with no connection, from the same key and the one hello), in `e2e/tests/settings.spec.ts`.
+
+### The first launch
+
+`src/first-launch.ts` gives a device its account the first time the app starts on it (design 4.3, 4.4, 5.4). `main.tsx` calls `launchAtStartup()` after rendering the app, and nothing waits for it.
+
+- **What it does.** It loads the core, then, in one `withDeviceKey` callback (the key made there if none is kept), asks `store.loadUser` for the user of the key's own player id. If there is one, it does nothing. Otherwise it builds a hello (`helloBody`, with 8 bytes from `crypto.getRandomValues` and no clock reading), signs it with the key, converts the signature (`storedSignature`), assembles it, and stores it with `store.storeRecord`, which writes the hello and its user together.
+- **Every later start does nothing**, and needs no connection. A key kept with no user (a launch that stopped between steps) gets its hello at the next start, from the same key. Two tabs opening at once end with one key, one hello and one user: the lock and the "is there a user?" check inside it.
+- **No sync yet.** The stored hello waits for sync, a later task; the user stays `unconfirmed`.
+- **Failures leave the app running.** The launch never throws and shows nothing: if the core doesn't load or storage refuses, no hello or user is kept (the core loads before the key is made, so a failed core leaves no key either), `/settings` says there is no account yet, and the next start tries again.
+- **The environment number** in the hello is `environment`, 3 (development, `../core/FORMAT.md` section 4): a placeholder for the developers' stacks and the ephemeral previews, the only environments today. Production and UAT builds will need their own.
+- **When it is done**, the app sets a User Timing mark, `fortymm:first-launch`, whose detail is the result (`made`, `kept`, or the failure). The browser suite waits for it (`App.firstLaunch()` in `e2e/pages/app.ts`).
+- **Tests.** All in the browser suite, through the shipped app: `e2e/tests/first-launch.spec.ts` (one key, hello and user, and the user the core gives for the key; two tabs; a key with no user; a second start storing nothing; the app rendering while the launch is held back by another tab holding the lock; IndexedDB refusing and the core not loading) and `e2e/tests/settings.spec.ts` (the username on `/settings`, after a reload and with no connection).
 
 ## Opening with no connection
 
@@ -181,7 +200,7 @@ It deploys to `https://fortymm-trial.<account subdomain>.workers.dev`, then runs
 | Its page object | `src/routes/<route>.page.ts` | used by the test above |
 | Type-level claims (the router's paths; the client's requests, the zod schemas' input and the mocks typed from the document) | `src/**/*.test-d.ts(x)` | `web-client:typecheck` |
 | The build step that writes the service worker (`offline/plugin.ts`: every emitted file is kept) | `offline/*.test.ts` | `web-client:test` |
-| What only a real browser shows about the production build by itself: opening with no connection, a new deployment reaching the device, installability, the shipped app loading the shared core (online and offline), this device's signing key and the records and users kept in IndexedDB (through the test-only pages in `e2e/harness/`), and `/settings` over real storage | `e2e/tests/*.spec.ts`, page objects in `e2e/pages/` | `web-client:e2e` (Playwright, the last step of `web-client:validate`) |
+| What only a real browser shows about the production build by itself: opening with no connection, a new deployment reaching the device, installability, the shipped app loading the shared core (online and offline), this device's signing key and the records and users kept in IndexedDB (through the test-only pages in `e2e/harness/`), the first launch at app startup, and `/settings` after it | `e2e/tests/*.spec.ts`, page objects in `e2e/pages/` | `web-client:e2e` (Playwright, the last step of `web-client:validate`) |
 | How the build is hosted, by the Worker ("Hosting" below): what a person sees (a deep path gets the app; the bundle runs as served; the app opens offline after one visit; `/health` says it can't reach the api, and loads the shared core as served) in `../e2e/tests/hosting.spec.ts`, and its HTTP rules (headers, 404s) in `../e2e/tests/hosting-rules.spec.ts` | `../e2e/`, Playwright project `worker` | the stack-wide `e2e` task (CI's stage 2), against the local Workers runtime; `web-client:hosting-check`, against any address |
 | Wiring to the api (the hosted page reaches it, and an api answer is never kept: `../e2e/tests/health.spec.ts`), through an nginx stand-in until the Worker has a proxy | `../e2e/`, Playwright project `api-wiring` | the stack-wide `e2e` task |
 | The Worker typechecks; its deployment's dry runs; the deploy's credential check; the preview delete's and `web-client:preview`'s refusals | `worker/` | `web-client:deploy-check` (last step of `web-client:validate`) |

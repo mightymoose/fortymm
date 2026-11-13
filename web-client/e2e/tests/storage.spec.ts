@@ -4,7 +4,7 @@ import { deploy } from '../pages/deployment.ts'
 import { StorageHarness } from '../pages/storage.ts'
 
 // Storage of records and the users they mint (src/storage.ts) against real
-// IndexedDB. No screen writes with it yet, so the tests call it through a
+// IndexedDB. No screen writes with it, so the tests call it through a
 // test-only page in the "harness" deployment (../harness/), which makes a
 // hello with the core and this device's key. Each test starts from a fresh
 // browser profile. What needs no browser (the records refused, the failures

@@ -19,15 +19,25 @@ Every conversion at the api boundary is done with zod, in the schema: telling a 
 `src/device-key.ts` (README "This device's signing key") is the only place the web client makes, keeps or signs with a key.
 
 - The private key is made non-extractable and kept as the `CryptoKey` object in IndexedDB. Never export it, never make it extractable, never keep it as bytes, and never pass it to the core: the core gets the 33-byte public key and the signatures.
-- Make the key only inside the append lock (`appendLock`), looking again for a kept key once it holds it. The journal's appends take the same lock.
-- A browser that can't make or keep the key is a typed result (`{ ok: false, reason }`), never a thrown error, and never a key that isn't kept.
-- Feature code never signs (design 4.3); what makes records does.
+- The key is reached only through `withDeviceKey(callback)`, which runs the callback inside the append lock (`appendLock`, in `src/storage.ts`) with the key, made there if none is kept. The journal's appends take the same lock.
+- Callbacks are short: every append, in every tab, waits for them. Inside one, write and read with the `store` it gets, never the public `storeRecord`, which would wait for the lock the callback holds, for ever (Web Locks are not re-entrant). Never keep `store` past the callback.
+- A browser that can't make or keep the key is a typed result (`{ ok: false, reason }`), never a thrown error, and never a key that isn't kept. A callback that throws makes `withDeviceKey` throw, with the lock released.
+- Feature code never signs (design 4.3); what makes records does (today, the first launch).
 - Claims about the real key go in the browser suite (`e2e/tests/device-key.spec.ts`, through `e2e/harness/`); jsdom has no IndexedDB and no real `CryptoKey` to keep.
-- To learn which identity this device has without making one (a screen loading), use `keptPublicKey()`, never `deviceKey()`. Opening a page never mints an identity.
+- To learn which identity this device has without making one (a screen loading), use `keptPublicKey()`, never `withDeviceKey`. Opening a page never mints an identity; only the first launch at app startup does.
+
+## The first launch
+
+`src/first-launch.ts` (README "The first launch") makes this device's key, hello and user, once, at app startup (`main.tsx`), after the app renders.
+
+- The app never waits for it: no screen awaits it, and it never throws. A failure leaves no user, and the next start tries again.
+- Everything it reads and writes goes through one `withDeviceKey` callback, with `store`: "is there a user for this key?", then the hello. Two tabs at once end with one key, one hello and one user.
+- Its environment number is `environment` there, a placeholder (development, 3) until real environments exist. Records made elsewhere use the same constant.
+- Its claims are in the browser suite (`e2e/tests/first-launch.spec.ts`, and `/settings` after it in `e2e/tests/settings.spec.ts`), through the shipped app.
 
 ## Records and users on this device
 
-`src/storage.ts` (README "Records and users on this device") is the only code that opens the `fortymm-storage` database. Its interface is two functions, `storeRecord(record)` and `loadUser(playerId)`; widen it only when a claim needs it.
+`src/storage.ts` (README "Records and users on this device") is the only code that opens the `fortymm-storage` database. Its interface is two functions, `storeRecord(record)` and `loadUser(playerId)`; widen it only when a claim needs it. `heldStore` is the same two without a lock of their own, for `withDeviceKey` to hand its callback, and for nothing else.
 
 - The record's bytes are the source of truth; a row (the user) is a copy of what the core's getters read from it, rebuildable from the records. Never parse record bytes in the app.
 - A record and every row it mints are written in one transaction, with strict durability, inside the append lock (`appendLock`). Never write one without the other.

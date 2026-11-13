@@ -4,8 +4,8 @@ import { DeviceKeyHarness } from '../pages/device-key.ts'
 import { deploy } from '../pages/deployment.ts'
 
 // This device's signing key (src/device-key.ts) in a real browser: a
-// non-extractable WebCrypto P-256 key kept in IndexedDB. No screen uses it
-// yet, so the tests call it through a test-only page in the "harness"
+// non-extractable WebCrypto P-256 key kept in IndexedDB. No screen uses it,
+// so the tests call withDeviceKey through a test-only page in the "harness"
 // deployment (../harness/). Each test starts from a fresh browser profile,
 // with no key kept. What needs no browser (compressing the public key, the
 // failure when WebCrypto, IndexedDB or Web Locks is missing) is in
