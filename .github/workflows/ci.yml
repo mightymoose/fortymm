@@ -7,7 +7,10 @@
 #                    its shipped image against its database, web-client's
 #                    its production build in a real browser); and
 #   openapi-breaking: each <app>:openapi-breaking against the base commit, for
-#                    apps with an OpenAPI document.
+#                    apps with an OpenAPI document; and
+#   workflows:       the workflows task: actionlint, the permission rules
+#                    below (.github/scripts/check-workflows.sh), and the tests
+#                    of the scripts the workflows run.
 # Stage 2, e2e:      the stack-wide e2e task: one job for the cross-app suite in
 #                    e2e/ (what can fail only because of how the apps are
 #                    served or connected), once every app is valid. One suite,
@@ -24,7 +27,12 @@
 #                    stored key), so it is the only job here with
 #                    id-token: write. Skipped where the web client's preview
 #                    is, for the same reasons.
-# ci-passed:         the one check to require on main. Its name stays fixed as
+# preview-comment:   on the same pull requests, after both previews (even when
+#                    one failed): one comment on the pull request with their
+#                    addresses, which the previews pass as job outputs,
+#                    updated in place on every push. Not a merge gate:
+#                    ci-passed doesn't need it.
+# ci-passed:        the one check to require on main. Its name stays fixed as
 #                    apps and stages are added.
 # deploy:            on a push to main, after ci-passed: web-client:deploy, the
 #                    web client to its production Worker on Cloudflare. Nothing
@@ -32,7 +40,12 @@
 # The preview, the deploy, and preview-cleanup.yml (which deletes a pull
 # request's previews when it closes) are the only jobs with the Cloudflare
 # secrets; preview-api and preview-cleanup.yml's api job are the only ones that
-# can become Google Cloud's api-preview-deployer. Pull requests run on
+# can become Google Cloud's api-preview-deployer. preview-comment alone may
+# write on a pull request (pull-requests: write), and it holds neither: no
+# secret, no id-token, no checkout of the pull request's code. So no job can
+# both deploy and write on the pull request, and code from a pull request
+# never runs with the write token. .github/scripts/check-workflows.sh (the
+# workflows job) fails if any of this changes. Pull requests run on
 # pull_request, never pull_request_target, so a fork's code never runs with
 # either.
 name: CI
@@ -108,6 +121,20 @@ jobs:
         env:
           APP: ${{ matrix.app }}
         run: ./bin/mise run "$APP:openapi-breaking" -- "HEAD^"
+
+  # The workflows themselves: actionlint, the permission rules the preview
+  # comment relies on (.github/scripts/check-workflows.sh), and the tests of
+  # the scripts the workflows run. Not an app, so not in the validate matrix.
+  workflows:
+    name: workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: ./bin/mise run workflows
+        run: ./bin/mise run workflows
 
   e2e:
     name: e2e
@@ -318,7 +345,9 @@ jobs:
 
   ci-passed:
     name: ci-passed
-    needs: [validate, openapi-breaking, e2e, preview, preview-api]
+    # Never preview-comment: it is no merge gate (check-workflows.sh fails if
+    # a job needs it).
+    needs: [validate, openapi-breaking, workflows, e2e, preview, preview-api]
     # Run even when a stage failed or was skipped, so this check always reports.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest

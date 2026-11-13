@@ -6,9 +6,9 @@
 # service), e.g. web-client:lint. To add an app, copy the web-client block.
 #
 # CI (.github/workflows/ci.yml) calls <app>:validate for each app (everything
-# the app can prove by itself), then the stack-wide e2e task (the cross-app
-# suite: how the apps are served or connected). Both run the same way on a
-# laptop.
+# the app can prove by itself) and the workflows task (the workflows
+# themselves), then the stack-wide e2e task (the cross-app suite: how the apps
+# are served or connected). All run the same way on a laptop.
 
 [env]
 COMPOSE_FILE = "{{ config_root }}/compose.dev.yaml"
