@@ -108,18 +108,18 @@ How `api` code and tests are laid out (details in `api/README.md`):
 - `core:shell`: open a shell in a `core` container.
 - `core:exec`: run any command in a `core` container, e.g. `./bin/mise run core:exec -- cargo tree`.
 - `core:install`: update `core/Cargo.lock` to match the `Cargo.toml` files. With arguments, add packages: `./bin/mise run core:install -- sha2`, `./bin/mise run core:install -- --dev hex`.
-- `core:lint`: lint (`cargo clippy`, warnings are errors), once with the built-in cryptography and once without it (the web build).
+- `core:lint`: lint (`cargo clippy`, warnings are errors).
 - `core:format`: format the code in place (`cargo fmt`).
 - `core:format-check`: check the formatting without changing files.
 - `core:test`: run the tests (`cargo test`). Arguments go to cargo: `./bin/mise run core:test -- --test sizes -- --nocapture` prints the measured parcel sizes.
 - `core:build`: release build of the library for the container's own platform.
-- `core:wasm`: build the WebAssembly module for browsers twice, with the cryptography compiled in and without it, shrink both with `wasm-opt`, print their sizes, then run the golden vectors through both from Node. The build without cryptography hashes and verifies with WebCrypto.
-- `core:python`: build the Python module for the server (stable ABI, Python 3.12 and later), then run the golden vectors through it with the same Python as `api`.
+- `core:wasm`: build the WebAssembly module for browsers (`fortymm-core.wasm`, with the cryptography compiled in), shrink it with `wasm-opt`, print its size, then run the golden vectors through it from Node with WebCrypto hidden.
+- `core:python`: build the Python module for the server (stable ABI, Python 3.12 and later), then run the golden vectors through it with the same Python as `api`. The module and its type stub `fortymm_core.pyi` go to `/opt/core/python`.
 - `core:validate`: format check, lint, tests, release build, `core:wasm`, then `core:python`, one after another. CI's stage 1 calls this.
 
 How `core` code and tests are laid out (details in `core/README.md`; every byte-level choice in `core/FORMAT.md`):
 
-- The library is pure: no input or output, no clock, no random generator, and it never signs. Hashing and signature verification come from the `Crypto` trait; the default `crypto` feature compiles in a software implementation, and a build without it gets both from its host.
+- The library is pure: no input or output, no clock, no random generator, and it never signs. Hashing and signature verification are compiled into every build, the browser's included (`Software`, behind the `Crypto` trait); a browser uses WebCrypto only to sign.
 - Every number in the byte format (kind numbers, field keys, labels, the alphabet, the checksum) is in `core/src/layout.rs`, and each is described in `core/FORMAT.md`. Change both together.
 - Unit tests sit beside the code. Tests in `core/tests/` go through the public interface only; signing there uses software keys in `core/tests/common/`.
 - `core/vectors/vectors.json` holds the golden vectors. `core:test` fails if the code no longer produces them, and `core:wasm` and `core:python` check every build against the same file. Before the first public release, regenerate with `./bin/mise run core:test -- --test vectors -- --ignored regenerate`; after it, only add vectors.

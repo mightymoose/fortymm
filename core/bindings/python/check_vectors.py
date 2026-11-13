@@ -1,6 +1,6 @@
 """Run the golden vectors through the core's Python module.
 
-    python check_vectors.py <vectors.json>
+    python check_vectors.py <vectors.json> <fortymm_core.pyi>
 
 with the built module on PYTHONPATH. The ids, the outcome ids and the
 checksum are also recomputed here independently, with hashlib and a plain
@@ -8,6 +8,7 @@ polynomial division, so a wrong label or checksum in the core cannot pass by
 agreeing with itself.
 """
 
+import ast
 import hashlib
 import json
 import sys
@@ -82,10 +83,71 @@ for v in vectors["records"]:
     if "subject" in v:
         check(sha(labels["outcome"] + unhex(v["subject"])) == v["outcome_id"], f"{name}: outcome preimage")
         check(unhex(v["subject"]) in record.body, f"{name}: subject is a slice of the body")
-    if "match_id" in v:
-        check(record.match_id().hex() == v["match_id"] == v["id"], f"{name}: match id")
-    if "extra_player_id" in v:
-        check(record.extra_player_id().hex() == v["extra_player_id"] == v["id"], f"{name}: player id")
+    # The getters: each gives the vector's value, or None when it has none.
+    def hexed(value: object) -> object:
+        if isinstance(value, bytes):
+            return value.hex()
+        if isinstance(value, list):
+            return [hexed(item) for item in value]
+        return value
+
+    check(record.signer.hex() == v["signer"], f"{name}: signer")
+    for getter, value in [
+        ("match_id", record.match_id()),
+        ("extra_player_id", record.extra_player_id()),
+        ("sides", record.sides),
+        ("terms", record.terms),
+        ("repeats_player", record.repeats_player),
+        ("creator", record.creator),
+        ("introduced_key", record.introduced_key),
+    ]:
+        check(hexed(value) == v.get(getter), f"{name}: {getter}")
+    if "match_id" in v or "extra_player_id" in v:
+        check(v["id"] in (v.get("match_id"), v.get("extra_player_id")), f"{name}: id is the record id")
+    if "sides" in v:
+        # The sides and terms are the body's own bytes: each player id, and
+        # the terms, appear in it as a CBOR byte string.
+        for player in [p for side in record.sides for p in side]:
+            check(b"\x58\x20" + player in record.body, f"{name}: player id in the body")
+        check(record.terms in record.body, f"{name}: terms in the body")
+
+for v in vectors["usernames"]:
+    check(
+        core.username(unhex(v["player_id"]), v["suffix_length"]) == v["username"],
+        f"username {v['player_id']} {v['suffix_length']}",
+    )
+
+for length in vectors["invalid_username_suffix_lengths"] + [-1]:
+    try:
+        core.username(bytes(32), length)
+        check(False, f"username suffix length {length}: refused")
+    except core.Malformed:
+        check(True, "")
+
+# The type stub names exactly what the module defines.
+stub = ast.parse(open(sys.argv[2]).read())
+
+
+def names(body: list[ast.stmt]) -> set[str]:
+    found = set()
+    for node in body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            found.add(node.name)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            found.add(node.target.id)
+    return found
+
+
+def public(thing: object) -> set[str]:
+    return {n for n in dir(thing) if not n.startswith("_")}
+
+
+check(names(stub.body) == public(core), f"stub: module names {names(stub.body) ^ public(core)}")
+for node in stub.body:
+    if isinstance(node, ast.ClassDef) and node.name in ("Record", "Parcel"):
+        cls = getattr(core, node.name)
+        found = names(node.body) - {"__init__"}
+        check(found == public(cls), f"stub: {node.name} names {found ^ public(cls)}")
 
 for v in vectors["invalid_records"]:
     try:

@@ -1,10 +1,8 @@
 // The small hand-written wrapper over the core's WebAssembly interface
 // (design section 14). It copies bytes in and out of the module's memory and
-// turns status codes into exceptions.
-//
-// With a module built without cryptography, hashing and signature
-// verification use WebCrypto, which is asynchronous, so `id`, `verify`,
-// `outcomeId`, `accountId` and `ownPlayerId` return promises in both builds.
+// turns status codes into exceptions. The module hashes and verifies by
+// itself, so every method is synchronous except `load`; only signing, which
+// the core never does, uses the browser's WebCrypto.
 
 const OK = 0;
 const NOT_APPLICABLE = 2;
@@ -14,16 +12,13 @@ const BAD_SIGNATURE = 4;
 export class Damaged extends Error {}
 
 export class Core {
-  static async load(wasmBytes, { subtle = globalThis.crypto?.subtle } = {}) {
+  static async load(wasmBytes) {
     const { instance } = await WebAssembly.instantiate(wasmBytes, {});
-    return new Core(instance.exports, subtle);
+    return new Core(instance.exports);
   }
 
-  constructor(exports, subtle) {
+  constructor(exports) {
     this.x = exports;
-    this.subtle = subtle;
-    // A module built without cryptography exports no fmm_record_id.
-    this.hasCrypto = typeof exports.fmm_record_id === "function";
   }
 
   call(name, input, { allow = [] } = {}) {
@@ -46,39 +41,61 @@ export class Core {
   signature(record) { return this.call("fmm_record_signature", record).out; }
   signer(record) { return this.call("fmm_record_signer", record).out; }
 
-  async sha256(bytes) {
-    return new Uint8Array(await this.subtle.digest("SHA-256", bytes));
+  id(record) { return this.call("fmm_record_id", record).out; }
+  verify(record) { return this.call("fmm_record_verify", record).status === OK; }
+  outcomeId(record) {
+    const { status, out } = this.call("fmm_record_outcome_id", record, { allow: [NOT_APPLICABLE] });
+    return status === OK ? out : null;
   }
 
-  async id(record) {
-    if (this.hasCrypto) return this.call("fmm_record_id", record).out;
-    return this.sha256(this.body(record));
+  // What a record says about its match and its players. Each reports what
+  // the bytes say, not that the record counts: `verify` is a separate call.
+  // A record of another kind, or one this library did not interpret (an
+  // unknown kind, or a format version it cannot read), gives null; every
+  // record still has its signer.
+  optional(name, record) {
+    const { status, out } = this.call(name, record, { allow: [NOT_APPLICABLE] });
+    return status === OK ? out : null;
   }
-
-  async verify(record) {
-    if (this.hasCrypto) return this.call("fmm_record_verify", record).status === OK;
-    // WebCrypto verifies the raw r||s form, which is the stored form.
-    const key = await this.subtle.importKey(
-      "raw", this.signer(record), { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
-    return this.subtle.verify(
-      { name: "ECDSA", hash: "SHA-256" }, key, this.signature(record), this.body(record));
-  }
-
-  async outcomeId(record) {
-    if (this.hasCrypto) {
-      const { status, out } = this.call("fmm_record_outcome_id", record, { allow: [NOT_APPLICABLE] });
-      return status === OK ? out : null;
+  matchId(record) { return this.optional("fmm_record_match_id", record); }
+  sides(record) {
+    const out = this.optional("fmm_record_sides", record);
+    if (out === null) return null;
+    const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
+    const sides = [];
+    for (let at = 0; sides.length < 2;) {
+      const count = view.getUint32(at);
+      at += 4;
+      const side = [];
+      for (let i = 0; i < count; i += 1, at += 32) side.push(out.slice(at, at + 32));
+      sides.push(side);
     }
-    const { status, out } = this.call("fmm_record_outcome_preimage", record, { allow: [NOT_APPLICABLE] });
-    return status === OK ? this.sha256(out) : null;
+    return sides;
   }
-
-  async accountId(publicKey) {
-    return this.sha256(this.call("fmm_account_id_preimage", publicKey).out);
+  terms(record) { return this.optional("fmm_record_terms", record); }
+  repeatsPlayer(record) {
+    const out = this.optional("fmm_record_repeats_player", record);
+    return out === null ? null : out[0] === 1;
   }
+  creator(record) { return this.optional("fmm_record_creator", record); }
+  extraPlayerId(record) { return this.optional("fmm_record_extra_player_id", record); }
+  introducedKey(record) { return this.optional("fmm_record_introduced_key", record); }
+  signerAccountId(record) { return this.accountId(this.signer(record)); }
+  signerOwnPlayerId(record) { return this.ownPlayerId(this.signer(record)); }
 
-  async ownPlayerId(publicKey) {
-    return this.sha256(this.call("fmm_own_player_id_preimage", publicKey).out);
+  // Keys: the 33 bytes a record stores.
+  accountId(publicKey) { return this.call("fmm_account_id", publicKey).out; }
+  ownPlayerId(publicKey) { return this.call("fmm_own_player_id", publicKey).out; }
+
+  // The generated username of a 32-byte player id, with a suffix of
+  // `suffixLength` characters (4 to 16). Throws for any other length.
+  username(playerId, suffixLength) {
+    if (!Number.isInteger(suffixLength) || suffixLength < 0 || suffixLength > 0xffffffff) {
+      throw new Error(`username: suffix length ${suffixLength} is not a whole number`);
+    }
+    const head = new Uint8Array(4);
+    new DataView(head.buffer).setUint32(0, suffixLength);
+    return new TextDecoder().decode(this.call("fmm_username", concat([head, playerId])).out);
   }
 
   // Signatures.
@@ -95,7 +112,6 @@ export class Core {
     return this.call("fmm_parcel_build", concat([head, frame(records)])).out;
   }
   split(binary, maxChars) {
-    if (!this.hasCrypto) throw new Error("split needs record ids: use the build with cryptography");
     const head = new Uint8Array(4);
     new DataView(head.buffer).setUint32(0, maxChars);
     return unframe(this.call("fmm_parcel_split", concat([head, binary])).out);

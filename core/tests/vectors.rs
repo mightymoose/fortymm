@@ -14,8 +14,9 @@ mod common;
 use common::{CRYPTO, ENV, fixtures, hex, high_s, random, raw_body};
 use fortymm_core::cbor::Value;
 use fortymm_core::ids::label;
+use fortymm_core::layout::username::MAX_SUFFIX_LENGTH;
 use fortymm_core::parcel::checksum;
-use fortymm_core::{Content, Draft, Kind, Parcel, Record, Signature};
+use fortymm_core::{Content, Draft, Kind, Parcel, PlayerId, Record, Signature};
 use serde_json::{Value as Json, json};
 
 const PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/vectors/vectors.json");
@@ -44,6 +45,26 @@ fn record_json(name: &str, record: &Record) -> Json {
     }
     if let Some(id) = record.extra_player_id(&CRYPTO) {
         object.insert("extra_player_id".into(), json!(hex(id.as_bytes())));
+    }
+    // The getters. A key is present exactly when the getter gives a value.
+    if let Some(sides) = record.sides() {
+        let sides: Vec<Vec<String>> = sides
+            .iter()
+            .map(|side| side.iter().map(|p| hex(p.as_bytes())).collect())
+            .collect();
+        object.insert("sides".into(), json!(sides));
+    }
+    if let Some(terms) = record.terms() {
+        object.insert("terms".into(), json!(hex(terms)));
+    }
+    if let Some(repeats) = record.repeats_player() {
+        object.insert("repeats_player".into(), json!(repeats));
+    }
+    if let Some(key) = record.creator() {
+        object.insert("creator".into(), json!(hex(key.as_bytes())));
+    }
+    if let Some(key) = record.introduced_key() {
+        object.insert("introduced_key".into(), json!(hex(key.as_bytes())));
     }
     if let Some(subject) = record.subject() {
         let outcome = subject.outcome_id(&CRYPTO);
@@ -321,6 +342,26 @@ fn build() -> Json {
         json!({"name": "r-zero", "der": "3006020100020101"}),
     ];
 
+    // Generated usernames: every key's own player, the extra player, and the
+    // two ends of the id range, at the shortest suffix, one more, and the
+    // longest.
+    let mut players: Vec<PlayerId> = keys.iter().map(|k| k.own_player()).collect();
+    players.push(fixtures.get("player").extra_player_id(&CRYPTO).unwrap());
+    players.push(PlayerId::from_bytes([0; 32]));
+    players.push(PlayerId::from_bytes([0xff; 32]));
+    let usernames: Vec<Json> = players
+        .iter()
+        .flat_map(|player| {
+            [4, 5, MAX_SUFFIX_LENGTH].map(|length| {
+                json!({
+                    "player_id": hex(player.as_bytes()),
+                    "suffix_length": length,
+                    "username": player.username(length).unwrap(),
+                })
+            })
+        })
+        .collect();
+
     let checksums: Vec<Json> = [b"".as_slice(), b"123456789", b"\x00", b"\xff\xff\xff\xff"]
         .iter()
         .map(|input| json!({"input": hex(input), "checksum": format!("{:08x}", checksum(input))}))
@@ -349,6 +390,8 @@ fn build() -> Json {
         "signatures": signatures,
         "invalid_der": bad_der,
         "checksums": checksums,
+        "usernames": usernames,
+        "invalid_username_suffix_lengths": [0, 1, 3, MAX_SUFFIX_LENGTH + 1],
     })
 }
 
@@ -392,6 +435,45 @@ fn vectors_check_from_the_file_alone() {
                 outcome
             );
         }
+        // Each getter gives the entry's value, or nothing when it has none.
+        let field = |key: &str| entry.get(key).cloned().unwrap_or(Json::Null);
+        let key_hex = |key: Option<fortymm_core::PublicKey>| json!(key.map(|k| hex(k.as_bytes())));
+        assert_eq!(json!(hex(record.signer().as_bytes())), entry["signer"]);
+        assert_eq!(
+            json!(record.match_id(&CRYPTO).map(|id| hex(id.as_bytes()))),
+            field("match_id")
+        );
+        assert_eq!(
+            json!(record.extra_player_id(&CRYPTO).map(|id| hex(id.as_bytes()))),
+            field("extra_player_id")
+        );
+        assert_eq!(
+            json!(record.sides().map(|sides| {
+                sides
+                    .iter()
+                    .map(|side| side.iter().map(|p| hex(p.as_bytes())).collect::<Vec<_>>())
+                    .collect::<Vec<_>>()
+            })),
+            field("sides")
+        );
+        assert_eq!(json!(record.terms().map(hex)), field("terms"));
+        assert_eq!(json!(record.repeats_player()), field("repeats_player"));
+        assert_eq!(key_hex(record.creator()), field("creator"));
+        assert_eq!(key_hex(record.introduced_key()), field("introduced_key"));
+    }
+    for entry in file["usernames"].as_array().unwrap() {
+        let player: [u8; 32] = unhex(entry["player_id"].as_str().unwrap())
+            .try_into()
+            .unwrap();
+        let length = entry["suffix_length"].as_u64().unwrap() as usize;
+        assert_eq!(
+            json!(PlayerId::from_bytes(player).username(length).unwrap()),
+            entry["username"]
+        );
+    }
+    for length in file["invalid_username_suffix_lengths"].as_array().unwrap() {
+        let length = length.as_u64().unwrap() as usize;
+        assert!(PlayerId::from_bytes([0; 32]).username(length).is_err());
     }
     for entry in file["invalid_records"].as_array().unwrap() {
         let bytes = unhex(entry["record"].as_str().unwrap());

@@ -1,8 +1,6 @@
 //! Computed ids (design section 4, "Derived ids"). No id is ever assigned.
 //!
-//! Every id is the SHA-256 digest of a *preimage*. Each has two functions: one
-//! that returns the preimage, for a host that must hash asynchronously (a
-//! browser's WebCrypto), and one that hashes it with a [`Crypto`].
+//! Every id is the SHA-256 digest of a *preimage*, hashed with a [`Crypto`].
 
 use std::fmt;
 
@@ -104,24 +102,14 @@ impl PublicKey {
         &self.0
     }
 
-    /// The preimage of [`PublicKey::account_id`].
-    pub fn account_id_preimage(&self) -> Vec<u8> {
-        labelled(label::ACCOUNT, &self.0)
-    }
-
     /// The account this key belongs to before any merge.
     pub fn account_id(&self, crypto: &impl Crypto) -> AccountId {
-        AccountId(crypto.sha256(&self.account_id_preimage()))
-    }
-
-    /// The preimage of [`PublicKey::own_player_id`].
-    pub fn own_player_id_preimage(&self) -> Vec<u8> {
-        labelled(label::OWN_PLAYER, &self.0)
+        AccountId(crypto.sha256(&labelled(label::ACCOUNT, &self.0)))
     }
 
     /// The player that came into existence with this key's account.
     pub fn own_player_id(&self, crypto: &impl Crypto) -> PlayerId {
-        PlayerId(crypto.sha256(&self.own_player_id_preimage()))
+        PlayerId(crypto.sha256(&labelled(label::OWN_PLAYER, &self.0)))
     }
 }
 
@@ -152,13 +140,8 @@ impl OutcomeId {
     }
 }
 
-/// The preimage of an outcome id: the label, then the subject bytes.
-pub(crate) fn outcome_id_preimage(subject: &[u8]) -> Vec<u8> {
-    labelled(label::OUTCOME, subject)
-}
-
 pub(crate) fn outcome_id(crypto: &impl Crypto, subject: &[u8]) -> OutcomeId {
-    OutcomeId(crypto.sha256(&outcome_id_preimage(subject)))
+    OutcomeId(crypto.sha256(&labelled(label::OUTCOME, subject)))
 }
 
 pub(crate) fn record_id(crypto: &impl Crypto, body: &[u8]) -> RecordId {

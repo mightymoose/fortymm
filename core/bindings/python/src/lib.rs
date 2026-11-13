@@ -9,7 +9,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
-use fmm::{Environment, Parcel, PublicKey, Record, Signature, Software};
+use fmm::{Environment, Parcel, PlayerId, PublicKey, Record, Signature, Software};
 
 create_exception!(fortymm_core, Malformed, PyValueError);
 create_exception!(fortymm_core, Damaged, PyValueError);
@@ -87,6 +87,52 @@ impl PyRecord {
     #[getter]
     fn environment(&self) -> u64 {
         self.0.header().environment.0
+    }
+
+    // The getters below report what the bytes say, not that the record
+    // counts: call verify() for that. A record this library did not interpret
+    // (an unknown kind, or a format version it cannot read) gives None from
+    // each; it still has its signer.
+
+    /// A `match` record's two sides, each a list of 32-byte player ids. None
+    /// for every other record, including a `match` at a format version this
+    /// library did not interpret.
+    #[getter]
+    fn sides<'py>(&self, py: Python<'py>) -> Option<Vec<Vec<Bound<'py, PyBytes>>>> {
+        self.0.sides().map(|sides| {
+            sides
+                .iter()
+                .map(|side| side.iter().map(|p| bytes(py, p.as_bytes())).collect())
+                .collect()
+        })
+    }
+
+    /// A `match` record's terms (opaque bytes). None for every other record.
+    #[getter]
+    fn terms<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyBytes>> {
+        self.0.terms().map(|terms| bytes(py, terms))
+    }
+
+    /// Whether a `match` record names a player more than once (on both
+    /// sides, or twice on one). Such a match is read normally. None for every
+    /// other record.
+    #[getter]
+    fn repeats_player(&self) -> Option<bool> {
+        self.0.repeats_player()
+    }
+
+    /// The key that created the match or extra player: the signer of a
+    /// `match` or `player` record. None for every other record.
+    #[getter]
+    fn creator<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyBytes>> {
+        self.0.creator().map(|key| bytes(py, key.as_bytes()))
+    }
+
+    /// The key a `hello` record introduces (its signer). None for every other
+    /// record.
+    #[getter]
+    fn introduced_key<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyBytes>> {
+        self.0.introduced_key().map(|key| bytes(py, key.as_bytes()))
     }
 
     fn id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
@@ -245,6 +291,19 @@ fn checksum(data: &[u8]) -> u32 {
     fmm::parcel::checksum(data)
 }
 
+/// The generated username of a 32-byte player id, with a suffix of
+/// suffix_length characters (4 to 16). Raises Malformed otherwise.
+#[pyfunction]
+fn username(player_id: &[u8], suffix_length: i64) -> PyResult<String> {
+    let length = usize::try_from(suffix_length).map_err(|_| malformed(fmm::BadSuffixLength))?;
+    let player: [u8; 32] = player_id
+        .try_into()
+        .map_err(|_| malformed("a player id is 32 bytes"))?;
+    PlayerId::from_bytes(player)
+        .username(length)
+        .map_err(malformed)
+}
+
 #[pymodule]
 fn fortymm_core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyRecord>()?;
@@ -256,6 +315,7 @@ fn fortymm_core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(account_id, module)?)?;
     module.add_function(wrap_pyfunction!(own_player_id, module)?)?;
     module.add_function(wrap_pyfunction!(checksum, module)?)?;
+    module.add_function(wrap_pyfunction!(username, module)?)?;
     module.add("FORMAT_VERSION", fmm::layout::FORMAT_VERSION)?;
     Ok(())
 }

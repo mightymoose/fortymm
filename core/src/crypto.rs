@@ -1,9 +1,8 @@
 //! The two cryptographic operations the core needs, behind a trait.
 //!
-//! The core hashes and verifies, and never signs. Both operations are passed
-//! in, so a build can leave them out and let its host supply them (the web
-//! build, design section 14). With the `crypto` feature, [`Software`] is the
-//! built-in implementation that the server and the native builds use.
+//! The core hashes and verifies, and never signs. [`Software`] is the
+//! implementation every build uses, the browser's included (design section
+//! 14). The trait stays so tests can stand in for it.
 
 /// SHA-256 and ECDSA P-256 verification.
 ///
@@ -43,11 +42,9 @@ impl<T: Crypto + ?Sized> Crypto for &T {
 }
 
 /// The built-in implementation, in pure Rust.
-#[cfg(feature = "crypto")]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Software;
 
-#[cfg(feature = "crypto")]
 impl Crypto for Software {
     fn sha256(&self, data: &[u8]) -> [u8; 32] {
         use sha2::Digest;

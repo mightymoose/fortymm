@@ -9,11 +9,5 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-[features]
-default = ["crypto"]
-# Without it, the WebAssembly file contains no cryptography and the
-# JavaScript wrapper hashes and verifies with WebCrypto (design section 14).
-crypto = ["fortymm-core/crypto"]
-
 [dependencies]
-fortymm-core = { path = "../..", default-features = false }
+fortymm-core = { path = "../.." }

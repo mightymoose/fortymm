@@ -117,7 +117,8 @@ A body whose kind number is not in the table above, whose kind is one of the fiv
 
 - keys 0 to 4 must be present and well typed, and keys 5 and 6 well typed if present;
 - every other entry is kept as it is (`Content::Other`), as long as the whole body is valid in the profile;
-- the record verifies like any other, gets a record id, and travels in a parcel unchanged.
+- the record verifies like any other, gets a record id, and travels in a parcel unchanged;
+- it gives no match facts and no player facts (no match id, sides, terms, creator, extra player or introduced key), only its signer and so the signer's account and own player.
 
 This is what design section 10 relies on ("Server does not yet understand the kind").
 
@@ -135,7 +136,7 @@ Every id is SHA-256 (design section 4). This implementation chose the labels. Ea
 | Outcome id | `"fortymm.outcome.v1\0"` followed by the subject's bytes |
 | Tag | the first 8 bytes of an outcome id |
 
-Each id has a function that returns its preimage, so a host that hashes asynchronously, such as WebCrypto, can compute ids itself.
+Every build computes ids itself; no build needs a host to hash.
 
 ## 8. Signatures
 
@@ -223,3 +224,15 @@ Detected with high probability only:
 - Each part keeps the parcel's order. A record whose needs alone do not fit gives `SplitError::TooLarge`.
 
 Because every record must travel with every earlier request, a parcel that starts with requests repeats them in every part. That follows from P1 as written, and a long backlog that holds requests can split badly as a result. `export` (the journal, not in this slice) can do better by choosing what goes in first.
+
+## 14. Generated usernames
+
+**Provisional.** The design fixes the form (an adjective, an animal and a short suffix, such as `agile-meerkat-4b8z`), that it is computed from the player id alone, that the suffix is four characters or more, that its alphabet has no vowels, and that the word lists are part of the format and frozen once released (sections 8.3, "Moderating usernames", and 8.4). The scheme and the lists below were chosen by this implementation as placeholders. The final lists are the user's to curate (section 12); changing them changes every generated name, so it must happen before the first release.
+
+- **Form:** `<adjective>-<animal>-<suffix>`, all lower case ASCII, joined by `-`.
+- **Scheme:** read the 32-byte player id as one big-endian unsigned number n. The adjective is `ADJECTIVES[n mod 64]`; then n becomes n div 64. The animal is `ANIMALS[n mod 64]`; then n becomes n div 64. Each suffix character, in order, is `SUFFIX_ALPHABET[n mod 29]`, then n becomes n div 29. Because the digits are taken in order, a longer suffix always starts with the shorter one, so the server's "shortest free form" (section 8.4, "Confirmation") only ever adds characters to what a device showed.
+- **Suffix alphabet:** `0123456789bcdfghjkmnpqrstvwxz`, 29 characters: the digits, then lower-case consonants without `l` (it looks like `1`) and `y`.
+- **Suffix length:** 4 to 16 characters. Anything else is refused. 16 is a limit of this implementation; the design needs only "four or more".
+- **Lists:** 64 adjectives and 64 animals, in `src/layout.rs` (`layout::username`), chosen to be inoffensive alone and together. 64 × 64 × 29⁴ is about 2.9 billion four-character names.
+
+The id is a SHA-256 output (section 7), so it is already uniform and is not hashed again.

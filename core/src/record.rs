@@ -278,11 +278,6 @@ impl Subject {
         cbor::encode(&self.to_value())
     }
 
-    /// The preimage of the outcome id, for a host that hashes by itself.
-    pub fn outcome_id_preimage(&self) -> Vec<u8> {
-        ids::outcome_id_preimage(&self.to_bytes())
-    }
-
     /// The id of the outcome this subject creates.
     pub fn outcome_id(&self, crypto: &impl Crypto) -> OutcomeId {
         ids::outcome_id(crypto, &self.to_bytes())
@@ -1093,7 +1088,7 @@ impl std::error::Error for BadSignature {}
 /// A record: a body that decodes strictly and a signature in the stored form.
 ///
 /// Holding a `Record` does not mean its signature verifies. Call
-/// [`Record::verify`] (or verify [`Record::signed_message`] outside the core).
+/// [`Record::verify`].
 #[derive(Clone)]
 pub struct Record {
     body: Vec<u8>,
@@ -1181,12 +1176,6 @@ impl Record {
         &self.body
     }
 
-    /// The bytes the signature is over: the body. ECDSA hashes them with
-    /// SHA-256.
-    pub fn signed_message(&self) -> &[u8] {
-        &self.body
-    }
-
     /// The signature.
     pub fn signature(&self) -> &Signature {
         &self.signature
@@ -1256,6 +1245,57 @@ impl Record {
     /// The signer's own player id.
     pub fn signer_own_player_id(&self, crypto: &impl Crypto) -> PlayerId {
         self.header.signer.own_player_id(crypto)
+    }
+
+    // The getters below say what the bytes mean, not that the record counts:
+    // verifying is a separate call ([`Record::verify`]). A record this library
+    // did not interpret (an unknown kind, or a format version it cannot read)
+    // gives `None` from each of them; it still has its signer.
+
+    /// The key that signed this record, whatever its kind or format version.
+    pub fn signer(&self) -> PublicKey {
+        self.header.signer
+    }
+
+    /// A `match` record's two sides, each one or more player ids.
+    pub fn sides(&self) -> Option<&[Vec<PlayerId>; 2]> {
+        match &self.content {
+            Content::Match { sides, .. } => Some(sides),
+            _ => None,
+        }
+    }
+
+    /// A `match` record's terms, as the opaque bytes they are.
+    pub fn terms(&self) -> Option<&[u8]> {
+        match &self.content {
+            Content::Match { terms, .. } => Some(terms),
+            _ => None,
+        }
+    }
+
+    /// Whether a `match` record names any player more than once, on both
+    /// sides or twice on one. Such a match is read normally and not refused:
+    /// the design has no rule for it yet.
+    pub fn repeats_player(&self) -> Option<bool> {
+        let players: Vec<&PlayerId> = self.sides()?.iter().flatten().collect();
+        Some(
+            players
+                .iter()
+                .enumerate()
+                .any(|(index, player)| players[..index].contains(player)),
+        )
+    }
+
+    /// The key that created the match or the extra player: the signer of a
+    /// `match` or `player` record.
+    pub fn creator(&self) -> Option<PublicKey> {
+        matches!(self.content, Content::Match { .. } | Content::Player)
+            .then_some(self.header.signer)
+    }
+
+    /// The key a `hello` record introduces: its signer.
+    pub fn introduced_key(&self) -> Option<PublicKey> {
+        matches!(self.content, Content::Hello).then_some(self.header.signer)
     }
 }
 

@@ -573,14 +573,9 @@ run = "docker compose --profile tools run --rm core"
 description = "Update core/Cargo.lock to match the Cargo.toml files; with arguments, add packages: ./bin/mise run core:install -- --dev hex"
 run = "docker compose --profile tools run --rm core dev-install"
 
-# Twice: with the built-in cryptography, and without it (the web build, where
-# the host supplies hashing and signature verification).
 [tasks."core:lint"]
-description = "Lint core (clippy, warnings are errors), with and without built-in cryptography"
-run = [
-  "docker compose --profile tools run --rm core cargo clippy --locked --workspace --all-targets -- -D warnings",
-  "docker compose --profile tools run --rm core cargo clippy --locked --package fortymm-core --lib --no-default-features -- -D warnings",
-]
+description = "Lint core (clippy, warnings are errors)"
+run = "docker compose --profile tools run --rm core cargo clippy --locked --workspace --all-targets -- -D warnings"
 
 [tasks."core:format"]
 description = "Format core's code in place (rustfmt)"
@@ -602,7 +597,7 @@ run = "docker compose --profile tools run --rm core cargo build --locked --relea
 # golden vectors (core/vectors/vectors.json) through them. Output stays in the
 # core-cache volume.
 [tasks."core:wasm"]
-description = "Build core for browsers (WebAssembly, with and without cryptography), report sizes, run the golden vectors from Node"
+description = "Build core for browsers (WebAssembly), report its size, run the golden vectors from Node"
 run = "docker compose --profile tools run --rm core sh bindings/wasm/build-and-check.sh"
 
 [tasks."core:python"]
