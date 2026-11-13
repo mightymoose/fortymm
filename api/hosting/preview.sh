@@ -24,6 +24,8 @@ read -r database package < <(sh "$here/preview-name.sh" "$service")
 
 # shellcheck source=credentials.sh
 . "$here/credentials.sh" api:preview
+# shellcheck source=exists.sh
+. "$here/exists.sh"
 
 registry="$REGION-docker.pkg.dev"
 image="$registry/$PROJECT/$IMAGE_REPOSITORY/$package:$tag"
@@ -41,7 +43,8 @@ if [ -z "$digest" ]; then
   exit 1
 fi
 
-if gcloud sql databases describe "$database" --instance="$INSTANCE" >/dev/null 2>&1; then
+# Created only when gcloud says not found; any other failure stops here.
+if exists api:preview "HTTPError 404" sql databases describe "$database" --instance="$INSTANCE"; then
   echo "api:preview: the database $database exists; keeping it."
 else
   echo "api:preview: creating the database $database on $INSTANCE"

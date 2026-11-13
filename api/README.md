@@ -183,7 +183,7 @@ How the service reaches its database:
 - Cloud Run's built-in Cloud SQL connection (`--add-cloudsql-instances`) provides the socket.
 - `--no-invoker-iam-check` makes the service public; at most one instance runs, and none when idle.
 
-**Closing the pull request deletes it.** The `Preview cleanup` workflow's `delete preview (api)` job runs `./bin/mise run api:preview-delete -- fortymm-api-pr-<number>`: the service first (so nothing holds the database open), then the database (trying again for up to two minutes while the last instance lets go), then the image package with every build in it. Something already gone is not an error.
+**Closing the pull request deletes it.** The `Preview cleanup` workflow's `delete preview (api)` job runs `./bin/mise run api:preview-delete -- fortymm-api-pr-<number>`: the service first (so nothing holds the database open), then the database (trying again for up to two minutes while the last instance lets go), then the image package with every build in it. Something already gone is not an error, but only gcloud's own "not found" counts as gone (`hosting/exists.sh`): any other failure of a describe (a 503, a permission refused) stops the task with gcloud's message, and `api:preview` likewise creates the database only when gcloud says it isn't there. `hosting/tests/describe-answers.sh` proves it with a stand-in gcloud, in `api:deploy-check`.
 
 **The names are checked first** (`hosting/preview-name.sh`), on the host, before anything is built or reaches Google Cloud:
 - The database and image package come from the name, never from an argument: `fortymm-api-pr-9` gets `pr_9` and `pr-9`, so two previews never share a database. A number has no leading zero, so `pr-09` can't name `pr_9`'s database twice.

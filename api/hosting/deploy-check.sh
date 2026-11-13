@@ -16,6 +16,8 @@
 #    production-looking name, two names...), in the task on the host before
 #    the container starts, and again in the container. api:preview refuses
 #    names outside its rule before it builds anything.
+# 4. The preview and its delete take a resource as gone only when gcloud says
+#    "not found"; any other failure stops them (tests/describe-answers.sh).
 set -eu
 
 hosting=api/hosting
@@ -137,3 +139,12 @@ for args in "fortymm-api-preview" "postgres" "fortymm-api-pr-9 fortymm-api"; do
   esac
 done
 echo "delete-preview.sh refuses them too, two names included, before it asks for credentials; fortymm-api-pr-9 gets past the name and stops at the credentials (above)."
+
+# ---- 4. "Gone" only when gcloud says not found ---------------------------------
+# How the preview scripts read a describe's answer, with stand-ins for gcloud
+# and docker (tests/describe-answers.sh): any failure but "not found" stops
+# them, showing gcloud's message.
+if ! out=$(no_login bash tests/describe-answers.sh); then
+  fail "a describe's failure is read wrongly: $out"
+fi
+echo "$out" | tail -n 1

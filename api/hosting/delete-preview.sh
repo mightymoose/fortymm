@@ -15,17 +15,21 @@ read -r database package < <(sh "$here/preview-name.sh" --deletable "$@")
 
 # shellcheck source=credentials.sh
 . "$here/credentials.sh" api:preview-delete
+# shellcheck source=exists.sh
+. "$here/exists.sh"
 
 quiet() { grep -v -e "^WARNING: This command is using service account impersonation" || true; }
 
-if gcloud run services describe "$service" --region="$REGION" >/dev/null 2>&1; then
+# "Nothing to delete" only when gcloud says not found; any other failure of a
+# describe stops here (exists.sh).
+if exists api:preview-delete "Cannot find service [$service]" run services describe "$service" --region="$REGION"; then
   gcloud run services delete "$service" --region="$REGION" --quiet 2>&1 | quiet
   echo "api:preview-delete: deleted the service $service."
 else
   echo "api:preview-delete: no service $service; nothing to delete."
 fi
 
-if gcloud sql databases describe "$database" --instance="$INSTANCE" >/dev/null 2>&1; then
+if exists api:preview-delete "HTTPError 404" sql databases describe "$database" --instance="$INSTANCE"; then
   # The service's last instance can hold a connection for some seconds after
   # the service is gone, and a database in use can't be dropped.
   for attempt in 1 2 3 4 5 6; do
@@ -44,7 +48,7 @@ else
   echo "api:preview-delete: no database $database; nothing to delete."
 fi
 
-if gcloud artifacts packages describe "$package" --repository="$IMAGE_REPOSITORY" --location="$REGION" >/dev/null 2>&1; then
+if exists api:preview-delete "NOT_FOUND:" artifacts packages describe "$package" --repository="$IMAGE_REPOSITORY" --location="$REGION"; then
   gcloud artifacts packages delete "$package" --repository="$IMAGE_REPOSITORY" --location="$REGION" --quiet 2>&1 | quiet
   echo "api:preview-delete: deleted the image package $package, every version in it."
 else
