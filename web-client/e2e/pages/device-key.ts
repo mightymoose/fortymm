@@ -8,7 +8,6 @@ type Locks = { held: number; pending: number }
 
 type Harness = {
   publicKey(): Promise<string>
-  keptPublicKey(): Promise<string>
   coreIds(): Promise<{ accountId: string; ownPlayerId: string }>
   signAndVerify(): Promise<{
     rawLength: number
@@ -63,10 +62,6 @@ export class DeviceKeyHarness {
 
   publicKey() {
     return this.call('publicKey')
-  }
-
-  keptPublicKey() {
-    return this.call('keptPublicKey')
   }
 
   coreIds() {

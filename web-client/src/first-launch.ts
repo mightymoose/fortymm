@@ -59,16 +59,39 @@ export async function firstLaunch(): Promise<FirstLaunchResult> {
       // Signing or assembling threw: no hello to store.
       return { ok: false, reason: 'signing-unavailable' }
     }
-    const stored = await store.storeRecord(hello)
+    const stored = await store.storeRecord(hello, { me: true })
     return stored.ok ? { ok: true, outcome: 'made' } : stored
   })
   return result.ok ? result.value : result
 }
 
+// How long a screen waits for the launch at startup before reading without
+// it (startupLaunchSettled). A launch on a fresh device takes well under a
+// second (the core's module, a key, a signature, one write); five seconds
+// covers a slow connection fetching the core, and bounds a launch held back
+// by another tab keeping the append lock.
+export const startupLaunchBound = 5_000
+
+let atStartup: Promise<void> | undefined
+
 // The launch at app startup: runs firstLaunch, then sets firstLaunchMark.
-export async function launchAtStartup(): Promise<void> {
-  const result = await firstLaunch()
-  performance.mark(firstLaunchMark, { detail: result })
+export function launchAtStartup(): Promise<void> {
+  atStartup = firstLaunch().then((result) => {
+    performance.mark(firstLaunchMark, { detail: result })
+  })
+  return atStartup
+}
+
+// Resolves once the launch at startup has settled, or after bound
+// milliseconds, whichever comes first; at once when none was started. Never
+// rejects, and never starts a launch: a screen that finds no account yet
+// waits here, then reads again.
+export function startupLaunchSettled(bound = startupLaunchBound): Promise<void> {
+  if (atStartup === undefined) return Promise.resolve()
+  return Promise.race([
+    atStartup.catch(() => {}),
+    new Promise<void>((resolve) => setTimeout(resolve, bound)),
+  ])
 }
 
 function hex(bytes: Uint8Array): string {

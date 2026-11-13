@@ -38,6 +38,23 @@ test('on a fresh device, the app’s start stores one key, one hello and one use
   })
 })
 
+test('after the first launch, loadMe gives this device’s user: the user the core gives for its key', async ({
+  context,
+  page,
+}) => {
+  const app = new App(page)
+  await new StartPage(page).goto()
+  expect(await app.firstLaunch()).toEqual({ ok: true, outcome: 'made' })
+
+  const storage = new StorageHarness(await context.newPage())
+  await storage.open()
+  const expected = await storage.expectedUser()
+  expect(await storage.loadMe()).toEqual({
+    ok: true,
+    user: { ...expected, unconfirmed: true },
+  })
+})
+
 test('two tabs opening the app at once on a fresh device end up with one key, one hello and one user', async ({
   context,
 }) => {

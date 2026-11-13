@@ -3,6 +3,7 @@ import { storedSignature, withDeviceKey } from '../../src/device-key.ts'
 import { environment } from '../../src/first-launch.ts'
 import {
   appendLock,
+  loadMe,
   loadUser,
   recordStore,
   storageDatabase,
@@ -111,6 +112,26 @@ async function expectedUser() {
 }
 
 const harness = {
+  // What loadMe gives: this device's user.
+  loadMe() {
+    return loadMe()
+  },
+
+  // Makes a hello and stores it as this device's own, as the first launch
+  // does: storeRecord(hello, { me: true }) with withDeviceKey's store. What
+  // it answered, and what the core gives for the key.
+  async storeOwnHello() {
+    const core = await loadCore()
+    const result = await withDeviceKey(async (key, store) => {
+      const random = crypto.getRandomValues(new Uint8Array(8))
+      const body = core.helloBody(environment, key.publicKey, random)
+      const hello = core.assemble(body, storedSignature(core, await key.sign(body)))
+      return store.storeRecord(hello, { me: true })
+    })
+    if (!result.ok) throw new Error(`No device key: ${result.reason}`)
+    return { result: result.value, expected: await expectedUser() }
+  },
+
   // Makes a hello and stores it the given number of times: what each
   // storeRecord answered, and what the core gives for the key that signed it.
   async storeHello(times = 1) {

@@ -35,6 +35,8 @@ type Harness = {
   }>
   expectedUser(): Promise<Expected>
   loadUser(playerId: string): Promise<Loaded>
+  loadMe(): Promise<Loaded>
+  storeOwnHello(): Promise<{ result: Result; expected: Expected }>
   kept(): Promise<Counts>
 }
 
@@ -85,6 +87,15 @@ export class StorageHarness {
     return this.call('kept')
   }
 
+  // This device's user, by loadMe.
+  loadMe() {
+    return this.call('loadMe')
+  }
+
+  // Stores a new hello as this device's own (first launch's way).
+  storeOwnHello() {
+    return this.call('storeOwnHello')
+  }
   storeWhileCallerChangesIt() {
     return this.call('storeWhileCallerChangesIt')
   }
@@ -100,6 +111,8 @@ export class StorageHarness {
   private call<
     Name extends
       | 'kept'
+      | 'loadMe'
+      | 'storeOwnHello'
       | 'storeWhileCallerChangesIt'
       | 'storeAsSlice'
       | 'storeTwoSignaturesOfOneBody',

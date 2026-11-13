@@ -10,6 +10,12 @@ import { loadCore } from './core/load.ts'
 // user is a copy of what a hello says, kept beside it so it can be read by
 // player id, and always rebuildable from the records. A record and the user it
 // mints are written in one transaction: there is never one without the other.
+//
+// Which stored user is this device's own is kept too: a pointer, the "me"
+// entry, holding that user's player id. It is written in the same
+// transaction as the user it points to, so there is never a pointer to a
+// user that isn't stored. loadMe reads it and the user in one transaction:
+// no key, no core.
 
 // A player this device knows of, as a hello introduced it. Ids and the key
 // are lower-case hex.
@@ -48,15 +54,21 @@ export type LoadUserResult =
 // Locks are not re-entrant: code that holds it writes through heldStore.
 export const appendLock = 'fortymm-journal-append'
 
-// The storage functions, for code that already holds the append lock.
+// The storage functions, for code that already holds the append lock: only
+// withDeviceKey's callback, the one place that knows which user is this
+// device's. There, storeRecord(record, { me: true }) also makes the user the
+// record mints this device's own, in the same transaction.
 export type Store = {
-  storeRecord(record: Uint8Array): Promise<StoreResult>
+  storeRecord(record: Uint8Array, options?: { me: true }): Promise<StoreResult>
   loadUser(playerId: string): Promise<LoadUserResult>
 }
 
 export const storageDatabase = 'fortymm-storage'
 export const recordStore = 'records'
 export const userStore = 'users'
+// One entry, meEntry: the player id (hex) of this device's own user.
+export const meStore = 'me'
+export const meEntry = 'user'
 
 // The suffix length of a generated username before any clash (design 8.4),
 // as /health shows it.
@@ -66,7 +78,14 @@ const usernameSuffix = 4
 // again changes nothing. The record is read by the shared core (loadCore),
 // never by parsing its bytes here. Takes the append lock to write.
 export function storeRecord(record: Uint8Array): Promise<StoreResult> {
-  return store(record, (write) => navigator.locks.request(appendLock, write))
+  return store(record, false, (write) => navigator.locks.request(appendLock, write))
+}
+
+// This device's own user, or null when none is marked (no first launch yet,
+// or it failed). One read, taking no lock, and no core: a screen can show
+// the user at once.
+export async function loadMe(): Promise<LoadUserResult> {
+  return reading((database) => readMe(database))
 }
 
 // The same storeRecord and loadUser, taking no lock of their own: only for
@@ -74,7 +93,8 @@ export function storeRecord(record: Uint8Array): Promise<StoreResult> {
 // (device-key.ts) and nothing else. There, the public storeRecord would wait
 // for the lock its caller holds, for ever. Never keep it past the callback.
 export const heldStore: Store = {
-  storeRecord: (record) => store(record, (write) => write()),
+  storeRecord: (record, options) =>
+    store(record, options?.me === true, (write) => write()),
   loadUser: (playerId) => loadUser(playerId),
 }
 
@@ -82,6 +102,7 @@ export const heldStore: Store = {
 // lock it takes, or directly when the caller holds it.
 async function store(
   record: Uint8Array,
+  me: boolean,
   underLock: (write: () => Promise<void>) => Promise<void>,
 ): Promise<StoreResult> {
   let core: Core
@@ -104,7 +125,7 @@ async function store(
     return failure('storage-unavailable')
   }
   try {
-    await underLock(() => write(database, minted))
+    await underLock(() => write(database, minted, me))
     return { ok: true }
   } catch {
     return failure('storage-unavailable')
@@ -115,6 +136,13 @@ async function store(
 
 // The user with this player id (hex), or null when none is stored.
 export async function loadUser(playerId: string): Promise<LoadUserResult> {
+  return reading((database) => read(database, playerId))
+}
+
+// Opens the database, runs one read, and closes it.
+async function reading(
+  read: (database: IDBDatabase) => Promise<User | undefined>,
+): Promise<LoadUserResult> {
   if (globalThis.indexedDB === undefined) return failure('storage-unavailable')
   let database: IDBDatabase
   try {
@@ -123,7 +151,7 @@ export async function loadUser(playerId: string): Promise<LoadUserResult> {
     return failure('storage-unavailable')
   }
   try {
-    const user = await read(database, playerId)
+    const user = await read(database)
     return { ok: true, user: user ?? null }
   } catch {
     return failure('storage-unavailable')
@@ -171,6 +199,7 @@ function openStorage(): Promise<IDBDatabase> {
     request.onupgradeneeded = () => {
       request.result.createObjectStore(recordStore)
       request.result.createObjectStore(userStore)
+      request.result.createObjectStore(meStore)
     }
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error)
@@ -189,6 +218,21 @@ function read(database: IDBDatabase, playerId: string): Promise<User | undefined
   })
 }
 
+// The pointer, then the user it names, in one transaction.
+function readMe(database: IDBDatabase): Promise<User | undefined> {
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction([meStore, userStore], 'readonly')
+    transaction.onerror = () => reject(transaction.error)
+    transaction.onabort = () => reject(transaction.error ?? new Error('Aborted'))
+    const pointer = transaction.objectStore(meStore).get(meEntry)
+    pointer.onsuccess = () => {
+      if (pointer.result === undefined) return resolve(undefined)
+      const user = transaction.objectStore(userStore).get(pointer.result as string)
+      user.onsuccess = () => resolve(user.result as User | undefined)
+    }
+  })
+}
+
 // One transaction for the record and its user, resolved once both are on
 // disk (strict durability where the browser offers it). If either put fails,
 // the transaction is aborted, and neither is kept.
@@ -198,9 +242,17 @@ function read(database: IDBDatabase, playerId: string): Promise<User | undefined
 // is two valid records with one id: the same record (design section 7), and
 // the first one kept stays. The user is put either way; it is minted from
 // the body, so it is the same row.
-function write(database: IDBDatabase, { id, record, user }: Minted): Promise<void> {
+//
+// With me, the me entry is pointed at the user in the same transaction: if
+// any put fails, none of the three is kept.
+function write(
+  database: IDBDatabase,
+  { id, record, user }: Minted,
+  me: boolean,
+): Promise<void> {
   return new Promise((resolve, reject) => {
-    const transaction = database.transaction([recordStore, userStore], 'readwrite', {
+    const stores = me ? [recordStore, userStore, meStore] : [recordStore, userStore]
+    const transaction = database.transaction(stores, 'readwrite', {
       durability: 'strict',
     })
     transaction.oncomplete = () => resolve()
@@ -213,6 +265,7 @@ function write(database: IDBDatabase, { id, record, user }: Minted): Promise<voi
         if (kept.result === undefined) records.put(record, id)
       }
       transaction.objectStore(userStore).put(user, user.playerId)
+      if (me) transaction.objectStore(meStore).put(user.playerId, meEntry)
     } catch (error) {
       transaction.abort()
       reject(error)
