@@ -22,6 +22,8 @@ Everything runs in Docker through mise (see `CLAUDE.md` at the repository root).
 ./bin/mise run core:python                               # vectors from Python
 ```
 
+`core:wasm` publishes the browser build to `/opt/core/wasm` in the `core-cache` volume once the vectors pass: `fortymm-core.wasm`, with the wrapper `fortymm-core.mjs` and its types `fortymm-core.d.mts` beside it, each renamed into place. The web client loads it from there (`web-client/README.md`, "The shared core"), and its tasks run `core:wasm` first, so a change to the wrapper or the module reaches the web client with no other step.
+
 ## Layout
 
 | Path | What |

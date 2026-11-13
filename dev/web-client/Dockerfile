@@ -8,6 +8,12 @@ WORKDIR /app
 # writable by whichever uid that is.
 RUN mkdir -p /app/node_modules && chmod 1777 /app/node_modules
 
+# The core's build (core-cache, compose.dev.yaml) is mounted here read-only.
+# If this service is the first to mount that volume, the volume takes its
+# permissions from this directory, so make it as writable as the core image's
+# own /opt/core: the core service, as the host user, then builds into it.
+RUN mkdir -p /opt/core && chmod 1777 /opt/core
+
 COPY --chmod=755 entrypoint.sh /usr/local/bin/dev-entrypoint
 
 USER node

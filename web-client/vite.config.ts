@@ -17,11 +17,22 @@ export default defineConfig({
     // (offline/plugin.ts).
     keepOnDevice(),
   ],
-  // The dev server forwards /api/* to the api, stripping /api, the way the
-  // production hosting does (see src/api/client.ts). The target is the api
-  // service on the dev stack's network (compose.dev.yaml); if it isn't running,
-  // the page says the api's health is unknown.
+  // The core's browser build, which core:wasm writes to the core-cache volume,
+  // mounted read-only at /opt/core (compose.dev.yaml): the app imports the
+  // wrapper as `fortymm-core/fortymm-core.mjs` and the module's URL as
+  // `fortymm-core/fortymm-core.wasm?url` (src/core/load.ts). The build emits
+  // the module into dist/assets. tsconfig.app.json maps the same name for the
+  // type checker.
+  resolve: {
+    alias: { 'fortymm-core': '/opt/core/wasm' },
+  },
   server: {
+    // The dev server serves files outside the app only from where it's told.
+    fs: { allow: ['.', '/opt/core/wasm'] },
+    // The dev server forwards /api/* to the api, stripping /api, the way the
+    // production hosting does (see src/api/client.ts). The target is the api
+    // service on the dev stack's network (compose.dev.yaml); if it isn't
+    // running, the page says the api's health is unknown.
     proxy: {
       '/api': {
         target: 'http://api:8000',
