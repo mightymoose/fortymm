@@ -57,6 +57,25 @@ test('after a visit to the start page only, /health opens with no connection, an
   await expect(health.unknown).toBeVisible()
 })
 
+// The core's WebAssembly module is a file of the build like any other, so the
+// visit to the start page, which never loads it, keeps it too.
+test('after a visit to the start page only, /health opens with no connection, and loads the shared core', async ({
+  context,
+  page,
+}) => {
+  const app = new App(page)
+  await app.open('/')
+  await app.waitUntilKept()
+  await page.close()
+  await context.setOffline(true)
+
+  const reopened = await context.newPage()
+  const health = new HealthPage(reopened)
+  await new App(reopened).open('/health')
+
+  await expect(health.coreLoaded).toContainText('merry-otter-0rdf')
+})
+
 test('with no connection, an unknown path opens the app’s not-found page', async ({
   context,
   page,

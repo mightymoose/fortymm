@@ -27,7 +27,9 @@ DEV_PORTS_FORMAT = "{% raw %}{{range .Publishers}}{{if .PublishedPort}}{{$.Servi
 
 [tasks.up]
 description = "Start every app in the stack and print their URLs"
-run = "docker compose up --detach --build --wait"
+# web-client loads the core's browser build, which core:wasm makes.
+depends = ["core:wasm"]
+run ="docker compose up --detach --build --wait"
 depends_post = ["ports"]
 
 # `--profile "*"` includes the e2e-only services, so nothing is left behind.
@@ -72,9 +74,15 @@ docker compose --profile e2e run --rm e2e
 """
 
 # ---- web-client -------------------------------------------------------------
+# The web client loads the core's browser build (the WebAssembly module and its
+# wrapper), which core:wasm writes to the core-cache volume and the web-client
+# service mounts read-only at /opt/core. So every task that serves,
+# typechecks, tests or builds the web client depends on core:wasm, and with it
+# everything that runs them (validate, e2e, the worker tasks, deploy, preview).
 
 [tasks."web-client:up"]
 description = "Start only web-client (Vite dev server, hot reload) and print its URL"
+depends = ["core:wasm"]
 run = [
   "docker compose up --detach --build --wait web-client",
   'docker compose ps --format "$DEV_PORTS_FORMAT" web-client | grep -v "^$"',
@@ -120,15 +128,18 @@ run = "docker compose --profile tools run --rm --build web-client-openapi sh scr
 
 [tasks."web-client:typecheck"]
 description = "Typecheck web-client (tsc -b)"
-run = "docker compose run --rm web-client npx tsc -b"
+depends = ["core:wasm"]
+run ="docker compose run --rm web-client npx tsc -b"
 
 [tasks."web-client:test"]
 description = "Run web-client's component tests (Vitest, Testing Library, jsdom)"
-run = "docker compose run --rm web-client npm test"
+depends = ["core:wasm"]
+run ="docker compose run --rm web-client npm test"
 
 [tasks."web-client:build"]
 description = "Production build of web-client into web-client/dist"
-run = "docker compose run --rm web-client npm run build"
+depends = ["core:wasm"]
+run ="docker compose run --rm web-client npm run build"
 
 # web-client's own browser suite (web-client/e2e/, Playwright): what only a
 # real browser shows about the production build by itself, such as opening

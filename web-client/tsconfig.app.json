@@ -15,6 +15,9 @@
     "moduleDetection": "force",
     "noEmit": true,
     "jsx": "react-jsx",
+    /* The core's browser build, as vite.config.ts resolves it: the wrapper's
+       types are its own fortymm-core.d.mts, written beside it by core:wasm */
+    "paths": { "fortymm-core/*": ["/opt/core/wasm/*"] },
 
     /* Linting */
     "noUnusedLocals": true,

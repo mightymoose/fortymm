@@ -42,6 +42,19 @@ test('the hosted health page says it can’t reach the api, which the hosting do
   await expect(health.unknown).toBeVisible()
 })
 
+// The shared core's WebAssembly module, as the hosting serves it, is one the
+// browser instantiates: the page shows the core's answer for a fixed player
+// id, its golden vector (core/vectors/vectors.json, "usernames").
+test('the hosted health page loads the shared core and shows its answer', async ({
+  page,
+}) => {
+  const health = new HealthPage(page)
+
+  await health.open()
+
+  await expect(health.coreLoaded).toContainText('merry-otter-0rdf')
+})
+
 // The service worker keeps the app as the hosting serves it: every file of
 // the build fetched as itself, never redirected, and the app's page answering
 // every path. Opening it again with no connection proves all of that held.
