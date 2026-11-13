@@ -14,10 +14,27 @@ type Result = { ok: true } | { ok: false; reason: string }
 type Loaded = { ok: true; user: User | null } | { ok: false; reason: string }
 type Expected = Omit<User, 'unconfirmed'>
 
+type KeptRecord = { hex: string; byteLength: number; bufferByteLength: number }
+type Counts = { records: number; users: number }
+
 type Harness = {
   storeHello(times?: number): Promise<{ results: Result[]; expected: Expected }>
+  storeWhileCallerChangesIt(): Promise<{ result: Result; signed: string; kept: KeptRecord }>
+  storeAsSlice(): Promise<{
+    result: Result
+    signed: string
+    length: number
+    kept: KeptRecord
+  }>
+  storeTwoSignaturesOfOneBody(): Promise<{
+    results: Result[]
+    first: string
+    second: string
+    kept: KeptRecord
+    counts: Counts
+  }>
   loadUser(playerId: string): Promise<Loaded>
-  kept(): Promise<{ records: number; users: number }>
+  kept(): Promise<Counts>
 }
 
 export const storageHarnessPath = '/storage.html'
@@ -56,8 +73,36 @@ export class StorageHarness {
   }
 
   kept() {
-    return this.page.evaluate(() =>
-      (window as unknown as { storageHarness: Harness }).storageHarness.kept(),
-    )
+    return this.call('kept')
+  }
+
+  storeWhileCallerChangesIt() {
+    return this.call('storeWhileCallerChangesIt')
+  }
+
+  storeAsSlice() {
+    return this.call('storeAsSlice')
+  }
+
+  storeTwoSignaturesOfOneBody() {
+    return this.call('storeTwoSignaturesOfOneBody')
+  }
+
+  private call<
+    Name extends
+      | 'kept'
+      | 'storeWhileCallerChangesIt'
+      | 'storeAsSlice'
+      | 'storeTwoSignaturesOfOneBody',
+  >(name: Name): ReturnType<Harness[Name]> {
+    return this.page.evaluate(
+      (name) =>
+        (
+          window as unknown as {
+            storageHarness: Record<string, () => Promise<unknown>>
+          }
+        ).storageHarness[name](),
+      name,
+    ) as ReturnType<Harness[Name]>
   }
 }

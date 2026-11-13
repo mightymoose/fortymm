@@ -77,6 +77,45 @@ test('storing the same hello twice keeps one record and one user, with no error'
   expect(await harness.kept()).toEqual({ records: 1, users: 1 })
 })
 
+test('storeRecord keeps the bytes it verified, even when the caller changes its array while the store waits for the lock', async ({
+  page,
+}) => {
+  const harness = new StorageHarness(page)
+  await harness.open()
+
+  const { result, signed, kept } = await harness.storeWhileCallerChangesIt()
+
+  expect(result).toEqual({ ok: true })
+  expect(kept.hex).toBe(signed)
+})
+
+test('storeRecord keeps a tight copy of a record given as a view into a larger buffer', async ({
+  page,
+}) => {
+  const harness = new StorageHarness(page)
+  await harness.open()
+
+  const { result, signed, length, kept } = await harness.storeAsSlice()
+
+  expect(result).toEqual({ ok: true })
+  expect(kept).toEqual({ hex: signed, byteLength: length, bufferByteLength: length })
+})
+
+test('a second valid record with an id already kept leaves the first record’s bytes, with no error', async ({
+  page,
+}) => {
+  const harness = new StorageHarness(page)
+  await harness.open()
+
+  const { results, first, second, kept, counts } =
+    await harness.storeTwoSignaturesOfOneBody()
+
+  expect(second).not.toBe(first)
+  expect(results).toEqual([{ ok: true }, { ok: true }])
+  expect(kept.hex).toBe(first)
+  expect(counts).toEqual({ records: 1, users: 1 })
+})
+
 test('when writing the user fails, the hello isn’t kept either: storing is storage-unavailable', async ({
   context,
   page,
