@@ -37,7 +37,7 @@ const harness = {
   // The kept key's public key in hex, read only: 'none' when no key is kept.
   async keptPublicKey(): Promise<string> {
     const result = await keptPublicKey()
-    if (!result.ok) return `failed: `
+    if (!result.ok) return `failed: ${result.reason}`
     return result.publicKey === null ? 'none' : hex(result.publicKey)
   },
 
