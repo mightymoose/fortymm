@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { App } from '../pages/app.ts'
+import { App, StartPage } from '../pages/app.ts'
 import { deploy } from '../pages/deployment.ts'
 import { StorageHarness } from '../pages/storage.ts'
 
@@ -48,7 +48,7 @@ test('opened with no connection after one visit with one, the stored user is the
   page,
 }) => {
   const app = new App(page)
-  await app.open('/')
+  await new StartPage(page).goto()
   await app.waitUntilKept()
   const online = new StorageHarness(page)
   await online.open()

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { App, HealthPage } from '../pages/app.ts'
+import { HealthPage } from '../pages/app.ts'
 import { deploy } from '../pages/deployment.ts'
 
 // The shared core in the production build: its WebAssembly module is emitted
@@ -15,7 +15,7 @@ test('the shipped app’s /health loads the shared core and shows its answer', a
   page,
 }) => {
   const health = new HealthPage(page)
-  await new App(page).open('/health')
+  await health.goto()
 
   await expect(health.coreLoaded).toContainText(/\bmerry-otter-0rdf\b/)
 })

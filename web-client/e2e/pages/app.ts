@@ -36,18 +36,14 @@ export async function waitUntilNewVersionTakesOver(context: BrowserContext) {
 // (firstLaunchMark in src/first-launch.ts).
 const firstLaunchMark = 'fortymm:first-launch'
 
-// The app as a person opens it: by loading an address directly (typed, a
-// bookmark, a reload or the home-screen icon), so the browser answers the
-// request, not the router in a page that is already open.
+// What an open page of the app does that is no one screen's: its launch at
+// startup, and being kept on the device. Each screen's page object opens its
+// own page, with goto().
 export class App {
   private readonly page: Page
 
   constructor(page: Page) {
     this.page = page
-  }
-
-  async open(path: string) {
-    await this.page.goto(path)
   }
 
   // Waits until the launch at this opening's startup has settled
@@ -94,6 +90,12 @@ export class App {
   }
 }
 
+// Each screen's page object below opens its page with goto(): by loading its
+// address directly, as a person does by typing it, with a bookmark, a reload
+// or the home-screen icon, so the browser answers the request, not the router
+// in a page that is already open. goto() only navigates; a test waits for what
+// it expects to see.
+
 export class StartPage {
   readonly heading: Locator
   private readonly page: Page
@@ -101,6 +103,10 @@ export class StartPage {
   constructor(page: Page) {
     this.page = page
     this.heading = page.getByRole('heading', { name: 'Get started' })
+  }
+
+  async goto() {
+    await this.page.goto('/')
   }
 
   counter(count: number): Locator {
@@ -113,8 +119,10 @@ export class HealthPage {
   readonly unknown: Locator
   // The shared core's answer: the generated username of a fixed player id.
   readonly coreLoaded: Locator
+  private readonly page: Page
 
   constructor(page: Page) {
+    this.page = page
     this.heading = page.getByRole('heading', { name: 'API health' })
     this.unknown = page.getByRole('heading', {
       name: 'The API’s health is unknown',
@@ -123,6 +131,10 @@ export class HealthPage {
       name: 'The shared core loaded',
     })
   }
+
+  async goto() {
+    await this.page.goto('/health')
+  }
 }
 
 export class SettingsPage {
@@ -130,20 +142,35 @@ export class SettingsPage {
   readonly noAccount: Locator
   // The stored username: the paragraph in the region named "Username".
   readonly username: Locator
+  private readonly page: Page
 
   constructor(page: Page) {
+    this.page = page
     this.heading = page.getByRole('heading', { name: 'Account settings' })
     this.noAccount = page.getByRole('heading', { name: 'No account yet' })
     this.username = page
       .getByRole('region', { name: 'Username' })
       .getByRole('paragraph')
   }
+
+  async goto() {
+    await this.page.goto('/settings')
+  }
 }
 
+// What the app shows at any path that is none of its screens.
 export class NotFoundPage {
   readonly heading: Locator
+  private readonly page: Page
 
   constructor(page: Page) {
+    this.page = page
     this.heading = page.getByRole('heading', { name: 'Page not found' })
+  }
+
+  // Loads a path the app has no screen for, '/no/such/page' unless the test
+  // gives one.
+  async goto(path = '/no/such/page') {
+    await this.page.goto(path)
   }
 }

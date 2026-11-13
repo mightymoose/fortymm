@@ -22,7 +22,7 @@ test('on a fresh device, the app’s start stores one key, one hello and one use
   page,
 }) => {
   const app = new App(page)
-  await app.open('/')
+  await new StartPage(page).goto()
 
   expect(await app.firstLaunch()).toEqual({ ok: true, outcome: 'made' })
   const keys = new DeviceKeyHarness(await context.newPage())
@@ -41,10 +41,10 @@ test('on a fresh device, the app’s start stores one key, one hello and one use
 test('two tabs opening the app at once on a fresh device end up with one key, one hello and one user', async ({
   context,
 }) => {
-  const tabs = [new App(await context.newPage()), new App(await context.newPage())]
+  const tabs = [await context.newPage(), await context.newPage()]
 
-  await Promise.all(tabs.map((tab) => tab.open('/')))
-  const outcomes = await Promise.all(tabs.map((tab) => tab.firstLaunch()))
+  await Promise.all(tabs.map((tab) => new StartPage(tab).goto()))
+  const outcomes = await Promise.all(tabs.map((tab) => new App(tab).firstLaunch()))
 
   expect(outcomes).toEqual(
     expect.arrayContaining([
@@ -71,8 +71,9 @@ test('a key kept with no user (a launch that stopped between steps) gets its hel
   await storage.open()
   expect(await storage.kept()).toEqual({ records: 0, users: 0 })
 
-  const app = new App(await context.newPage())
-  await app.open('/')
+  const opened = await context.newPage()
+  const app = new App(opened)
+  await new StartPage(opened).goto()
 
   expect(await app.firstLaunch()).toEqual({ ok: true, outcome: 'made' })
   expect(await keys.keysKept()).toBe(1)
@@ -90,11 +91,12 @@ test('a start on a device that already has its user stores nothing new', async (
   page,
 }) => {
   const first = new App(page)
-  await first.open('/')
+  await new StartPage(page).goto()
   expect(await first.firstLaunch()).toEqual({ ok: true, outcome: 'made' })
 
-  const later = new App(await context.newPage())
-  await later.open('/')
+  const laterPage = await context.newPage()
+  const later = new App(laterPage)
+  await new StartPage(laterPage).goto()
 
   expect(await later.firstLaunch()).toEqual({ ok: true, outcome: 'kept' })
   const storage = new StorageHarness(await context.newPage())
@@ -113,7 +115,7 @@ test('the app renders while its launch is held back, and the launch finishes onc
 
   const opened = await context.newPage()
   const app = new App(opened)
-  await app.open('/')
+  await new StartPage(opened).goto()
 
   await expect(new StartPage(opened).heading).toBeVisible()
   await expect.poll(() => holder.appendLocks()).toEqual({ held: 1, pending: 1 })
@@ -137,7 +139,7 @@ test('the start page appears while the shared core is still loading', async ({
     await route.continue().catch(() => {})
   })
 
-  await new App(page).open('/')
+  await new StartPage(page).goto()
 
   await expect(new StartPage(page).heading).toBeVisible({ timeout: 3_000 })
 })
@@ -149,7 +151,7 @@ test('when the browser blocks site data, the app keeps running, and the launch i
   try {
     const page = await blocked.context.newPage()
     const app = new App(page)
-    await app.open('/')
+    await new StartPage(page).goto()
 
     expect(await app.firstLaunch()).toEqual({ ok: false, reason: 'storage-unavailable' })
     await expect(new StartPage(page).heading).toBeVisible()
@@ -169,11 +171,11 @@ test('when IndexedDB refuses to store the user, the app keeps running, no hello 
     }
   })
   const app = new App(page)
-  await app.open('/')
+  await new StartPage(page).goto()
 
   expect(await app.firstLaunch()).toEqual({ ok: false, reason: 'storage-unavailable' })
   await expect(new StartPage(page).heading).toBeVisible()
-  await app.open('/settings')
+  await new SettingsPage(page).goto()
   await expect(new SettingsPage(page).noAccount).toBeVisible()
   const storage = new StorageHarness(page)
   await storage.open()
@@ -187,11 +189,11 @@ test('when the shared core doesn’t load, the app keeps running, no key, hello 
   // Through the context, so the service worker can't fetch it either.
   await context.route('**/*.wasm', (route) => route.abort())
   const app = new App(page)
-  await app.open('/')
+  await new StartPage(page).goto()
 
   expect(await app.firstLaunch()).toEqual({ ok: false, reason: 'core-unavailable' })
   await expect(new StartPage(page).heading).toBeVisible()
-  await app.open('/settings')
+  await new SettingsPage(page).goto()
   await expect(new SettingsPage(page).noAccount).toBeVisible()
   const keys = new DeviceKeyHarness(page)
   await keys.open()

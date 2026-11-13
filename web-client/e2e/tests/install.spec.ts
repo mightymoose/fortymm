@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { App } from '../pages/app.ts'
+import { App, StartPage } from '../pages/app.ts'
 import { deploy } from '../pages/deployment.ts'
 
 test.beforeEach(async () => {
@@ -17,7 +17,7 @@ test('the app meets what a browser needs to offer installing it, and carries the
   page,
 }) => {
   const app = new App(page)
-  await app.open('/')
+  await new StartPage(page).goto()
   await app.waitUntilKept()
   const devtools = await page.context().newCDPSession(page)
 
