@@ -1,6 +1,5 @@
 import type { Core } from 'fortymm-core/fortymm-core.mjs'
 import { loadCore } from './core/load.ts'
-import { appendLock } from './device-key.ts'
 
 // The web client's storage of records, and of the users minted from them
 // (design section 5, the Web row): IndexedDB, records in one store keyed by
@@ -43,6 +42,18 @@ export type LoadUserResult =
   | { ok: true; user: User | null }
   | { ok: false; reason: 'storage-unavailable' }
 
+// The journal's append lock (design 5.4): one writer at a time across every
+// tab, worker and the service worker of the origin. Every write here, and the
+// device key's creation (withDeviceKey, device-key.ts), runs inside it. Web
+// Locks are not re-entrant: code that holds it writes through heldStore.
+export const appendLock = 'fortymm-journal-append'
+
+// The storage functions, for code that already holds the append lock.
+export type Store = {
+  storeRecord(record: Uint8Array): Promise<StoreResult>
+  loadUser(playerId: string): Promise<LoadUserResult>
+}
+
 export const storageDatabase = 'fortymm-storage'
 export const recordStore = 'records'
 export const userStore = 'users'
@@ -53,8 +64,26 @@ const usernameSuffix = 4
 
 // Keeps a hello, and the user it mints, on disk. Storing the same record
 // again changes nothing. The record is read by the shared core (loadCore),
-// never by parsing its bytes here.
-export async function storeRecord(record: Uint8Array): Promise<StoreResult> {
+// never by parsing its bytes here. Takes the append lock to write.
+export function storeRecord(record: Uint8Array): Promise<StoreResult> {
+  return store(record, (write) => navigator.locks.request(appendLock, write))
+}
+
+// The same storeRecord and loadUser, taking no lock of their own: only for
+// code that holds the append lock already, which is withDeviceKey's callback
+// (device-key.ts) and nothing else. There, the public storeRecord would wait
+// for the lock its caller holds, for ever. Never keep it past the callback.
+export const heldStore: Store = {
+  storeRecord: (record) => store(record, (write) => write()),
+  loadUser: (playerId) => loadUser(playerId),
+}
+
+// storeRecord's body, with the write run by underLock: inside the append
+// lock it takes, or directly when the caller holds it.
+async function store(
+  record: Uint8Array,
+  underLock: (write: () => Promise<void>) => Promise<void>,
+): Promise<StoreResult> {
   let core: Core
   try {
     core = await loadCore()
@@ -75,7 +104,7 @@ export async function storeRecord(record: Uint8Array): Promise<StoreResult> {
     return failure('storage-unavailable')
   }
   try {
-    await navigator.locks.request(appendLock, () => write(database, minted))
+    await underLock(() => write(database, minted))
     return { ok: true }
   } catch {
     return failure('storage-unavailable')

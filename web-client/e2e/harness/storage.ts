@@ -1,6 +1,8 @@
 import { loadCore } from '../../src/core/load.ts'
-import { appendLock, deviceKey, storedSignature } from '../../src/device-key.ts'
+import { storedSignature, withDeviceKey } from '../../src/device-key.ts'
+import { environment } from '../../src/first-launch.ts'
 import {
+  appendLock,
   loadUser,
   recordStore,
   storageDatabase,
@@ -8,10 +10,10 @@ import {
   userStore,
 } from '../../src/storage.ts'
 
-// The browser suite's handle on src/storage.ts, which no screen writes to
-// yet: a test-only page (storage.html) built from the app's own modules into
-// the "harness" deployment (scripts/e2e-deployments.ts) and kept on the
-// device with the rest of that build. Tests call these through
+// The browser suite's handle on src/storage.ts: a test-only page
+// (storage.html) built from the app's own modules into the "harness"
+// deployment (scripts/e2e-deployments.ts) and kept on the device with the
+// rest of that build. Tests call these through
 // page.evaluate(() => window.storageHarness...). Every function goes through
 // the module's public interface, except kept and keptRecord, which look at
 // what is in IndexedDB.
@@ -19,11 +21,9 @@ import {
 const hex = (bytes: Uint8Array) =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
 
-const development = 3
-
-// A hello signed by this device's key, made as the first launch will make
-// it: the core builds the body, the device key signs it, the core assembles
-// and verifies it.
+// A hello signed by this device's key, made as the first launch makes it:
+// the core builds the body, the device key signs it, the core assembles and
+// verifies it.
 async function makeHello(): Promise<Uint8Array> {
   const [hello] = await signedHellos(1)
   return hello
@@ -33,16 +33,18 @@ async function makeHello(): Promise<Uint8Array> {
 // randomized, so each is a different valid record with the same id (a
 // record's id is the hash of its body).
 async function signedHellos(times: number): Promise<Uint8Array[]> {
-  const result = await deviceKey()
-  if (!result.ok) throw new Error(`No device key: ${result.reason}`)
   const core = await loadCore()
-  const random = crypto.getRandomValues(new Uint8Array(8))
-  const body = core.helloBody(development, result.key.publicKey, random)
-  const hellos = []
-  for (let i = 0; i < times; i++) {
-    hellos.push(core.assemble(body, storedSignature(core, await result.key.sign(body))))
-  }
-  return hellos
+  const result = await withDeviceKey(async (key) => {
+    const random = crypto.getRandomValues(new Uint8Array(8))
+    const body = core.helloBody(environment, key.publicKey, random)
+    const hellos = []
+    for (let i = 0; i < times; i++) {
+      hellos.push(core.assemble(body, storedSignature(core, await key.sign(body))))
+    }
+    return hellos
+  })
+  if (!result.ok) throw new Error(`No device key: ${result.reason}`)
+  return result.value
 }
 
 // The record kept under a record's id, as IndexedDB gives it back: its bytes
@@ -95,10 +97,10 @@ async function whileStoreWaitsForTheLock(
 
 // What the core gives for this device's key, independently of any record.
 async function expectedUser() {
-  const result = await deviceKey()
+  const result = await withDeviceKey(async (key) => key.publicKey)
   if (!result.ok) throw new Error(`No device key: ${result.reason}`)
   const core = await loadCore()
-  const { publicKey } = result.key
+  const publicKey = result.value
   const playerId = core.ownPlayerId(publicKey)
   return {
     playerId: hex(playerId),
@@ -155,6 +157,10 @@ const harness = {
       counts: await harness.kept(),
     }
   },
+
+  // What the core gives for this device's key (made if none is kept):
+  // the user a hello signed by it mints.
+  expectedUser,
 
   // What loadUser gives for a player id (hex).
   loadUser(playerId: string) {

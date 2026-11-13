@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest'
 import { loadCore } from '../core/load.ts'
-import { deviceKey, keptPublicKey } from '../device-key.ts'
+import { keptPublicKey, withDeviceKey } from '../device-key.ts'
 import { loadUser, storeRecord, type User } from '../storage.ts'
 import { SettingsPage } from './settings.page.ts'
 
@@ -13,11 +13,11 @@ vi.mock('../storage.ts', () => ({ loadUser: vi.fn(), storeRecord: vi.fn() }))
 vi.mock('../device-key.ts', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../device-key.ts')>()),
   keptPublicKey: vi.fn(),
-  deviceKey: vi.fn(),
+  withDeviceKey: vi.fn(),
 }))
 
 afterEach(() => {
-  for (const replaced of [keptPublicKey, deviceKey, loadUser, storeRecord]) {
+  for (const replaced of [keptPublicKey, withDeviceKey, loadUser, storeRecord]) {
     vi.mocked(replaced).mockReset()
   }
 })
@@ -64,7 +64,7 @@ test('/settings says there is no account yet when no key is kept, and makes no k
   await page.render()
 
   expect(await page.noAccount()).toBeVisible()
-  expect(deviceKey).not.toHaveBeenCalled()
+  expect(withDeviceKey).not.toHaveBeenCalled()
   expect(storeRecord).not.toHaveBeenCalled()
 })
 
@@ -75,7 +75,7 @@ test('/settings says there is no account yet when no user is stored for the key,
   await page.render()
 
   expect(await page.noAccount()).toBeVisible()
-  expect(deviceKey).not.toHaveBeenCalled()
+  expect(withDeviceKey).not.toHaveBeenCalled()
   expect(storeRecord).not.toHaveBeenCalled()
 })
 

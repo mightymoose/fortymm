@@ -1,11 +1,12 @@
 import { expect, test } from '@playwright/test'
 import { App } from '../pages/app.ts'
+import { blockedSiteData } from '../pages/blocked-site-data.ts'
 import { DeviceKeyHarness } from '../pages/device-key.ts'
 import { deploy } from '../pages/deployment.ts'
 
 // This device's signing key (src/device-key.ts) in a real browser: a
-// non-extractable WebCrypto P-256 key kept in IndexedDB. No screen uses it
-// yet, so the tests call it through a test-only page in the "harness"
+// non-extractable WebCrypto P-256 key kept in IndexedDB. No screen uses it,
+// so the tests call withDeviceKey through a test-only page in the "harness"
 // deployment (../harness/). Each test starts from a fresh browser profile,
 // with no key kept. What needs no browser (compressing the public key, the
 // failure when WebCrypto, IndexedDB or Web Locks is missing) is in
@@ -176,4 +177,66 @@ test('opened with no connection after one visit with one, the kept key still sig
     verifies: true,
     verifiesOtherBytes: false,
   })
+})
+
+test('inside withDeviceKey’s callback, the store it gets stores a hello and loads its user without waiting on a lock, and the lock is released after', async ({
+  page,
+}) => {
+  const harness = new DeviceKeyHarness(page)
+  await harness.open()
+
+  const { result, locksAfter } = await harness.storeInsideCallback()
+
+  expect(result).toEqual({
+    ok: true,
+    value: {
+      stored: { ok: true },
+      username: expect.any(String),
+      expectedUsername: expect.any(String),
+      locksInside: { held: 1, pending: 0 },
+    },
+  })
+  if (result.ok) expect(result.value.username).toBe(result.value.expectedUsername)
+  expect(locksAfter).toEqual({ held: 0, pending: 0 })
+})
+
+test('when withDeviceKey’s callback throws, withDeviceKey throws its error, and the lock is released: a later call runs', async ({
+  page,
+}) => {
+  const harness = new DeviceKeyHarness(page)
+  await harness.open()
+
+  expect(await harness.throwingCallbackThenAnother()).toEqual({
+    thrown: 'The callback failed',
+    later: { ok: true, value: 'ran' },
+    locksAfter: { held: 0, pending: 0 },
+  })
+})
+
+test('when the browser blocks site data, the result is storage-unavailable, not a thrown error', async ({
+  baseURL,
+}) => {
+  const blocked = await blockedSiteData(baseURL!)
+  try {
+    const harness = new DeviceKeyHarness(await blocked.context.newPage())
+    await harness.open()
+
+    expect(await harness.publicKey()).toBe('failed: storage-unavailable')
+  } finally {
+    await blocked.close()
+  }
+})
+
+test('when WebCrypto can’t export the public key, the result is signing-unavailable, not a thrown error', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(crypto.subtle, 'exportKey', {
+      value: () => Promise.reject(new DOMException('No export here', 'OperationError')),
+    })
+  })
+  const harness = new DeviceKeyHarness(page)
+  await harness.open()
+
+  expect(await harness.publicKey()).toBe('failed: signing-unavailable')
 })

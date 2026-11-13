@@ -4,60 +4,68 @@ import { deploy } from '../pages/deployment.ts'
 import { DeviceKeyHarness } from '../pages/device-key.ts'
 import { StorageHarness } from '../pages/storage.ts'
 
-// /settings in the shipped app, over real IndexedDB. Nothing in the app
-// stores a hello yet (the first launch will), so a test stores one through
-// the storage harness page (../harness/), then opens the app's own page. The
-// "harness" deployment is the production build plus those pages. Each test
-// starts from a fresh browser profile.
+// /settings in the shipped app, over real IndexedDB, after the app's own
+// first launch (src/first-launch.ts) stored this device's hello. The
+// "harness" deployment is the production build plus test-only pages
+// (../harness/), through which a test reads what the core gives for the key
+// and counts what is kept. Each test starts from a fresh browser profile.
+// The launch itself (one key, hello and user; two tabs; failures) is in
+// first-launch.spec.ts.
 
 test.beforeEach(async () => {
   await deploy('harness')
 })
 
-test('after a hello is stored, /settings opened after a reload shows the username the core gives for this device’s key', async ({
-  page,
-}) => {
-  const harness = new StorageHarness(page)
-  await harness.open()
-  const { expected } = await harness.storeHello()
-
-  await new App(page).open('/settings')
-
-  const settings = new SettingsPage(page)
-  await expect(settings.heading).toBeVisible()
-  await expect(settings.username).toHaveText(expected.username)
-})
-
-test('after one visit with a connection, /settings opened with no connection shows the stored username', async ({
+test('after the app’s first start, /settings shows the username the core gives for this device’s key', async ({
   context,
   page,
 }) => {
   const app = new App(page)
   await app.open('/')
-  await app.waitUntilKept()
-  const harness = new StorageHarness(page)
-  await harness.open()
-  const { expected } = await harness.storeHello()
-  await page.close()
-  await context.setOffline(true)
+  await app.firstLaunch()
 
-  const offline = await context.newPage()
-  await new App(offline).open('/settings')
+  await app.open('/settings')
 
-  await expect(new SettingsPage(offline).username).toHaveText(expected.username)
+  const settings = new SettingsPage(page)
+  await expect(settings.heading).toBeVisible()
+  const storage = new StorageHarness(await context.newPage())
+  await storage.open()
+  const { username } = await storage.expectedUser()
+  await expect(settings.username).toHaveText(username)
 })
 
-test('on a fresh device, /settings says there is no account yet, and opening it makes no key and no user', async ({
+test('after a reload, and opened with no connection after one visit, /settings shows the same username, from the same key and the one hello', async ({
   context,
   page,
 }) => {
-  await new App(page).open('/settings')
-
-  await expect(new SettingsPage(page).noAccount).toBeVisible()
+  const app = new App(page)
+  await app.open('/')
+  expect(await app.firstLaunch()).toEqual({ ok: true, outcome: 'made' })
+  await app.waitUntilKept()
+  await app.open('/settings')
+  const username = await new SettingsPage(page).username.textContent()
+  expect(username).toMatch(/\S/)
   const keys = new DeviceKeyHarness(await context.newPage())
   await keys.open()
-  expect(await keys.keysKept()).toBe(0)
+  const key = await keys.keptPublicKey()
+
+  await page.reload()
+  expect(await app.firstLaunch()).toEqual({ ok: true, outcome: 'kept' })
+  await expect(new SettingsPage(page).username).toHaveText(username!)
+
+  for (const open of context.pages()) await open.close()
+  await context.setOffline(true)
+  const offline = await context.newPage()
+  const offlineApp = new App(offline)
+  await offlineApp.open('/settings')
+
+  await expect(new SettingsPage(offline).username).toHaveText(username!)
+  expect(await offlineApp.firstLaunch()).toEqual({ ok: true, outcome: 'kept' })
+  const offlineKeys = new DeviceKeyHarness(await context.newPage())
+  await offlineKeys.open()
+  expect(await offlineKeys.keptPublicKey()).toBe(key)
+  expect(await offlineKeys.keysKept()).toBe(1)
   const storage = new StorageHarness(await context.newPage())
   await storage.open()
-  expect(await storage.kept()).toEqual({ records: 0, users: 0 })
+  expect(await storage.kept()).toEqual({ records: 1, users: 1 })
 })

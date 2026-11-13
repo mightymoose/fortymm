@@ -33,7 +33,7 @@ await writeServiceWorker(`${builds}/next`)
 
 // harness: dist with test-only pages, /device-key.html and /storage.html
 // (e2e/harness/), that let the suite call src/device-key.ts and
-// src/storage.ts, which no screen writes with yet. Built from
+// src/storage.ts directly, which no screen does. Built from
 // the app's own modules, with the core aliased as vite.config.ts does, and
 // its files under /harness/. sw.js is rewritten, so the pages are kept on the
 // device with the rest of the build and open with no connection.

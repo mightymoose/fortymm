@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest'
 import { loadCore } from './core/load.ts'
-import { compressedPublicKey, deviceKey, keptPublicKey } from './device-key.ts'
+import { compressedPublicKey, keptPublicKey, withDeviceKey } from './device-key.ts'
 
 // The parts of the device key that need no real browser: compressing the
 // public key, and the typed failure when the browser lacks what the key
@@ -75,23 +75,32 @@ const refusingIndexedDB = {
     return request
   },
 }
-const locks = { request: () => Promise.reject(new Error('unexpected lock')) }
+// A Web Locks stand-in that grants every request at once.
+const locks = {
+  request: (_name: string, granted: () => Promise<unknown>) => granted(),
+}
 
 function keysMade() {
   return vi.spyOn(crypto.subtle, 'generateKey')
 }
 
+// withDeviceKey's callback: never called when there is no key.
+const callback = vi.fn(async () => 'called')
+afterEach(() => {
+  expect(callback).not.toHaveBeenCalled()
+})
+
 test('with no WebCrypto (an insecure context), the result is signing-unavailable', async () => {
   vi.stubGlobal('crypto', {})
 
-  expect(await deviceKey()).toEqual({ ok: false, reason: 'signing-unavailable' })
+  expect(await withDeviceKey(callback)).toEqual({ ok: false, reason: 'signing-unavailable' })
 })
 
 test('with no IndexedDB, the result is storage-unavailable, and no key is made', async () => {
   const made = keysMade()
   vi.stubGlobal('indexedDB', undefined)
 
-  expect(await deviceKey()).toEqual({ ok: false, reason: 'storage-unavailable' })
+  expect(await withDeviceKey(callback)).toEqual({ ok: false, reason: 'storage-unavailable' })
   expect(made).not.toHaveBeenCalled()
 })
 
@@ -100,7 +109,22 @@ test('when IndexedDB refuses to open, the result is storage-unavailable, and no 
   vi.stubGlobal('indexedDB', refusingIndexedDB)
   vi.stubGlobal('navigator', { ...navigator, locks })
 
-  expect(await deviceKey()).toEqual({ ok: false, reason: 'storage-unavailable' })
+  expect(await withDeviceKey(callback)).toEqual({ ok: false, reason: 'storage-unavailable' })
+  expect(made).not.toHaveBeenCalled()
+})
+
+test('when the browser denies the lock request (site data blocked), the result is storage-unavailable, not a thrown error, and no key is made', async () => {
+  const made = keysMade()
+  vi.stubGlobal('indexedDB', refusingIndexedDB)
+  vi.stubGlobal('navigator', {
+    ...navigator,
+    locks: {
+      request: () =>
+        Promise.reject(new DOMException('The request was denied.', 'SecurityError')),
+    },
+  })
+
+  expect(await withDeviceKey(callback)).toEqual({ ok: false, reason: 'storage-unavailable' })
   expect(made).not.toHaveBeenCalled()
 })
 
@@ -109,7 +133,7 @@ test('with no Web Locks, the result is locks-unavailable, and no key is made', a
   vi.stubGlobal('indexedDB', refusingIndexedDB)
   vi.stubGlobal('navigator', { ...navigator, locks: undefined })
 
-  expect(await deviceKey()).toEqual({ ok: false, reason: 'locks-unavailable' })
+  expect(await withDeviceKey(callback)).toEqual({ ok: false, reason: 'locks-unavailable' })
   expect(made).not.toHaveBeenCalled()
 })
 
