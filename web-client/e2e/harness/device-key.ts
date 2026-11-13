@@ -1,6 +1,7 @@
 import { loadCore } from '../../src/core/load.ts'
 import {
   deviceKey,
+  keptPublicKey,
   keyDatabase,
   keyEntry,
   keyStore,
@@ -31,6 +32,13 @@ const harness = {
   async publicKey(): Promise<string> {
     const result = await deviceKey()
     return result.ok ? hex(result.key.publicKey) : `failed: ${result.reason}`
+  },
+
+  // The kept key's public key in hex, read only: 'none' when no key is kept.
+  async keptPublicKey(): Promise<string> {
+    const result = await keptPublicKey()
+    if (!result.ok) return `failed: ${result.reason}`
+    return result.publicKey === null ? 'none' : hex(result.publicKey)
   },
 
   // What the core makes of the public key.

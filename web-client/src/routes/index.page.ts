@@ -19,4 +19,8 @@ export class StartPage {
   linkToHealth() {
     return screen.findByRole('link', { name: 'Check the API’s health' })
   }
+
+  linkToSettings() {
+    return screen.findByRole('link', { name: 'Account settings' })
+  }
 }

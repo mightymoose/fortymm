@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest'
 import { loadCore } from './core/load.ts'
-import { compressedPublicKey, deviceKey } from './device-key.ts'
+import { compressedPublicKey, deviceKey, keptPublicKey } from './device-key.ts'
 
 // The parts of the device key that need no real browser: compressing the
 // public key, and the typed failure when the browser lacks what the key
@@ -110,5 +110,19 @@ test('with no Web Locks, the result is locks-unavailable, and no key is made', a
   vi.stubGlobal('navigator', { ...navigator, locks: undefined })
 
   expect(await deviceKey()).toEqual({ ok: false, reason: 'locks-unavailable' })
+  expect(made).not.toHaveBeenCalled()
+})
+
+test('asking for the kept public key with no IndexedDB is storage-unavailable', async () => {
+  vi.stubGlobal('indexedDB', undefined)
+
+  expect(await keptPublicKey()).toEqual({ ok: false, reason: 'storage-unavailable' })
+})
+
+test('asking for the kept public key when IndexedDB refuses to open is storage-unavailable, and no key is made', async () => {
+  const made = keysMade()
+  vi.stubGlobal('indexedDB', refusingIndexedDB)
+
+  expect(await keptPublicKey()).toEqual({ ok: false, reason: 'storage-unavailable' })
   expect(made).not.toHaveBeenCalled()
 })
