@@ -215,7 +215,10 @@ run = "docker compose rm --stop --force web-client-worker"
 description = "Check web-client's Worker is deployable, without credentials: typecheck, deployment dry runs, each Worker's api, credential check"
 run = """
 dry_runs=web-client/worker/.wrangler/dry-run
+# Made here: on a fresh checkout nothing has made .wrangler/ yet, and the dry
+# runs' logs below are written into it before Wrangler runs.
 rm -rf "$dry_runs"
+mkdir -p "$dry_runs"
 docker compose build web-client-worker
 docker compose run --rm web-client-worker sh -c 'npm run types && npm run typecheck'
 # The api each Worker is given (scripts/api-origin.sh, as web-client:deploy
@@ -250,9 +253,9 @@ echo "Any other Worker name is refused, so no Worker is given another's api."
 # a preview's and the trial's are set (Wrangler shows a value given with
 # --var only as "(hidden)").
 docker compose run --rm -T web-client-worker env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID sh -c '
-  sh scripts/deploy.sh "" "" --dry-run --outdir .wrangler/dry-run/default > .wrangler/dry-run-default.log &&
-  sh scripts/deploy.sh fortymm-pr-9 "$1" --dry-run --outdir .wrangler/dry-run/preview > .wrangler/dry-run-preview.log &&
-  sh scripts/deploy.sh fortymm-trial "$2" --dry-run --outdir .wrangler/dry-run/trial > .wrangler/dry-run-trial.log
+  sh scripts/deploy.sh "" "" --dry-run --outdir .wrangler/dry-run/default > .wrangler/dry-run/default.log &&
+  sh scripts/deploy.sh fortymm-pr-9 "$1" --dry-run --outdir .wrangler/dry-run/preview > .wrangler/dry-run/preview.log &&
+  sh scripts/deploy.sh fortymm-trial "$2" --dry-run --outdir .wrangler/dry-run/trial > .wrangler/dry-run/trial.log
   ' sh "$(sh web-client/worker/scripts/api-origin.sh fortymm-pr-9)" "$(sh web-client/worker/scripts/api-origin.sh fortymm-trial)"
 for expected in 'default:the worker "fortymm":env.API_ORIGIN ("")' \
   'preview:the worker "fortymm-pr-9":env.API_ORIGIN ("(hidden)")' \
@@ -265,8 +268,8 @@ for expected in 'default:the worker "fortymm":env.API_ORIGIN ("")' \
     echo "web-client:deploy-check: the $run dry run did not target $target: $(cat "$dry_runs/$run/README.md")" >&2
     exit 1
   fi
-  if ! grep -qF "$binding" "web-client/worker/.wrangler/dry-run-$run.log"; then
-    echo "web-client:deploy-check: the $run dry run did not have $binding: $(cat "web-client/worker/.wrangler/dry-run-$run.log")" >&2
+  if ! grep -qF "$binding" "$dry_runs/$run.log"; then
+    echo "web-client:deploy-check: the $run dry run did not have $binding: $(cat "$dry_runs/$run.log")" >&2
     exit 1
   fi
   echo "The $run dry run targets $target, with $binding."
