@@ -30,6 +30,7 @@ function App() {
           Count is {count}
         </button>
         <Link to="/health">Check the API’s health</Link>
+        <Link to="/settings">Account settings</Link>
       </section>
 
       <div className="ticks"></div>

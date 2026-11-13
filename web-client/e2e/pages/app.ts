@@ -105,6 +105,21 @@ export class HealthPage {
   }
 }
 
+export class SettingsPage {
+  readonly heading: Locator
+  readonly noAccount: Locator
+  // The stored username: the paragraph in the region named "Username".
+  readonly username: Locator
+
+  constructor(page: Page) {
+    this.heading = page.getByRole('heading', { name: 'Account settings' })
+    this.noAccount = page.getByRole('heading', { name: 'No account yet' })
+    this.username = page
+      .getByRole('region', { name: 'Username' })
+      .getByRole('paragraph')
+  }
+}
+
 export class NotFoundPage {
   readonly heading: Locator
 

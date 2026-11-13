@@ -4,6 +4,7 @@ import { healthy } from '../test/api/health.ts'
 import { server } from '../test/api/server.ts'
 import { HealthPage } from './health.page.ts'
 import { StartPage } from './index.page.ts'
+import { SettingsPage } from './settings.page.ts'
 
 test('/ shows the starter page, and its counter counts up on each click', async () => {
   const user = userEvent.setup()
@@ -30,4 +31,16 @@ test('/ links to the health page, at /health', async () => {
   await user.click(await start.linkToHealth())
 
   expect(await health.heading()).toBeVisible()
+})
+
+test('/ links to the account settings page, at /settings', async () => {
+  const user = userEvent.setup()
+  const start = new StartPage()
+  const settings = new SettingsPage()
+  await start.render()
+
+  expect(await start.linkToSettings()).toHaveAttribute('href', '/settings')
+  await user.click(await start.linkToSettings())
+
+  expect(await settings.heading()).toBeVisible()
 })

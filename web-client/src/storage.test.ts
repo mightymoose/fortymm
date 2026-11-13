@@ -61,18 +61,23 @@ test('the hello vector verifies, so the refusals below are about the record', as
   expect(core.introducedKey(hello)).not.toBeNull()
 })
 
+test('when the shared core doesn’t load, storing is core-unavailable, and storage is not opened', async () => {
+  vi.stubGlobal('indexedDB', untouchedIndexedDB)
+  vi.mocked(loadCore).mockRejectedValue(new Error('No core'))
+
+  expect(await storeRecord(hello)).toEqual({ ok: false, reason: 'core-unavailable' })
+})
+
 test('a record of another kind is refused as not-a-hello, before storage is opened', async () => {
   vi.stubGlobal('indexedDB', untouchedIndexedDB)
-  const core = await loadCore()
 
-  expect(await storeRecord(core, player)).toEqual({ ok: false, reason: 'not-a-hello' })
+  expect(await storeRecord(player)).toEqual({ ok: false, reason: 'not-a-hello' })
 })
 
 test('a hello whose signature doesn’t verify is refused as not-a-hello, before storage is opened', async () => {
   vi.stubGlobal('indexedDB', untouchedIndexedDB)
-  const core = await loadCore()
 
-  expect(await storeRecord(core, unverifiableHello)).toEqual({
+  expect(await storeRecord(unverifiableHello)).toEqual({
     ok: false,
     reason: 'not-a-hello',
   })
@@ -80,9 +85,8 @@ test('a hello whose signature doesn’t verify is refused as not-a-hello, before
 
 test('bytes that are not a record are refused as not-a-hello', async () => {
   vi.stubGlobal('indexedDB', untouchedIndexedDB)
-  const core = await loadCore()
 
-  expect(await storeRecord(core, bytes('00ff'))).toEqual({
+  expect(await storeRecord(bytes('00ff'))).toEqual({
     ok: false,
     reason: 'not-a-hello',
   })
@@ -90,9 +94,8 @@ test('bytes that are not a record are refused as not-a-hello', async () => {
 
 test('with no IndexedDB, storing and loading are storage-unavailable', async () => {
   vi.stubGlobal('indexedDB', undefined)
-  const core = await loadCore()
 
-  expect(await storeRecord(core, hello)).toEqual({
+  expect(await storeRecord(hello)).toEqual({
     ok: false,
     reason: 'storage-unavailable',
   })
@@ -102,9 +105,8 @@ test('with no IndexedDB, storing and loading are storage-unavailable', async () 
 test('when IndexedDB refuses to open, storing and loading are storage-unavailable', async () => {
   vi.stubGlobal('indexedDB', refusingIndexedDB)
   vi.stubGlobal('navigator', { ...navigator, locks })
-  const core = await loadCore()
 
-  expect(await storeRecord(core, hello)).toEqual({
+  expect(await storeRecord(hello)).toEqual({
     ok: false,
     reason: 'storage-unavailable',
   })
@@ -114,9 +116,8 @@ test('when IndexedDB refuses to open, storing and loading are storage-unavailabl
 test('with no Web Locks, storing is locks-unavailable, and storage is not opened', async () => {
   vi.stubGlobal('indexedDB', untouchedIndexedDB)
   vi.stubGlobal('navigator', { ...navigator, locks: undefined })
-  const core = await loadCore()
 
-  expect(await storeRecord(core, hello)).toEqual({
+  expect(await storeRecord(hello)).toEqual({
     ok: false,
     reason: 'locks-unavailable',
   })

@@ -1,4 +1,5 @@
 import type { Core } from 'fortymm-core/fortymm-core.mjs'
+import { loadCore } from './core/load.ts'
 import { appendLock } from './device-key.ts'
 
 // The web client's storage of records, and of the users minted from them
@@ -30,10 +31,12 @@ export type User = {
 //   write (blocked storage, some private windows, a failed write).
 // - locks-unavailable: the browser has no Web Locks, so the write could not
 //   take the append lock.
+// - core-unavailable: the shared core didn't load, so the record couldn't
+//   be read. Nothing is stored.
 // - not-a-hello: the record is damaged, its signature doesn't verify, or it
 //   is of another kind. A hello is the only kind stored for now.
 export type StorageFailure = 'storage-unavailable' | 'locks-unavailable'
-export type StoreFailure = StorageFailure | 'not-a-hello'
+export type StoreFailure = StorageFailure | 'core-unavailable' | 'not-a-hello'| 'not-a-hello'
 
 export type StoreResult = { ok: true } | { ok: false; reason: StoreFailure }
 export type LoadUserResult =
@@ -49,8 +52,15 @@ export const userStore = 'users'
 const usernameSuffix = 4
 
 // Keeps a hello, and the user it mints, on disk. Storing the same record
-// again changes nothing.
-export async function storeRecord(core: Core, record: Uint8Array): Promise<StoreResult> {
+// again changes nothing. The record is read by the shared core (loadCore),
+// never by parsing its bytes here.
+export async function storeRecord(record: Uint8Array): Promise<StoreResult> {
+  let core: Core
+  try {
+    core = await loadCore()
+  } catch {
+    return failure('core-unavailable')
+  }
   const minted = mint(core, record)
   if (minted === null) return failure('not-a-hello')
   if (globalThis.indexedDB === undefined) return failure('storage-unavailable')

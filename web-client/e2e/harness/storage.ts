@@ -53,9 +53,8 @@ const harness = {
   // storeRecord answered, and what the core gives for the key that signed it.
   async storeHello(times = 1) {
     const hello = await makeHello()
-    const core = await loadCore()
     const results = []
-    for (let i = 0; i < times; i++) results.push(await storeRecord(core, hello))
+    for (let i = 0; i < times; i++) results.push(await storeRecord(hello))
     return { results, expected: await expectedUser() }
   },
 
