@@ -6,9 +6,9 @@
 # service), e.g. web-client:lint. To add an app, copy the web-client block.
 #
 # CI (.github/workflows/ci.yml) calls <app>:validate for each app (everything
-# the app can prove by itself), then the stack-wide e2e task (the cross-app
-# suite: how the apps are served or connected). Both run the same way on a
-# laptop.
+# the app can prove by itself) and the workflows task (the workflows
+# themselves), then the stack-wide e2e task (the cross-app suite: how the apps
+# are served or connected). All run the same way on a laptop.
 
 [env]
 COMPOSE_FILE = "{{ config_root }}/compose.dev.yaml"
@@ -51,8 +51,27 @@ description = "Follow the logs of every app in the stack"
 run = "docker compose logs --follow --tail 100"
 
 [tasks.validate]
-description = "Validate every app (each app's <app>:validate)"
-depends = ["web-client:validate", "api:validate", "core:validate"]
+description = "Validate every app (each app's <app>:validate) and the GitHub workflows (workflows)"
+depends = ["web-client:validate", "api:validate", "core:validate", "workflows"]
+
+# The GitHub workflows in .github/ (CI's workflows job): actionlint; the rules
+# in .github/scripts/check-workflows.sh (only the preview comment job may write
+# on a pull request, and it has no secrets, no id-token and no checkout of the
+# pull request's code; it runs only where the previews do; nothing waits for
+# it), and that check's own tests; the comment script's tests, against a
+# stand-in for gh. In the workflows tool container, .github read-only.
+[tasks.workflows]
+description = "Check the GitHub workflows: actionlint, the permission rules, and the tests of the scripts they run"
+run = """
+docker compose --profile tools build workflows
+docker compose --profile tools run --rm -T workflows sh -c '
+  set -e
+  actionlint -no-color .github/workflows/*.yml
+  bash .github/scripts/check-workflows.sh
+  bash .github/scripts/tests/check-workflows.sh
+  bash .github/scripts/tests/preview-comment.sh
+'
+"""
 
 # The cross-app suite in e2e/ (CI's stage 2): what can fail only because of how
 # the apps are served or connected. Everything an app can prove by itself runs

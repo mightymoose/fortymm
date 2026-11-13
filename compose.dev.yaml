@@ -328,6 +328,17 @@ services:
       - api-hosting-gcloud:/gcloud
       - /var/run/docker.sock:/var/run/docker.sock
 
+  # The repository's GitHub workflows (the stack-wide workflows task):
+  # actionlint, the rules in .github/scripts/check-workflows.sh, and the tests
+  # of the scripts the workflows run. Read-only: it changes nothing.
+  workflows:
+    profiles: [tools]
+    build:
+      context: ./dev/workflows
+    user: *host-user
+    volumes:
+      - ./.github:/repo/.github:ro
+
   # oasdiff (api:breaking). The base document arrives on standard input.
   api-oasdiff:
     profiles: [tools]
