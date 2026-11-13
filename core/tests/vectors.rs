@@ -17,8 +17,7 @@ use fortymm_core::ids::label;
 use fortymm_core::layout::username::MAX_SUFFIX_LENGTH;
 use fortymm_core::parcel::checksum;
 use fortymm_core::{
-    ClockReading, Content, Draft, Environment, Kind, Parcel, PlayerId, PublicKey, Record,
-    Signature,
+    ClockReading, Content, Draft, Environment, Kind, Parcel, PlayerId, PublicKey, Record, Signature,
 };
 use serde_json::{Value as Json, json};
 
@@ -243,7 +242,13 @@ fn made_hellos() -> Vec<Json> {
             random(40),
             Some(1_794_355_200_000u64),
         ),
-        ("hello-production", carol, Environment::PRODUCTION, random(41), None),
+        (
+            "hello-production",
+            carol,
+            Environment::PRODUCTION,
+            random(41),
+            None,
+        ),
     ];
     cases
         .into_iter()
@@ -288,11 +293,23 @@ fn invalid_hello_inputs() -> Vec<Json> {
     let good_random = hex(&random(1));
     let cases = [
         ("signer-32-bytes", hex(&key[..32]), good_random.clone()),
-        ("signer-34-bytes", hex(&[key.as_slice(), &[0]].concat()), good_random.clone()),
-        ("signer-uncompressed-prefix", hex(&uncompressed_prefix), good_random.clone()),
+        (
+            "signer-34-bytes",
+            hex(&[key.as_slice(), &[0]].concat()),
+            good_random.clone(),
+        ),
+        (
+            "signer-uncompressed-prefix",
+            hex(&uncompressed_prefix),
+            good_random.clone(),
+        ),
         ("signer-empty", String::new(), good_random),
         ("random-7-bytes", hex(key), hex(&random(1)[..7])),
-        ("random-9-bytes", hex(key), hex(&[random(1).as_slice(), &[0]].concat())),
+        (
+            "random-9-bytes",
+            hex(key),
+            hex(&[random(1).as_slice(), &[0]].concat()),
+        ),
         ("random-empty", hex(key), String::new()),
     ];
     cases
@@ -568,24 +585,30 @@ fn vectors_check_from_the_file_alone() {
     }
     for entry in file["made_hellos"].as_array().unwrap() {
         let name = &entry["name"];
-        let signer = PublicKey::from_sec1_compressed(&unhex(entry["signer"].as_str().unwrap()))
-            .unwrap();
-        let random: [u8; 8] = unhex(entry["random"].as_str().unwrap())
-            .try_into()
-            .unwrap();
+        let signer =
+            PublicKey::from_sec1_compressed(&unhex(entry["signer"].as_str().unwrap())).unwrap();
+        let random: [u8; 8] = unhex(entry["random"].as_str().unwrap()).try_into().unwrap();
         let clock = entry["clock"].as_u64().map(ClockReading::from_unix_millis);
         let environment = Environment(entry["environment"].as_u64().unwrap());
         let body = Draft::hello()
             .body(environment, signer, random, clock)
             .unwrap();
         assert_eq!(json!(hex(&body)), entry["body"], "{name}: body");
-        let signature = Signature::from_raw(&unhex(entry["raw_signature"].as_str().unwrap()))
-            .unwrap();
+        let signature =
+            Signature::from_raw(&unhex(entry["raw_signature"].as_str().unwrap())).unwrap();
         let record = Record::assemble_verified(body, signature, &CRYPTO).unwrap();
-        assert_eq!(json!(hex(&record.to_bytes())), entry["record"], "{name}: record");
+        assert_eq!(
+            json!(hex(&record.to_bytes())),
+            entry["record"],
+            "{name}: record"
+        );
         // Read back as a hello: it introduces its signer and names no match.
         assert_eq!(record.kind(), Some(Kind::Hello), "{name}: kind");
-        assert_eq!(record.introduced_key(), Some(signer), "{name}: introduced key");
+        assert_eq!(
+            record.introduced_key(),
+            Some(signer),
+            "{name}: introduced key"
+        );
         assert_eq!(record.signer(), signer, "{name}: signer");
         assert!(record.match_id(&CRYPTO).is_none(), "{name}: match id");
         assert!(record.sides().is_none(), "{name}: sides");

@@ -22,8 +22,8 @@
 use std::cell::RefCell;
 
 use fortymm_core::{
-    AssembleError, ClockReading, Draft, Environment, Parcel, PlayerId, PublicKey, Record, Signature,
-    Software,
+    AssembleError, ClockReading, Draft, Environment, Parcel, PlayerId, PublicKey, Record,
+    Signature, Software,
 };
 
 const OK: i32 = 0;
