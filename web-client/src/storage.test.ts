@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest'
 import { loadCore } from './core/load.ts'
-import { loadUser, storeRecord } from './storage.ts'
+import { loadMe, loadUser, storeRecord } from './storage.ts'
 
 // The parts of storage that need no real browser: which records it refuses,
 // and the typed failure when the browser has no usable IndexedDB or Web Locks.
@@ -111,6 +111,18 @@ test('when IndexedDB refuses to open, storing and loading are storage-unavailabl
     reason: 'storage-unavailable',
   })
   expect(await loadUser(somePlayer)).toEqual({ ok: false, reason: 'storage-unavailable' })
+})
+
+test('with no IndexedDB, loading this device’s user is storage-unavailable', async () => {
+  vi.stubGlobal('indexedDB', undefined)
+
+  expect(await loadMe()).toEqual({ ok: false, reason: 'storage-unavailable' })
+})
+
+test('when IndexedDB refuses to open, loading this device’s user is storage-unavailable', async () => {
+  vi.stubGlobal('indexedDB', refusingIndexedDB)
+
+  expect(await loadMe()).toEqual({ ok: false, reason: 'storage-unavailable' })
 })
 
 test('with no Web Locks, storing is locks-unavailable, and storage is not opened', async () => {

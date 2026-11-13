@@ -3,6 +3,7 @@ import { storedSignature, withDeviceKey } from '../../src/device-key.ts'
 import { environment } from '../../src/first-launch.ts'
 import {
   appendLock,
+  loadMe,
   loadUser,
   recordStore,
   storageDatabase,
@@ -110,7 +111,71 @@ async function expectedUser() {
   }
 }
 
+// A connection to the database at version 1 that this page keeps open, as a
+// tab running an older version of the app holds it during an operation.
+let version1: IDBDatabase | undefined
+
 const harness = {
+  // A device as the app left it before the me pointer existed: this device's
+  // key, and database version 1 (stores records and users) holding its hello
+  // and the user it mints, written as that version wrote them. The
+  // connection stays open until releaseVersion1. Gives what the core gives
+  // for the key.
+  async buildVersion1Device() {
+    const hello = await makeHello()
+    const core = await loadCore()
+    const expected = await expectedUser()
+    const open = indexedDB.open(storageDatabase, 1)
+    open.onupgradeneeded = () => {
+      open.result.createObjectStore(recordStore)
+      open.result.createObjectStore(userStore)
+    }
+    const database = await request(open)
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction([recordStore, userStore], 'readwrite')
+      transaction.objectStore(recordStore).put(hello, hex(core.id(hello)))
+      transaction
+        .objectStore(userStore)
+        .put({ ...expected, unconfirmed: true }, expected.playerId)
+      transaction.oncomplete = () => resolve()
+      transaction.onerror = () => reject(transaction.error)
+    })
+    version1 = database
+    return expected
+  },
+
+  // Closes the version 1 connection buildVersion1Device left open.
+  async releaseVersion1() {
+    version1?.close()
+    version1 = undefined
+  },
+
+  // The database's version, without creating it: 0 when there is none.
+  async version(): Promise<number> {
+    const databases = await indexedDB.databases()
+    return databases.find(({ name }) => name === storageDatabase)?.version ?? 0
+  },
+
+  // What loadMe gives: this device's user.
+  loadMe() {
+    return loadMe()
+  },
+
+  // Makes a hello and stores it as this device's own, as the first launch
+  // does: storeRecord(hello, { me: true }) with withDeviceKey's store. What
+  // it answered, and what the core gives for the key.
+  async storeOwnHello() {
+    const core = await loadCore()
+    const result = await withDeviceKey(async (key, store) => {
+      const random = crypto.getRandomValues(new Uint8Array(8))
+      const body = core.helloBody(environment, key.publicKey, random)
+      const hello = core.assemble(body, storedSignature(core, await key.sign(body)))
+      return store.storeRecord(hello, { me: true })
+    })
+    if (!result.ok) throw new Error(`No device key: ${result.reason}`)
+    return { result: result.value, expected: await expectedUser() }
+  },
+
   // Makes a hello and stores it the given number of times: what each
   // storeRecord answered, and what the core gives for the key that signed it.
   async storeHello(times = 1) {

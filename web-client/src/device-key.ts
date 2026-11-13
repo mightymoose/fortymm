@@ -124,34 +124,6 @@ async function keptOrMadeKey(): Promise<
   }
 }
 
-export type KeptPublicKeyResult =
-  | { ok: true; publicKey: Uint8Array | null }
-  | { ok: false; reason: 'storage-unavailable' }
-
-const keyUnreadable = { ok: false, reason: 'storage-unavailable' } as const
-
-// The public key of the kept key (33 bytes, as DeviceKey.publicKey), or null
-// when no key is kept. Read only: it never makes a key, so a screen can ask
-// which identity this device has without creating one.
-export async function keptPublicKey(): Promise<KeptPublicKeyResult> {
-  if (globalThis.indexedDB === undefined) return keyUnreadable
-  let database: IDBDatabase
-  try {
-    database = await openKeyDatabase()
-  } catch {
-    return keyUnreadable
-  }
-  try {
-    const kept = await readPair(database)
-    if (kept === undefined) return { ok: true, publicKey: null }
-    return { ok: true, publicKey: await publicKeyOf(kept) }
-  } catch {
-    return keyUnreadable
-  } finally {
-    database.close()
-  }
-}
-
 // Inside the lock: another caller may have made the key while this one
 // waited for it.
 async function keptOrMade(

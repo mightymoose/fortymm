@@ -36,20 +36,6 @@ test('the first call makes and keeps a key, and after a reload the same key come
   expect(await harness.keysKept()).toBe(1)
 })
 
-test('asking for the kept public key makes no key: none on a fresh device, then the key the first call made', async ({
-  page,
-}) => {
-  const harness = new DeviceKeyHarness(page)
-  await harness.open()
-
-  expect(await harness.keptPublicKey()).toBe('none')
-  expect(await harness.keysKept()).toBe(0)
-
-  const made = await harness.publicKey()
-  expect(await harness.keptPublicKey()).toBe(made)
-  expect(await harness.keysKept()).toBe(1)
-})
-
 test('the kept private key is a non-extractable CryptoKey, and exporting it fails', async ({
   page,
 }) => {

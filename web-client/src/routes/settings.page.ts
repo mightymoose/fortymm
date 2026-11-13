@@ -26,8 +26,4 @@ export class SettingsPage {
   storageUnavailable() {
     return screen.findByRole('heading', { name: 'Can’t read this device’s storage' })
   }
-
-  coreUnavailable() {
-    return screen.findByRole('heading', { name: 'The shared core did not load' })
-  }
 }

@@ -1,13 +1,14 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { loadCore } from '../core/load.ts'
-import { keptPublicKey } from '../device-key.ts'
-import { loadUser, type User } from '../storage.ts'
+import { startupLaunchSettled } from '../first-launch.ts'
+import { loadMe, type LoadUserResult, type User } from '../storage.ts'
 
 // /settings: this device's account, as stored on the device (src/storage.ts).
-// This device's user is the one whose player id the core gives for the
-// device's kept key (ownPlayerId). Opening the page reads only: with no key
-// kept, or no user stored for it, it says there is no account yet, and makes
-// neither. Every outcome is data the page shows; the loader never throws.
+// It reads this device's user with loadMe, one read: no key, no core. On a
+// device whose first launch is still running (a first visit straight to this
+// page), no user is marked yet: the loader then waits for that launch, up to
+// its bound (startupLaunchSettled), and reads again. Opening the page reads
+// only: with no user, it says there is no account yet, and makes nothing.
+// Every outcome is data the page shows; the loader never throws.
 export const Route = createFileRoute('/settings')({
   loader: () => ownAccount(),
   pendingComponent: Reading,
@@ -18,26 +19,19 @@ type Account =
   | { state: 'user'; user: User }
   | { state: 'none' }
   | { state: 'storage-unavailable' }
-  | { state: 'core-unavailable' }
 
 async function ownAccount(): Promise<Account> {
-  const kept = await keptPublicKey()
-  if (!kept.ok) return { state: 'storage-unavailable' }
-  if (kept.publicKey === null) return { state: 'none' }
-  let playerId: string
-  try {
-    const core = await loadCore()
-    playerId = hex(core.ownPlayerId(kept.publicKey))
-  } catch {
-    return { state: 'core-unavailable' }
+  const first = await loadMe()
+  if (first.ok && first.user === null) {
+    await startupLaunchSettled()
+    return accountOf(await loadMe())
   }
-  const loaded = await loadUser(playerId)
-  if (!loaded.ok) return { state: 'storage-unavailable' }
-  return loaded.user === null ? { state: 'none' } : { state: 'user', user: loaded.user }
+  return accountOf(first)
 }
 
-function hex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+function accountOf(loaded: LoadUserResult): Account {
+  if (!loaded.ok) return { state: 'storage-unavailable' }
+  return loaded.user === null ? { state: 'none' } : { state: 'user', user: loaded.user }
 }
 
 function Reading() {
@@ -78,13 +72,6 @@ function AccountAnswer({ account }: { account: Account }) {
         <>
           <h2>Can’t read this device’s storage</h2>
           <p>The browser refused to open the storage where the account is kept.</p>
-        </>
-      )
-    case 'core-unavailable':
-      return (
-        <>
-          <h2>The shared core did not load</h2>
-          <p>This device could not load it, so it can’t tell which account is its own.</p>
         </>
       )
   }

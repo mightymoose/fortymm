@@ -35,6 +35,11 @@ type Harness = {
   }>
   expectedUser(): Promise<Expected>
   loadUser(playerId: string): Promise<Loaded>
+  loadMe(): Promise<Loaded>
+  storeOwnHello(): Promise<{ result: Result; expected: Expected }>
+  buildVersion1Device(): Promise<Expected>
+  releaseVersion1(): Promise<void>
+  version(): Promise<number>
   kept(): Promise<Counts>
 }
 
@@ -85,6 +90,31 @@ export class StorageHarness {
     return this.call('kept')
   }
 
+  // This device's user, by loadMe.
+  loadMe() {
+    return this.call('loadMe')
+  }
+
+  // Stores a new hello as this device's own (first launch's way).
+  storeOwnHello() {
+    return this.call('storeOwnHello')
+  }
+
+  // This device's key, and database version 1 with its hello and user, the
+  // connection kept open until releaseVersion1. Gives the user.
+  buildVersion1Device() {
+    return this.call('buildVersion1Device')
+  }
+
+  releaseVersion1() {
+    return this.call('releaseVersion1')
+  }
+
+  // The storage database's version; 0 when there is none.
+  version() {
+    return this.call('version')
+  }
+
   storeWhileCallerChangesIt() {
     return this.call('storeWhileCallerChangesIt')
   }
@@ -100,6 +130,11 @@ export class StorageHarness {
   private call<
     Name extends
       | 'kept'
+      | 'loadMe'
+      | 'storeOwnHello'
+      | 'buildVersion1Device'
+      | 'releaseVersion1'
+      | 'version'
       | 'storeWhileCallerChangesIt'
       | 'storeAsSlice'
       | 'storeTwoSignaturesOfOneBody',

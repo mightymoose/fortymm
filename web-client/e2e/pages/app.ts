@@ -140,6 +140,9 @@ export class HealthPage {
 export class SettingsPage {
   readonly heading: Locator
   readonly noAccount: Locator
+  // While the page waits for this device's account.
+  readonly reading: Locator
+  readonly storageUnavailable: Locator
   // The stored username: the paragraph in the region named "Username".
   readonly username: Locator
   private readonly page: Page
@@ -148,6 +151,12 @@ export class SettingsPage {
     this.page = page
     this.heading = page.getByRole('heading', { name: 'Account settings' })
     this.noAccount = page.getByRole('heading', { name: 'No account yet' })
+    this.reading = page.getByRole('heading', {
+      name: 'Reading this device’s account',
+    })
+    this.storageUnavailable = page.getByRole('heading', {
+      name: 'Can’t read this device’s storage',
+    })
     this.username = page
       .getByRole('region', { name: 'Username' })
       .getByRole('paragraph')
