@@ -61,7 +61,9 @@ export async function storeRecord(record: Uint8Array): Promise<StoreResult> {
   } catch {
     return failure('core-unavailable')
   }
-  const minted = mint(core, record)
+  // A tight copy of the caller's bytes: what is verified is what is kept,
+  // whatever the caller does with its array while this waits for the lock.
+  const minted = mint(core, record.slice())
   if (minted === null) return failure('not-a-hello')
   if (globalThis.indexedDB === undefined) return failure('storage-unavailable')
   if (globalThis.navigator?.locks === undefined) return failure('locks-unavailable')
@@ -161,6 +163,12 @@ function read(database: IDBDatabase, playerId: string): Promise<User | undefined
 // One transaction for the record and its user, resolved once both are on
 // disk (strict durability where the browser offers it). If either put fails,
 // the transaction is aborted, and neither is kept.
+//
+// A record whose id is already kept is not written again. An id is the hash
+// of the body alone, and signatures are randomized, so one body signed twice
+// is two valid records with one id: the same record (design section 7), and
+// the first one kept stays. The user is put either way; it is minted from
+// the body, so it is the same row.
 function write(database: IDBDatabase, { id, record, user }: Minted): Promise<void> {
   return new Promise((resolve, reject) => {
     const transaction = database.transaction([recordStore, userStore], 'readwrite', {
@@ -170,7 +178,11 @@ function write(database: IDBDatabase, { id, record, user }: Minted): Promise<voi
     transaction.onerror = () => reject(transaction.error)
     transaction.onabort = () => reject(transaction.error ?? new Error('Aborted'))
     try {
-      transaction.objectStore(recordStore).put(record, id)
+      const records = transaction.objectStore(recordStore)
+      const kept = records.getKey(id)
+      kept.onsuccess = () => {
+        if (kept.result === undefined) records.put(record, id)
+      }
       transaction.objectStore(userStore).put(user, user.playerId)
     } catch (error) {
       transaction.abort()
