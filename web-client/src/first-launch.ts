@@ -43,23 +43,24 @@ export async function firstLaunch(): Promise<FirstLaunchResult> {
   } catch {
     return { ok: false, reason: 'core-unavailable' }
   }
-  try {
-    const result = await withDeviceKey(async (key, store): Promise<FirstLaunchResult> => {
-      const kept = await store.loadUser(hex(core.ownPlayerId(key.publicKey)))
-      if (!kept.ok) return kept
-      if (kept.user !== null) return { ok: true, outcome: 'kept' }
+  const result = await withDeviceKey(async (key, store): Promise<FirstLaunchResult> => {
+    const kept = await store.loadUser(hex(core.ownPlayerId(key.publicKey)))
+    if (!kept.ok) return kept
+    if (kept.user !== null) return { ok: true, outcome: 'kept' }
 
+    let hello: Uint8Array
+    try {
       const random = crypto.getRandomValues(new Uint8Array(8))
       const body = core.helloBody(environment, key.publicKey, random)
-      const hello = core.assemble(body, storedSignature(core, await key.sign(body)))
-      const stored = await store.storeRecord(hello)
-      return stored.ok ? { ok: true, outcome: 'made' } : stored
-    })
-    return result.ok ? result.value : result
-  } catch {
-    // Signing or assembling threw: no hello was stored.
-    return { ok: false, reason: 'signing-unavailable' }
-  }
+      hello = core.assemble(body, storedSignature(core, await key.sign(body)))
+    } catch {
+      // Signing or assembling threw: no hello to store.
+      return { ok: false, reason: 'signing-unavailable' }
+    }
+    const stored = await store.storeRecord(hello)
+    return stored.ok ? { ok: true, outcome: 'made' } : stored
+  })
+  return result.ok ? result.value : result
 }
 
 // The launch at app startup: runs firstLaunch, then sets firstLaunchMark.

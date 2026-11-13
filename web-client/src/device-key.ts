@@ -68,7 +68,10 @@ const signing = { name: 'ECDSA', hash: 'SHA-256' } as const
 // in every tab, waits for them.
 //
 // The lock is released once the callback settles. A callback that throws
-// makes withDeviceKey throw the same error, the lock released.
+// makes withDeviceKey throw the same error, the lock released. The browser
+// refusing never throws: a denied lock request (site data blocked, an opaque
+// origin) is storage-unavailable, and a key WebCrypto can't export is
+// signing-unavailable.
 export async function withDeviceKey<T>(
   callback: (key: DeviceKey, store: Store) => Promise<T>,
 ): Promise<WithDeviceKeyResult<T>> {
@@ -76,14 +79,32 @@ export async function withDeviceKey<T>(
   if (globalThis.indexedDB === undefined) return failure('storage-unavailable')
   if (globalThis.navigator?.locks === undefined) return failure('locks-unavailable')
 
-  return navigator.locks.request(
-    appendLock,
-    async (): Promise<WithDeviceKeyResult<T>> => {
-      const made = await keptOrMadeKey()
-      if (!made.ok) return made
-      return { ok: true, value: await callback(await keyOf(made.pair), heldStore) }
-    },
-  )
+  // What the callback threw, kept apart from the browser's refusals.
+  let thrown: { error: unknown } | undefined
+  try {
+    return await navigator.locks.request(
+      appendLock,
+      async (): Promise<WithDeviceKeyResult<T>> => {
+        const made = await keptOrMadeKey()
+        if (!made.ok) return made
+        let key: DeviceKey
+        try {
+          key = await keyOf(made.pair)
+        } catch {
+          return failure('signing-unavailable')
+        }
+        try {
+          return { ok: true, value: await callback(key, heldStore) }
+        } catch (error) {
+          thrown = { error }
+          throw error
+        }
+      },
+    )
+  } catch {
+    if (thrown !== undefined) throw thrown.error
+    return failure('storage-unavailable')
+  }
 }
 
 // Inside the lock: the kept key pair, or a new one, made and kept.
