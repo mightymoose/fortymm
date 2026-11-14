@@ -1,5 +1,6 @@
 import { useId, useState, type ReactNode } from 'react'
 import { useNewVersion } from '../new-version.ts'
+import { BottomBar } from './BottomBar.tsx'
 import { Sidebar } from './Sidebar.tsx'
 import { TopBar } from './TopBar.tsx'
 import { UpdateNotice } from './UpdateNotice.tsx'
@@ -17,14 +18,16 @@ import './AppLayout.css'
 //
 // The whole page scrolls as one document. The top bar, and the toggle in it,
 // scroll away with it; the sidebar runs the page's full height, and its links
-// stay in view (Sidebar.css). On phones there is no sidebar and no toggle,
-// and no other way to navigate by link yet.
+// stay in view (Sidebar.css). On phones there is no sidebar and no toggle:
+// the bottom bar (BottomBar), fixed to the bottom of the screen, is the
+// navigation there, and the screen's end is kept clear of it.
 //
-// On phones the top bar also shows this device's user's mark (UserMark, from
-// the user store), a link to /settings.
+// The top bar also shows this device's user's mark (UserMark, from the user
+// store), a link to /settings.
 //
-// Over every screen, bottom centre, the notice that a new version of the app
-// is ready to reload into (src/new-version.ts), when there is one.
+// Over every screen, bottom centre (on phones, above the bottom bar), the
+// notice that a new version of the app is ready to reload into
+// (src/new-version.ts), when there is one.
 export function AppLayout({ children }: { children: ReactNode }) {
   const [sidebarExpanded, setSidebarExpanded] = useState(true)
   const sidebarId = useId()
@@ -40,6 +43,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
       />
       <Sidebar id={sidebarId} expanded={sidebarExpanded} />
       <main className="app-layout__content">{children}</main>
+      <BottomBar />
       <UpdateNotice
         shown={newVersion.ready}
         onReload={newVersion.reload}

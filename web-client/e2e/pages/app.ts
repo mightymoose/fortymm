@@ -165,6 +165,11 @@ export class AppLayout {
     return this.banner.getByRole('link', { name: username, exact: true })
   }
 
+  // The bottom bar's navigation (phones only).
+  get bottomBar(): Locator {
+    return this.banner.page().getByRole('navigation', { name: 'Bottom bar' })
+  }
+
   // The username written out in the user's mark.
   userMarkName(username: string): Locator {
     return this.userMark(username).getByText(username, { exact: true })

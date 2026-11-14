@@ -31,6 +31,14 @@ test.describe('at a desktop width', () => {
       await expect(layout.link(name)).toBeVisible()
     }
   })
+
+  test('there is no bottom bar', async ({ page }) => {
+    const layout = new AppLayout(page)
+    await new StartPage(page).goto()
+    await expect(layout.navigation).toBeVisible()
+
+    await expect(layout.bottomBar).toHaveCount(0)
+  })
 })
 
 test.describe('at a phone width', () => {
@@ -43,8 +51,44 @@ test.describe('at a phone width', () => {
     await new StartPage(page).goto()
 
     await expect(layout.brand).toBeVisible()
-    await expect(layout.navigation).toBeHidden()
+    await expect(layout.navigation).toHaveCount(0)
     await expect(layout.sidebarToggle).toBeHidden()
+  })
+
+  test('the bottom bar holds one link, to the dashboard, wholly on screen at the bottom, at least 44px to tap', async ({
+    page,
+  }) => {
+    const layout = new AppLayout(page)
+    await new StartPage(page).goto()
+
+    await expect(layout.bottomBar).toBeInViewport({ ratio: 1 })
+    const links = layout.bottomBar.getByRole('link')
+    await expect(links).toHaveCount(1)
+    const dashboard = layout.bottomBar.getByRole('link', { name: 'Dashboard' })
+    await expect(dashboard).toHaveAttribute('href', '/dashboard')
+    await expect(dashboard).toBeInViewport({ ratio: 1 })
+    const bar = (await layout.bottomBar.boundingBox())!
+    expect(bar.y + bar.height).toBeCloseTo(phone.height, 0)
+    const link = (await dashboard.boundingBox())!
+    expect(link.width).toBeGreaterThanOrEqual(44)
+    expect(link.height).toBeGreaterThanOrEqual(44)
+  })
+
+  test('scrolled to the end of a long page, its last content is above the bottom bar, not under it', async ({
+    page,
+  }) => {
+    const layout = new AppLayout(page)
+    // The design system page's colour tab: long, and asks nothing of the
+    // network.
+    await page.goto('/design-system/colour')
+    const last = page.getByRole('main').locator('*').last()
+    await expect(last).toBeAttached()
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+
+    await expect(layout.bottomBar).toBeInViewport({ ratio: 1 })
+    const box = (await last.boundingBox())!
+    const bar = (await layout.bottomBar.boundingBox())!
+    expect(box.y + box.height).toBeLessThanOrEqual(bar.y)
   })
 })
 

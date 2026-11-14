@@ -2,6 +2,7 @@ import { screen, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { renderScreen } from '../test/render-screen.tsx'
 import { AppLayout } from './AppLayout.tsx'
+import { BottomBar } from './BottomBar.tsx'
 import { Sidebar } from './Sidebar.tsx'
 import { TopBar } from './TopBar.tsx'
 
@@ -32,6 +33,22 @@ export class AppLayoutPage {
       <Sidebar id="sidebar" expanded={options?.expanded ?? true} />,
       options,
     )
+  }
+
+  // The bottom bar, at `path` (`/` unless given).
+  renderBottomBar(options?: { path?: string }) {
+    return renderScreen(<BottomBar />, options)
+  }
+
+  // The bottom bar's navigation (phones only in a browser; jsdom applies no
+  // breakpoint, so both navs are there).
+  bottomBar() {
+    return screen.findByRole('navigation', { name: 'Bottom bar' })
+  }
+
+  // The links in the bottom bar, in order.
+  async bottomBarLinks() {
+    return within(await this.bottomBar()).findAllByRole('link')
   }
 
   // The top bar.
