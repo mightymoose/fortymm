@@ -182,14 +182,14 @@ export class AppLayout {
 // in a page that is already open. goto() only navigates; a test waits for what
 // it expects to see.
 
-// The start page is blank; its one element is a heading for screen readers.
-export class StartPage {
+// The dashboard, at /: its heading and, so far, nothing else.
+export class DashboardPage {
   readonly heading: Locator
   private readonly page: Page
 
   constructor(page: Page) {
     this.page = page
-    this.heading = page.getByRole('heading', { level: 1, name: 'FortyMM' })
+    this.heading = page.getByRole('heading', { level: 1, name: 'Dashboard' })
   }
 
   async goto() {

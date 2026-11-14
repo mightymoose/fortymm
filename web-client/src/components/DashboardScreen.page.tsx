@@ -4,7 +4,7 @@ import { DashboardScreen } from './DashboardScreen.tsx'
 
 // The dashboard (DashboardScreen.tsx): how to render it alone, and what a
 // person sees on it. The finders work wherever the screen is mounted,
-// through its route (src/routes/dashboard.test.tsx) too.
+// through its route (src/routes/index.test.tsx) too.
 export class DashboardScreenPage {
   render() {
     return renderScreen(<DashboardScreen />)

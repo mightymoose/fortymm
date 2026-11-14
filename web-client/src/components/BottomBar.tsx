@@ -11,7 +11,7 @@ import './BottomBar.css'
 export function BottomBar() {
   return (
     <nav aria-label="Bottom bar" className="bottom-bar">
-      <Link to="/dashboard" className="bottom-bar__item">
+      <Link to="/" className="bottom-bar__item">
         <Icon name="layout-dashboard" />
         <span>Dashboard</span>
       </Link>

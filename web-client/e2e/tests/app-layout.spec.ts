@@ -1,5 +1,5 @@
 import { expect, test } from '../pages/test.ts'
-import { App, AppLayout, StartPage } from '../pages/app.ts'
+import { App, AppLayout, DashboardPage } from '../pages/app.ts'
 import { StorageHarness } from '../pages/storage.ts'
 
 // What only a real browser can show about the layout around every screen
@@ -9,7 +9,8 @@ import { StorageHarness } from '../pages/storage.ts'
 // is a component test. How it looks is pinned by no test: screenshots are
 // only for the design system page (web-client/CLAUDE.md).
 //
-// On the start page, which is blank and asks nothing of the network.
+// On the dashboard, which shows only its heading and asks nothing of the
+// network.
 
 const desktop = { width: 1280, height: 800 }
 // An iPhone's width, under the layout's 768px breakpoint (AppLayout.css).
@@ -22,7 +23,7 @@ test.describe('at a desktop width', () => {
     page,
   }) => {
     const layout = new AppLayout(page)
-    await new StartPage(page).goto()
+    await new DashboardPage(page).goto()
 
     await expect(layout.brand).toBeVisible()
     await expect(layout.sidebarToggle).toBeVisible()
@@ -34,7 +35,7 @@ test.describe('at a desktop width', () => {
 
   test('there is no bottom bar', async ({ page }) => {
     const layout = new AppLayout(page)
-    await new StartPage(page).goto()
+    await new DashboardPage(page).goto()
     await expect(layout.navigation).toBeVisible()
 
     await expect(layout.bottomBar).toHaveCount(0)
@@ -48,7 +49,7 @@ test.describe('at a phone width', () => {
     page,
   }) => {
     const layout = new AppLayout(page)
-    await new StartPage(page).goto()
+    await new DashboardPage(page).goto()
 
     await expect(layout.brand).toBeVisible()
     await expect(layout.navigation).toHaveCount(0)
@@ -59,13 +60,13 @@ test.describe('at a phone width', () => {
     page,
   }) => {
     const layout = new AppLayout(page)
-    await new StartPage(page).goto()
+    await new DashboardPage(page).goto()
 
     await expect(layout.bottomBar).toBeInViewport({ ratio: 1 })
     const links = layout.bottomBar.getByRole('link')
     await expect(links).toHaveCount(1)
     const dashboard = layout.bottomBar.getByRole('link', { name: 'Dashboard' })
-    await expect(dashboard).toHaveAttribute('href', '/dashboard')
+    await expect(dashboard).toHaveAttribute('href', '/')
     await expect(dashboard).toBeInViewport({ ratio: 1 })
     const bar = (await layout.bottomBar.boundingBox())!
     expect(bar.y + bar.height).toBeCloseTo(phone.height, 0)
@@ -114,7 +115,7 @@ test.describe('this device’s user’s mark', () => {
       page,
     }) => {
       const layout = new AppLayout(page)
-      await new StartPage(page).goto()
+      await new DashboardPage(page).goto()
       expect(await new App(page).firstLaunch()).toEqual({
         ok: true,
         outcome: 'made',
@@ -142,7 +143,7 @@ test.describe('this device’s user’s mark', () => {
       }) => {
         await page.route('**/*.wasm', (route) => route.abort())
         const layout = new AppLayout(page)
-        await new StartPage(page).goto()
+        await new DashboardPage(page).goto()
         expect(await new App(page).firstLaunch()).toEqual({
           ok: false,
           reason: 'core-unavailable',
@@ -159,11 +160,11 @@ test.describe('this device’s user’s mark', () => {
       // it, rather than from the service worker's kept copy.
       test.use({ serviceWorkers: 'block' })
 
-      test('on a device with a user, the start page shows the user’s mark without waiting for the core', async ({
+      test('on a device with a user, the dashboard shows the user’s mark without waiting for the core', async ({
         context,
         page,
       }) => {
-        await new StartPage(page).goto()
+        await new DashboardPage(page).goto()
         expect(await new App(page).firstLaunch()).toEqual({
           ok: true,
           outcome: 'made',
@@ -178,7 +179,7 @@ test.describe('this device’s user’s mark', () => {
         })
 
         const later = await context.newPage()
-        await new StartPage(later).goto()
+        await new DashboardPage(later).goto()
 
         await expect(new AppLayout(later).userMark(username)).toBeVisible({
           timeout: 3_000,
@@ -195,7 +196,7 @@ test.describe('this device’s user’s mark', () => {
       page,
     }) => {
       const layout = new AppLayout(page)
-      await new StartPage(page).goto()
+      await new DashboardPage(page).goto()
       expect(await new App(page).firstLaunch()).toEqual({
         ok: true,
         outcome: 'made',

@@ -56,7 +56,7 @@ export class AppLayoutPage {
     return screen.findByRole('banner')
   }
 
-  // The FortyMM brand in the top bar, a link to the start page.
+  // The FortyMM brand in the top bar, a link to the dashboard, at /.
   async brand() {
     return within(await this.banner()).findByRole('link', { name: 'FortyMM' })
   }

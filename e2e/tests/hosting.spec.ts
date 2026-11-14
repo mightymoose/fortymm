@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import { HealthPage } from '../pages/health-page.ts'
 import { waitUntilAppIsKept } from '../pages/kept-app.ts'
 import { NotFoundPage } from '../pages/not-found-page.ts'
-import { StartPage } from '../pages/start-page.ts'
+import { DashboardPage } from '../pages/dashboard-page.ts'
 
 // The web client's production hosting, the Worker in web-client/worker/, as a
 // person sees it: run in the local Workers runtime by the e2e task, or a
@@ -17,7 +17,7 @@ test('the hosting serves the app at a deep path, and the bundle runs', async ({
   const pageErrors: Error[] = []
   page.on('pageerror', (error) => pageErrors.push(error))
   const notFound = new NotFoundPage(page)
-  const start = new StartPage(page)
+  const start = new DashboardPage(page)
 
   await notFound.open('/no/such/page')
   await expect(notFound.heading).toBeVisible()
@@ -54,7 +54,7 @@ test('after one visit, the hosted app opens with no connection, at a deep path t
   await context.setOffline(true)
 
   const reopened = await context.newPage()
-  const start = new StartPage(reopened)
+  const start = new DashboardPage(reopened)
   await reopened.goto('/')
   await expect(start.heading).toBeVisible()
 

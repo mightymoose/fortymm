@@ -4,7 +4,7 @@ import { Icon } from './Icon.tsx'
 import './TopBar.css'
 
 // The top bar across every screen. At non-phone widths: the sidebar's toggle,
-// then the FortyMM wordmark, a link to the start page, on the left. On phones
+// then the FortyMM wordmark, a link to the dashboard (/), on the left. On phones
 // (the breakpoint is AppLayout.css's) there is no sidebar, so no toggle, and
 // the wordmark is centred. The wordmark is the brand, not the page's heading:
 // each screen has its own <h1>.

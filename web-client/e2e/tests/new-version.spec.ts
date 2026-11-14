@@ -1,13 +1,13 @@
 import type { Page } from '@playwright/test'
 import { expect, test } from '../pages/test.ts'
-import { App, AppLayout, NewVersion, StartPage } from '../pages/app.ts'
+import { App, AppLayout, NewVersion, DashboardPage } from '../pages/app.ts'
 import { deploy, failDownload, holdBack } from '../pages/deployment.ts'
 
 // A new deployment reaching a page that is open (src/new-version.ts): the
 // app downloads it in the background, says a new version is ready only once
 // every file of it is on the device, and switches to it when the person
 // presses Reload, from the kept files, with or without a connection. Each
-// test starts with the current build deployed and opens the start page on
+// test starts with the current build deployed and opens the dashboard on
 // it; then the next build is deployed mid-test.
 
 // A value the test leaves in the page's window: still there means the page
@@ -28,7 +28,7 @@ test('a new version shows only once its files are on the device, the page is not
   page,
 }) => {
   const app = new App(page)
-  const start = new StartPage(page)
+  const start = new DashboardPage(page)
   const newVersion = new NewVersion(page)
   await start.goto()
   await app.waitUntilKept()
@@ -71,7 +71,7 @@ test('a download of a new version that fails shows nothing, and the next look tr
 }) => {
   const app = new App(page)
   const newVersion = new NewVersion(page)
-  await new StartPage(page).goto()
+  await new DashboardPage(page).goto()
   await app.waitUntilKept()
 
   const failing = await failDownload(context, '/index.html')
@@ -94,14 +94,14 @@ test('a page opened while a new version is already waiting shows it at once', as
 }) => {
   const app = new App(page)
   const newVersion = new NewVersion(page)
-  await new StartPage(page).goto()
+  await new DashboardPage(page).goto()
   await app.waitUntilKept()
   await deploy('next')
   await newVersion.connectionComesBack()
   await expect(newVersion.notice).toBeVisible()
 
   const another = await context.newPage()
-  await new StartPage(another).goto()
+  await new DashboardPage(another).goto()
 
   await expect(another).toHaveTitle('fortymm')
   await expect(new NewVersion(another).notice).toBeVisible()
@@ -110,7 +110,7 @@ test('a page opened while a new version is already waiting shows it at once', as
 test('dismissed, the notice stays hidden on that page', async ({ page }) => {
   const app = new App(page)
   const newVersion = new NewVersion(page)
-  await new StartPage(page).goto()
+  await new DashboardPage(page).goto()
   await app.waitUntilKept()
   await deploy('next')
   await newVersion.connectionComesBack()
@@ -143,7 +143,7 @@ for (const [name, viewport] of Object.entries(widths)) {
       page,
     }) => {
       const newVersion = new NewVersion(page)
-      await new StartPage(page).goto()
+      await new DashboardPage(page).goto()
       await new App(page).waitUntilKept()
       await deploy('next')
       await newVersion.connectionComesBack()
@@ -168,7 +168,7 @@ test.describe('at a phone width, with the bottom bar', () => {
   }) => {
     const newVersion = new NewVersion(page)
     const bottomBar = new AppLayout(page).bottomBar
-    await new StartPage(page).goto()
+    await new DashboardPage(page).goto()
     await new App(page).waitUntilKept()
     await deploy('next')
     await newVersion.connectionComesBack()
@@ -193,7 +193,7 @@ test.describe('at a desktop width, with no bottom bar', () => {
     page,
   }) => {
     const newVersion = new NewVersion(page)
-    await new StartPage(page).goto()
+    await new DashboardPage(page).goto()
     await new App(page).waitUntilKept()
     await deploy('next')
     await newVersion.connectionComesBack()

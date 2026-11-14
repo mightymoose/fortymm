@@ -1,5 +1,5 @@
 import { expect, test } from '../pages/test.ts'
-import { App, StartPage } from '../pages/app.ts'
+import { App, DashboardPage } from '../pages/app.ts'
 import { blockedSiteData } from '../pages/blocked-site-data.ts'
 import { DeviceKeyHarness } from '../pages/device-key.ts'
 
@@ -143,7 +143,7 @@ test('opened with no connection after one visit with one, the kept key still sig
   page,
 }) => {
   const app = new App(page)
-  await new StartPage(page).goto()
+  await new DashboardPage(page).goto()
   await app.waitUntilKept()
   const online = new DeviceKeyHarness(page)
   await online.open()
