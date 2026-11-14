@@ -75,26 +75,66 @@ mod tests {
         assert!(number[..31].iter().all(|&b| b == 0));
     }
 
-    #[test]
-    fn zero_and_the_largest_id_take_the_ends_of_the_lists() {
-        let zero = PlayerId::from_bytes([0; 32]);
-        assert_eq!(zero.username(4).unwrap(), "agile-alpaca-0000");
-        // 2^256 - 1 is 63 modulo 64, twice, then the rest of the digits.
-        let top = PlayerId::from_bytes([0xff; 32]);
-        assert!(top.username(4).unwrap().starts_with("wise-zebra-"));
+    /// The id whose big-endian value is `value`.
+    fn id_of(value: u64) -> PlayerId {
+        let mut bytes = [0u8; 32];
+        bytes[24..].copy_from_slice(&value.to_be_bytes());
+        PlayerId::from_bytes(bytes)
     }
 
     #[test]
-    fn the_lists_hold_distinct_lower_case_words() {
-        for list in [&ADJECTIVES[..], &ANIMALS[..]] {
-            let mut sorted = list.to_vec();
-            sorted.sort_unstable();
-            sorted.dedup();
-            assert_eq!(sorted.len(), list.len());
+    fn zero_takes_the_first_word_of_each_list() {
+        assert_eq!(
+            id_of(0).username(4).unwrap(),
+            format!("{}-{}-0000", ADJECTIVES[0], ANIMALS[0])
+        );
+    }
+
+    #[test]
+    fn the_digits_are_taken_in_mixed_radix_by_the_lists_lengths() {
+        // n = 5 + |ADJECTIVES| * (7 + |ANIMALS| * (3 + 29 * 11)).
+        let (adjectives, animals) = (ADJECTIVES.len() as u64, ANIMALS.len() as u64);
+        let n = 5 + adjectives * (7 + animals * (3 + 29 * 11));
+        assert_eq!(
+            id_of(n).username(4).unwrap(),
+            format!("{}-{}-3c00", ADJECTIVES[5], ANIMALS[7])
+        );
+        // One less than a whole adjective cycle is the last adjective.
+        assert!(
+            id_of(adjectives - 1)
+                .username(4)
+                .unwrap()
+                .starts_with(&format!(
+                    "{}-{}-",
+                    ADJECTIVES[adjectives as usize - 1],
+                    ANIMALS[0]
+                ))
+        );
+    }
+
+    #[test]
+    fn every_word_is_three_to_ten_lower_case_ascii_letters() {
+        for word in ADJECTIVES.iter().chain(ANIMALS.iter()) {
             assert!(
-                list.iter()
-                    .all(|word| !word.is_empty() && word.bytes().all(|b| b.is_ascii_lowercase()))
+                (3..=10).contains(&word.len()) && word.bytes().all(|b| b.is_ascii_lowercase()),
+                "{word:?}"
             );
+        }
+    }
+
+    #[test]
+    fn each_list_is_sorted_with_no_word_twice() {
+        for list in [&ADJECTIVES[..], &ANIMALS[..]] {
+            for pair in list.windows(2) {
+                assert!(pair[0] < pair[1], "{:?} then {:?}", pair[0], pair[1]);
+            }
+        }
+    }
+
+    #[test]
+    fn no_word_is_both_an_adjective_and_an_animal() {
+        for word in ADJECTIVES {
+            assert!(ANIMALS.binary_search(word).is_err(), "{word:?}");
         }
     }
 }
