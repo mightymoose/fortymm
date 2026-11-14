@@ -22,7 +22,7 @@ Never in a route file: JSX beyond rendering that one component with props; `useS
 
 Where neither list fits, these are decided:
 
-- **The root route's component is the router's own `Outlet`** (`component: Outlet` in `__root.tsx`): routing's shell, not markup. A layout every screen shares would be a component in `src/components/` taking the outlet as its children, `component: () => <AppLayout><Outlet /></AppLayout>`, the one place a route renders anything but a single component.
+- **The root route's component is the layout around the router's own `Outlet`**: `component: () => <AppLayout><Outlet /></AppLayout>` in `__root.tsx`, the one place a route renders anything but a single component. `AppLayout` (`src/components/`, README "The layout") holds the top bar, the sidebar and the page's one `<main>`, and takes no route data: the sidebar's current page comes from the router's `<Link>`. A screen renders no `<main>` of its own.
 - **What a loader runs that is more than one call** (deciding, waiting, reading again, turning results into what the screen shows) is a loading function in a module of its own, beside what it reads, and the loader only calls it: `ownAccount()` in `src/account.ts` (`/settings`), `checkCore()` in `src/core/check.ts` (`/health`). It returns plain data, never throws for an answer it can give, and knows nothing about screens.
 - **Answers that arrive separately** are handed to the screen as promises: the loader returns them unawaited and the screen waits for each with the router's `<Await>` and a `fallback` (`HealthScreen`). A screen may use the router's components (`<Link>`, `<Await>`); it never reads route data itself (`Route.useLoaderData()`, `getRouteApi`): the route's wrapper hands it over.
 
@@ -39,7 +39,7 @@ The controls in `src/components/` (`Button`, `Field`, `Checkbox`, `Tabs`...; REA
 - A component is the real element (`<button>`, `<input>` inside its `<label>`, `role="tab"`, `role="switch"`), named the way the design system says, one per file with its CSS beside it. Every colour is a token (mix a token with `color-mix()` rather than copy a value); only sizes the tokens lack are px.
 - Its CSS follows the kit's `fm-*` rule for it in `reference.css`. A change to how one looks changes its screenshots: write them again (`./bin/mise run web-client:e2e -- --update-snapshots`) and look at each beside the same `data-testid` on the board before committing.
 - A state the design system page draws without causing it (hover, focus, pressed) is the `forcedState` prop, rendered as `data-forced-state`, beside the real pseudo-class in the same CSS rule. Nothing else sets it.
-- What a component does is its own test, `src/components/<Name>.test.tsx`, rendered alone, by role and accessible name; how it looks is only ever a screenshot (`e2e/tests/design-system.spec.ts`), never a style read in a test.
+- What a component does is its own test, `src/components/<Name>.test.tsx`, rendered alone, by role and accessible name; how it looks is only ever a screenshot (`e2e/tests/design-system.spec.ts`; the layout's, `e2e/tests/app-layout.spec.ts`), never a style read in a test.
 - A new target on the board gets the board's `data-testid` in `ControlsSection` and a line in `design-system.spec.ts`.
 
 ## Answers from the api are parsed with zod, at the boundary
