@@ -1,0 +1,37 @@
+/* A form field: label, control, then help or error (kit.css, .fm-field). */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.field__label {
+  font: 500 14px / var(--lh-snug) var(--font-ui);
+  color: var(--fg-1);
+}
+.field__optional {
+  font-weight: 400;
+  color: var(--fg-3);
+}
+.field:has(:disabled) .field__label {
+  color: var(--fg-3);
+}
+.field__help {
+  margin: 0;
+  font: 400 var(--text-sm) / 1.45 var(--font-ui);
+  color: var(--fg-3);
+}
+/* An error: the icon and a sentence, in --danger. */
+.field__error {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin: 0;
+  font: 500 var(--text-sm) / 1.45 var(--font-ui);
+  color: var(--danger);
+}
+.field__error .icon {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+}

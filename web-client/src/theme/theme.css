@@ -29,9 +29,13 @@
   font-display: swap;
 }
 
-/* From the artifact's colors_and_type.css. */
+/* From the artifact's colors_and_type.css: the focus ring, and motion, which
+   is feedback only (a press, a hover, a toggle). */
 :root {
   --focus-ring: 0 0 0 2px var(--ink-950), 0 0 0 4px var(--ball-500);
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur-press: 100ms;
+  --dur-change: 160ms;
 }
 
 /* The page: bg-app on html and body both, so it fills the viewport and any

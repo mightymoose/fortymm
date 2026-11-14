@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FortyMM reference: type</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/9f72ae45fcd4326d7bab39a709ac4598">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600;700&amp;family=Bebas+Neue&amp;display=swap">
+<style>
+body{margin:0;background:#0B0D12}
+a{color:#FF9A4A}a:hover{color:#FFCFA8}
+</style>
+</helmet>
+<main class="ref fm-test" data-testid="sheet-type" style="height: 2100px">
+<header class="ref-head">
+<div>
+<h1>Type</h1>
+<p>Space Grotesk for every word, JetBrains Mono for numbers that align, Bebas Neue only for the wordmark and venue scoreboards. Labels are sentence case, 13px, weight 500, no tracking. Minimum 12px.</p>
+</div>
+<span class="ref-id">ref/type</span>
+</header>
+
+<section class="ref-sec" data-testid="section-families">
+<h2>Families</h2>
+<p>One specimen per family at each shipped weight.</p>
+<div class="ref-grid ref-grid--3">
+<figure class="ref-spec">
+<div class="ref-stage ref-stage--panel ref-stage--col" data-testid="family-ui" data-token="--font-ui" style="border-radius: 8px; gap: 4px">
+<span style="font: 400 24px/1.3 var(--font-ui)">Space Grotesk 400</span>
+<span style="font: 500 24px/1.3 var(--font-ui)">Space Grotesk 500</span>
+<span style="font: 600 24px/1.3 var(--font-ui)">Space Grotesk 600</span>
+<span style="font: 700 24px/1.3 var(--font-ui)">Space Grotesk 700</span>
+</div>
+<figcaption class="ref-cap"><b>--font-ui</b><span>headings, labels, body</span></figcaption>
+</figure>
+<figure class="ref-spec">
+<div class="ref-stage ref-stage--panel ref-stage--col" data-testid="family-num" data-token="--font-num" style="border-radius: 8px; gap: 4px">
+<span style="font: 400 24px/1.3 var(--font-num); font-variant-numeric: tabular-nums">0123456789 400</span>
+<span style="font: 500 24px/1.3 var(--font-num); font-variant-numeric: tabular-nums">0123456789 500</span>
+<span style="font: 600 24px/1.3 var(--font-num); font-variant-numeric: tabular-nums">0123456789 600</span>
+<span style="font: 700 24px/1.3 var(--font-num); font-variant-numeric: tabular-nums">0123456789 700</span>
+</div>
+<figcaption class="ref-cap"><b>--font-num</b><span>scores, ratings, times</span></figcaption>
+</figure>
+<figure class="ref-spec">
+<div class="ref-stage ref-stage--panel ref-stage--col" data-testid="family-display" data-token="--font-display" style="border-radius: 8px; gap: 4px; justify-content: center; min-height: 172px">
+<span class="scoreboard-display" style="color: var(--fg-1)">FortyMM</span>
+<span class="scoreboard-display" style="color: var(--fg-1)">Nguyen · Okafor</span>
+</div>
+<figcaption class="ref-cap"><b>--font-display</b><span>wordmark, venue boards only</span></figcaption>
+</figure>
+</div>
+</section>
+
+<section class="ref-sec" data-testid="section-type-styles">
+<h2>Type styles</h2>
+<p>The role classes from <code>tokens.css</code>. Each row is one target: <code>type-&lt;style&gt;</code>.</p>
+<div class="ref-grid" style="grid-template-columns: minmax(0, 1fr); gap: 0">
+<sc-for list="{{styles}}" as="s" hint-placeholder-count="8">
+<div style="display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 24px; align-items: center; border-bottom: 1px solid var(--border-subtle)">
+<div style="display: flex; flex-direction: column; gap: 2px; padding: 16px 0">
+<span style="font: 600 14px/1.3 var(--font-ui); color: var(--fg-1)">.{{s.cls}}</span>
+<span style="font: 400 12px/1.4 var(--font-num); color: var(--fg-3)">{{s.spec}}</span>
+</div>
+<div class="ref-stage" data-testid="type-{{s.cls}}" data-spec="{{s.spec}}" style="padding: 16px 0">
+<span class="{{s.cls}}">{{s.sample}}</span>
+</div>
+</div>
+</sc-for>
+</div>
+</section>
+
+<section class="ref-sec" data-testid="section-size-scale">
+<h2>Size scale</h2>
+<p>48 / 32 / 24 / 20 / 17 / 15 / 13 / 12, plus 96 for the scoring screen (shown in Type styles).</p>
+<div class="ref-stage ref-stage--col" data-testid="type-scale" style="padding: 0; gap: 0">
+<sc-for list="{{sizes}}" as="z" hint-placeholder-count="8">
+<div data-testid="size-{{z.name}}" data-token="--{{z.name}}" style="display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 24px; align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--border-subtle)">
+<span style="font: 400 12px/1.4 var(--font-num); color: var(--fg-3)">--{{z.name}} · {{z.value}}</span>
+<span style="font-family: var(--font-ui); font-weight: 500; line-height: 1.2; color: var(--fg-1); font-size: var(--{{z.name}})">Table 3 is free</span>
+</div>
+</sc-for>
+</div>
+</section>
+
+<section class="ref-sec" data-testid="section-line-heights">
+<h2>Line heights</h2>
+<p>Two lines each at 20px so the leading is measurable.</p>
+<div class="ref-grid ref-grid--3">
+<sc-for list="{{leads}}" as="l" hint-placeholder-count="3">
+<figure class="ref-spec">
+<div class="ref-stage ref-stage--panel" data-testid="lh-{{l.name}}" data-token="--{{l.name}}" style="border-radius: 8px">
+<span style="font: 500 20px var(--font-ui); color: var(--fg-1); line-height: var(--{{l.name}}); box-shadow: inset 0 0 0 1px var(--border-subtle)">Okafor's singles runs<br>15 min over on Table 2</span>
+</div>
+<figcaption class="ref-cap"><b>--{{l.name}}</b><span>{{l.value}} · {{l.use}}</span></figcaption>
+</figure>
+</sc-for>
+</div>
+</section>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":2100}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      styles: [
+        { cls: 'h1', spec: '48 / 1.1 / 700 / -0.02em', sample: 'Round of 16' },
+        { cls: 'h2', spec: '32 / 1.3 / 600 / -0.01em', sample: 'Table 3 is free' },
+        { cls: 'h3', spec: '20 / 1.3 / 600', sample: 'Nguyen, Thanh vs Okafor, Daniel' },
+        { cls: 'body', spec: '15 / 1.5 / 400 · fg-2', sample: 'Your next match is at 19:40. You have 25 minutes to rest.' },
+        { cls: 'meta', spec: '13 / 1.3 / 400 · fg-3', sample: 'Riverside TT · 2,145' },
+        { cls: 'label', spec: '13 / 1.3 / 500 · fg-3', sample: 'Labels are sentence case, 13px, no letter-spacing' },
+        { cls: 'score', spec: 'mono 96 / 1 / 700 / -0.03em', sample: '11' },
+        { cls: 'scoreboard-display', spec: 'Bebas 48 / 1 / 400 / 0.01em', sample: 'Nguyen' }
+      ],
+      sizes: [
+        { name: 'text-3xl', value: '48px' }, { name: 'text-2xl', value: '32px' }, { name: 'text-xl', value: '24px' },
+        { name: 'text-lg', value: '20px' }, { name: 'text-md', value: '17px' }, { name: 'text-base', value: '15px' },
+        { name: 'text-sm', value: '13px' }, { name: 'text-xs', value: '12px' }
+      ],
+      leads: [
+        { name: 'lh-tight', value: '1.1', use: 'h1' },
+        { name: 'lh-snug', value: '1.3', use: 'h2, h3, labels' },
+        { name: 'lh-normal', value: '1.5', use: 'body, page default' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

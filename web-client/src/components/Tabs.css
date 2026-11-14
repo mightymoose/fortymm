@@ -1,0 +1,49 @@
+/* Tabs (kit.css, .fm-tabs): a row of tabs on a --border-subtle rule. The
+   selected tab is --fg-1, heavier, and underlined in the accent: weight and
+   underline, not only colour. Focus draws an accent edge inside the tab.
+   [data-forced-state] draws a state without causing it (forced-state.ts). */
+.tabs {
+  display: flex;
+  gap: var(--s-1);
+  overflow-x: auto;
+  box-shadow: inset 0 -1px 0 var(--border-subtle);
+  scrollbar-width: none;
+}
+.tabs__tab {
+  flex: none;
+  min-height: 44px;
+  padding: 0 var(--s-3);
+  border: 0;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  background: transparent;
+  box-shadow: inset 0 -2px 0 transparent;
+  color: var(--fg-3);
+  font: 500 var(--text-base) var(--font-ui);
+  cursor: pointer;
+}
+.tabs__tab:hover,
+.tabs__tab[data-forced-state='hover'] {
+  color: var(--fg-1);
+}
+.tabs__tab:focus-visible,
+.tabs__tab[data-forced-state='focus'] {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.tabs__tab[aria-selected='true'] {
+  color: var(--fg-1);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.tabs__tab[aria-selected='true']:is(
+    :focus-visible,
+    [data-forced-state='focus']
+  ) {
+  box-shadow:
+    inset 0 -2px 0 var(--accent),
+    inset 0 0 0 2px var(--accent);
+}
+.tabs__tab:disabled {
+  color: var(--fg-disabled);
+  cursor: not-allowed;
+}

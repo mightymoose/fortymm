@@ -1,0 +1,165 @@
+/* The design system's button (kit.css, .fm-btn). Every colour is a token;
+   sizes in px are the button's own. [data-forced-state] draws a state
+   without causing it (forced-state.ts). */
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  min-height: 40px;
+  padding: 0 var(--s-4);
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--fg-1);
+  font: 600 var(--text-base) / 1.2 var(--font-ui);
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-change) var(--ease-out),
+    border-color var(--dur-change),
+    transform var(--dur-press) var(--ease-out);
+}
+.button:focus-visible,
+.button[data-forced-state='focus'] {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+/* Press scales to 0.98 over --dur-press; there is no hover lift. */
+.button:active,
+.button[data-forced-state='pressed'] {
+  transform: scale(0.98);
+}
+
+.button--primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.button--primary:hover,
+.button--primary[data-forced-state='hover'] {
+  background: var(--accent-hover);
+}
+.button--primary:active,
+.button--primary[data-forced-state='pressed'] {
+  background: var(--accent-press);
+}
+
+.button--secondary {
+  border-color: var(--border-field);
+}
+.button--secondary:hover,
+.button--secondary[data-forced-state='hover'] {
+  background: var(--bg-hover);
+  border-color: var(--border-field-hover);
+}
+.button--secondary:active,
+.button--secondary[data-forced-state='pressed'] {
+  background: var(--ink-600);
+}
+
+.button--ghost {
+  color: var(--fg-2);
+}
+.button--ghost:hover,
+.button--ghost[data-forced-state='hover'] {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+.button--ghost:active,
+.button--ghost[data-forced-state='pressed'] {
+  background: var(--ink-600);
+}
+
+/* Danger is text and outline only. The kit's edge is --danger at 55% and its
+   pressed fill at 18%; both are mixed from the token here. */
+.button--danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+}
+.button--danger:hover,
+.button--danger[data-forced-state='hover'] {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+.button--danger:active,
+.button--danger[data-forced-state='pressed'] {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+}
+
+/* The confirmation of a destructive action. Its hover is --danger lifted
+   towards white, the kit's #FF8787. */
+.button--danger-solid {
+  background: var(--danger);
+  color: var(--ink-950);
+}
+.button--danger-solid:hover,
+.button--danger-solid[data-forced-state='hover'] {
+  background: color-mix(in srgb, var(--danger), white 19%);
+}
+
+.button--link {
+  min-height: 0;
+  padding: 0;
+  color: var(--ball-400);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.button--link:hover,
+.button--link[data-forced-state='hover'] {
+  color: var(--ball-200);
+}
+
+.button--sm {
+  min-height: 32px;
+  padding: 0 var(--s-3);
+  font-size: 14px;
+}
+.button--lg {
+  min-height: 48px;
+  padding: 0 var(--s-5);
+  font-size: 16px;
+}
+/* The score pad's +1 targets. */
+.button--xl {
+  min-height: 64px;
+  padding: 0 var(--s-5);
+  font-size: 18px;
+  border-radius: var(--r-lg);
+}
+.button--icon {
+  width: 40px;
+  padding: 0;
+}
+.button--icon.button--sm {
+  width: 32px;
+}
+
+/* Loading keeps the variant's colours and shows a static ring. */
+.button[aria-busy='true'] {
+  cursor: progress;
+  pointer-events: none;
+}
+.button[aria-busy='true']::before {
+  content: '';
+  flex: none;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  opacity: 0.8;
+}
+
+/* Disabled wins over every variant, and ignores hover and press. */
+.button:disabled,
+.button:disabled:is(:hover, :active, [data-forced-state]) {
+  background: var(--bg-panel);
+  color: var(--fg-disabled);
+  border-color: var(--border-subtle);
+  cursor: not-allowed;
+  transform: none;
+  text-decoration: none;
+}

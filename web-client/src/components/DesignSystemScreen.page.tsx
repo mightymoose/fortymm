@@ -19,6 +19,19 @@ export class DesignSystemScreenPage {
     return within(await this.header()).findByRole('img', { name: 'FortyMM' })
   }
 
+  // The section showing each control in each state.
+  controls() {
+    return screen.findByRole('region', { name: 'Controls' })
+  }
+
+  // A part of the controls section, by its heading ("Buttons", "Fields").
+  async controlsPart(name: string) {
+    return within(await this.controls()).findByRole('heading', {
+      level: 3,
+      name,
+    })
+  }
+
   // The page's title, in its header.
   async heading() {
     return within(await this.header()).findByRole('heading', {

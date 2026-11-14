@@ -1,0 +1,42 @@
+/* A segmented control (kit.css, .fm-seg): options on a --bg-panel tray. The
+   one that is on gets --accent-soft with --accent-text, in a heavier weight.
+   [data-forced-state] draws a state without causing it (forced-state.ts). */
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--r-md);
+  background: var(--bg-panel);
+  box-shadow: inset 0 0 0 1px var(--border-control);
+}
+.segmented__option {
+  min-height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--fg-2);
+  font: 500 14px var(--font-ui);
+  cursor: pointer;
+  transition: background-color var(--dur-change);
+}
+.segmented__option:hover,
+.segmented__option[data-forced-state='hover'] {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+.segmented__option:focus-visible,
+.segmented__option[data-forced-state='focus'] {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.segmented__option[aria-checked='true'] {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.segmented__option:disabled {
+  background: none;
+  color: var(--fg-disabled);
+  cursor: not-allowed;
+}

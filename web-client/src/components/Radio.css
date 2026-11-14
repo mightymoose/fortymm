@@ -1,0 +1,15 @@
+/* A radio; what it shares with a checkbox is in choice.css. Selected: an
+   accent edge and dot. */
+.radio {
+  border-radius: 50%;
+}
+.radio:checked {
+  border-color: var(--accent);
+}
+.radio:checked::after {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+}

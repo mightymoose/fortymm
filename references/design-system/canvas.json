@@ -1,0 +1,89 @@
+{
+"v": 3,
+"createdOnFiles": {
+"v": 1,
+"at": "2026-11-14T04:47:00Z"
+},
+"title": "FortyMM reference sheet",
+"launch": {
+"view": "canvas"
+},
+"pages": [],
+"boards": {
+"Main.dc.html": {
+"x": 0,
+"y": 0,
+"w": 1280,
+"h": 2200,
+"title": "Colour"
+},
+"Typography.dc.html": {
+"x": 1360,
+"y": 0,
+"w": 1280,
+"h": 2100,
+"title": "Type"
+},
+"Foundations.dc.html": {
+"x": 2720,
+"y": 0,
+"w": 1280,
+"h": 1900,
+"title": "Spacing, radii, shadows, icons"
+},
+"Controls.dc.html": {
+"x": 0,
+"y": 2640,
+"w": 1280,
+"h": 2600,
+"title": "Controls: state matrix"
+},
+"Feedback.dc.html": {
+"x": 1360,
+"y": 2640,
+"w": 1280,
+"h": 2600,
+"title": "Containers, feedback, overlays"
+},
+"Match.dc.html": {
+"x": 2720,
+"y": 2640,
+"w": 1280,
+"h": 2400,
+"title": "Match, scoring, schedule"
+}
+},
+"order": [
+"Main.dc.html",
+"Typography.dc.html",
+"Foundations.dc.html",
+"Controls.dc.html",
+"Feedback.dc.html",
+"Match.dc.html"
+],
+"notes": {
+"title-tokens": {
+"x": 0,
+"y": -300,
+"text": "FortyMM v2.1 reference: tokens",
+"kind": "title1",
+"maxW": 4000
+},
+"title-components": {
+"x": 0,
+"y": 2340,
+"text": "Components",
+"kind": "title1",
+"maxW": 4000
+}
+},
+"designSystems": [
+{
+"title": "FortyMM Design System",
+"namespace": "fortymm",
+"artifact": "https://claude.ai/code/artifact/8d28bfae-b460-4dba-a41b-f3586004c9c1",
+"version": "1794595962-00db",
+"copiedAt": "2026-11-14T04:47:00Z"
+}
+]
+}

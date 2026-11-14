@@ -1,0 +1,9 @@
+/* A one-line text input; its edge and states are in field-control.css. */
+.text-input {
+  height: 44px;
+  padding: 0 var(--s-3);
+}
+.text-input--numeric {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+}

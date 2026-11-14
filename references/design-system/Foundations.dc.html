@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FortyMM reference: spacing, radii, shadows, icons</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/9f72ae45fcd4326d7bab39a709ac4598">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600;700&amp;family=Bebas+Neue&amp;display=swap">
+<style>
+body{margin:0;background:#0B0D12}
+a{color:#FF9A4A}a:hover{color:#FFCFA8}
+</style>
+</helmet>
+<main class="ref fm-test" data-testid="sheet-foundations" style="height: 1900px">
+<header class="ref-head">
+<div>
+<h1>Spacing, radii, shadows, icons</h1>
+<p>Layout tokens, the only two shadows, the focus ring, status markers and the Lucide icon set at 20px / 1.75 stroke.</p>
+</div>
+<span class="ref-id">ref/foundations</span>
+</header>
+
+<section class="ref-sec" data-testid="section-spacing">
+<h2>Spacing</h2>
+<p>4px base. 8–12 within a row, 16–24 between groups, 48–64 between page sections.</p>
+<div class="ref-stage ref-stage--col" data-testid="spacing-scale" style="padding: 0; gap: 0">
+<sc-for list="{{spaces}}" as="s" hint-placeholder-count="9">
+<div data-testid="space-{{s.name}}" data-token="--{{s.name}}" data-value="{{s.value}}" style="display: grid; grid-template-columns: 160px 80px minmax(0, 1fr); gap: 16px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border-subtle)">
+<span style="font: 500 13px/1.3 var(--font-ui); color: var(--fg-1)">--{{s.name}}</span>
+<span style="font: 400 12px/1.3 var(--font-num); color: var(--fg-3)">{{s.value}}</span>
+<span style="display: block; height: 16px; background: var(--chalk-300); border-radius: 2px; width: var(--{{s.name}})"></span>
+</div>
+</sc-for>
+</div>
+</section>
+
+<section class="ref-sec" data-testid="section-radii">
+<h2>Radii</h2>
+<p>6 chips and inputs · 8 buttons and cards · 12 sheets, dialogs, score pads · pill for filter chips only.</p>
+<div class="ref-grid ref-grid--4">
+<sc-for list="{{radii}}" as="r" hint-placeholder-count="4">
+<figure class="ref-spec">
+<div class="ref-stage" data-testid="radius-{{r.name}}" data-token="--{{r.name}}" data-value="{{r.value}}" style="justify-content: center">
+<span style="display: block; width: 160px; height: 96px; background: var(--bg-panel); box-shadow: inset 0 0 0 1px var(--border-field); border-radius: var(--{{r.name}})"></span>
+</div>
+<figcaption class="ref-cap"><b>--{{r.name}}</b><span>{{r.value}} · {{r.use}}</span></figcaption>
+</figure>
+</sc-for>
+</div>
+</section>
+
+<section class="ref-sec" data-testid="section-shadows">
+<h2>Shadows and focus</h2>
+<p>Overlays only. Nothing in the page flow has a shadow. Focus is always the same 2px orange ring with a dark gap.</p>
+<div class="ref-grid ref-grid--3">
+<figure class="ref-spec">
+<div class="ref-stage" data-testid="shadow-overlay" data-token="--shadow-overlay" style="justify-content: center; padding: 40px">
+<span style="display: block; width: 200px; height: 96px; background: var(--bg-group); border: 1px solid var(--border-control); border-radius: 12px; box-shadow: var(--shadow-overlay)"></span>
+</div>
+<figcaption class="ref-cap"><b>--shadow-overlay</b><span>menus, dialogs, toasts</span></figcaption>
+</figure>
+<figure class="ref-spec">
+<div class="ref-stage" data-testid="shadow-tooltip" data-token="--shadow-tooltip" style="justify-content: center; padding: 40px">
+<span style="display: block; width: 200px; height: 96px; background: var(--bg-group); border: 1px solid var(--border-control); border-radius: 6px; box-shadow: var(--shadow-tooltip)"></span>
+</div>
+<figcaption class="ref-cap"><b>--shadow-tooltip</b><span>tooltips</span></figcaption>
+</figure>
+<figure class="ref-spec">
+<div class="ref-stage" data-testid="focus-ring" data-token="--focus-ring" style="justify-content: center; padding: 40px">
+<span style="display: block; width: 200px; height: 96px; background: var(--bg-panel); border-radius: 8px; box-shadow: var(--focus-ring)"></span>
+</div>
+<figcaption class="ref-cap"><b>--focus-ring</b><span>2px ink-950 + 2px ball-500</span></figcaption>
+</figure>
+</div>
+</section>
+
+<section class="ref-sec" data-testid="section-status-markers">
+<h2>Status markers</h2>
+<p>One signal per element. Each status has a hue and a non-colour cue (word, shape or sign).</p>
+<div class="ref-grid ref-grid--4">
+<figure class="ref-spec"><div class="ref-stage" data-testid="marker-live"><span class="live-marker">Live</span></div><figcaption class="ref-cap"><b>.live-marker</b><span>--live</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage" data-testid="marker-serve"><span class="serve-marker" role="img" aria-label="Serving"></span><span style="font: 500 17px/1.3 var(--font-ui)">Nguyen, Thanh</span></div><figcaption class="ref-cap"><b>.serve-marker</b><span>--serving</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage" data-testid="marker-rating-up"><span class="rating-up">▲ +12</span></div><figcaption class="ref-cap"><b>.rating-up</b><span>--rating-up</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage" data-testid="marker-rating-down"><span class="rating-down">▼ −8</span></div><figcaption class="ref-cap"><b>.rating-down</b><span>--rating-down</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage" data-testid="marker-rest"><span class="fm-rest"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></span>Rest until <span class="num">19:35</span></span></div><figcaption class="ref-cap"><b>.fm-rest</b><span>--rest</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage" data-testid="marker-offline"><span class="fm-status fm-status--offline">Offline · updated 11:42</span></div><figcaption class="ref-cap"><b>.fm-status--offline</b><span>--fg-3 ring</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage" data-testid="marker-conflict"><span class="fm-status fm-status--conflict"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg></span>Needs decision</span></div><figcaption class="ref-cap"><b>.fm-status--conflict</b><span>--conflict</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage" data-testid="marker-danger"><span class="fm-status fm-status--danger"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="8" y2="12"></line><line x1="12" x2="12.01" y1="16" y2="16"></line></svg></span>Withdrawn</span></div><figcaption class="ref-cap"><b>.fm-status--danger</b><span>--danger</span></figcaption></figure>
+</div>
+</section>
+
+<section class="ref-sec" data-testid="section-icons">
+<h2>Icons</h2>
+<p>Lucide, stroke 1.75, 20px (16px in dense tables). Inherit <code>currentColor</code>. No emoji.</p>
+<div class="ref-stage" data-testid="icon-set" style="gap: 8px; color: var(--fg-2)">
+<span class="fm-ic" data-testid="icon-check" aria-hidden="true" style="width: 20px; height: 20px"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg></span>
+<span class="fm-ic" data-testid="icon-circle-check" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg></span>
+<span class="fm-ic" data-testid="icon-x" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></span>
+<span class="fm-ic" data-testid="icon-plus" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg></span>
+<span class="fm-ic" data-testid="icon-triangle-alert" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg></span>
+<span class="fm-ic" data-testid="icon-circle-alert" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="8" y2="12"></line><line x1="12" x2="12.01" y1="16" y2="16"></line></svg></span>
+<span class="fm-ic" data-testid="icon-info" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg></span>
+<span class="fm-ic" data-testid="icon-clock" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></span>
+<span class="fm-ic" data-testid="icon-calendar" aria-hidden="true"><svg viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="4" rx="2"></rect><path d="M16 2v4"></path><path d="M8 2v4"></path><path d="M3 10h18"></path></svg></span>
+<span class="fm-ic" data-testid="icon-search" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg></span>
+<span class="fm-ic" data-testid="icon-chevron-down" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"></path></svg></span>
+<span class="fm-ic" data-testid="icon-ellipsis" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"></circle><circle cx="19" cy="12" r="1"></circle><circle cx="5" cy="12" r="1"></circle></svg></span>
+<span class="fm-ic" data-testid="icon-undo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"></path></svg></span>
+<span class="fm-ic fm-ic--sm" data-testid="icon-check-sm" aria-hidden="true" style="margin-left: 16px"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg></span>
+<span class="fm-ic fm-ic--sm" data-testid="icon-clock-sm" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></span>
+<span class="fm-ic fm-ic--sm" data-testid="icon-search-sm" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg></span>
+</div>
+</section>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      spaces: [
+        { name: 's-1', value: '4px' }, { name: 's-2', value: '8px' }, { name: 's-3', value: '12px' },
+        { name: 's-4', value: '16px' }, { name: 's-5', value: '20px' }, { name: 's-6', value: '24px' },
+        { name: 's-8', value: '32px' }, { name: 's-12', value: '48px' }, { name: 's-16', value: '64px' }
+      ],
+      radii: [
+        { name: 'r-sm', value: '6px', use: 'chips, inputs' },
+        { name: 'r-md', value: '8px', use: 'buttons, cards' },
+        { name: 'r-lg', value: '12px', use: 'sheets, dialogs' },
+        { name: 'r-pill', value: '999px', use: 'filter chips' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

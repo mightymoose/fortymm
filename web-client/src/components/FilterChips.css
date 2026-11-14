@@ -1,0 +1,6 @@
+/* A row of filter chips, wrapping. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}

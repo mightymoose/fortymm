@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FortyMM reference: colour</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/9f72ae45fcd4326d7bab39a709ac4598">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600;700&amp;family=Bebas+Neue&amp;display=swap">
+<style>
+body{margin:0;background:#0B0D12}
+a{color:#FF9A4A}a:hover{color:#FFCFA8}
+</style>
+</helmet>
+<main class="ref fm-test" data-testid="sheet-colour" style="height: 2200px">
+<header class="ref-head">
+<div>
+<h1>Colour</h1>
+<p>Every colour token in FortyMM v2.1. Each swatch is a screenshot target (<code>color-&lt;token&gt;</code>) and paints from the CSS variable, so a token change shows up as a diff. Expected values are in <code>data-value</code>.</p>
+</div>
+<span class="ref-id">ref/colour · dark only</span>
+</header>
+
+<sc-for list="{{groups}}" as="g" hint-placeholder-count="5">
+<section class="ref-sec" data-testid="section-{{g.id}}">
+<h2>{{g.title}}</h2>
+<p>{{g.note}}</p>
+<div class="ref-grid ref-grid--{{g.cols}}">
+<sc-for list="{{g.items}}" as="c" hint-placeholder-count="6">
+<div class="ref-sw" data-testid="color-{{c.name}}" data-token="--{{c.name}}" data-value="{{c.value}}">
+<div class="ref-sw__chip" style="background: var(--{{c.name}})"></div>
+<div class="ref-sw__meta"><b>--{{c.name}}</b><span>{{c.value}}</span></div>
+</div>
+</sc-for>
+</div>
+</section>
+</sc-for>
+
+<section class="ref-sec" data-testid="section-text-on-surfaces">
+<h2>Text on surfaces</h2>
+<p>Foreground tokens on each surface they are approved for. Disabled text sits below 4.5:1 by design.</p>
+<div class="ref-grid ref-grid--3">
+<sc-for list="{{surfaces}}" as="s" hint-placeholder-count="3">
+<div class="ref-stage ref-stage--col" data-testid="text-on-{{s.name}}" style="background: var(--{{s.name}}); border-radius: 8px; gap: 6px; padding: 20px">
+<span class="label" style="margin-bottom: 4px">--{{s.name}}</span>
+<span style="font: 600 17px/1.3 var(--font-ui); color: var(--fg-1)">fg-1 · Nguyen, Thanh 11</span>
+<span style="font: 400 15px/1.5 var(--font-ui); color: var(--fg-2)">fg-2 · Your next match is at 19:40.</span>
+<span style="font: 400 13px/1.3 var(--font-ui); color: var(--fg-3)">fg-3 · Riverside TT · 2,145</span>
+<span style="font: 400 15px/1.5 var(--font-ui); color: var(--fg-placeholder)">fg-placeholder · Search players</span>
+<span style="font: 400 15px/1.5 var(--font-ui); color: var(--fg-disabled)">fg-disabled · Call to table</span>
+<span style="font: 500 15px/1.5 var(--font-ui); color: var(--accent-text); background: var(--accent-soft); align-self: flex-start; padding: 2px 8px; border-radius: 6px">accent-text on accent-soft</span>
+</div>
+</sc-for>
+</div>
+</section>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":2200}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const t = (name, value) => ({ name, value });
+    return {
+      groups: [
+        { id: 'ink', title: 'Ink', note: 'Surfaces, dividers and edges. Darkest first.', cols: 7, items: [
+          t('ink-950', '#0B0D12'), t('ink-900', '#11141B'), t('ink-800', '#171B24'), t('ink-700', '#1F2430'),
+          t('ink-600', '#2A3040'), t('ink-500', '#3A4152'), t('ink-400', '#535B6E') ] },
+        { id: 'chalk-ball', title: 'Chalk and ball', note: 'Chalk is text. Ball (orange) is actions and selection only.', cols: 8, items: [
+          t('chalk-50', '#F7F8FB'), t('chalk-100', '#E4E7EF'), t('chalk-300', '#A9B0C2'), t('chalk-500', '#7C8396'),
+          t('ball-200', '#FFCFA8'), t('ball-400', '#FF9A4A'), t('ball-500', '#FF7A1A'), t('ball-600', '#E85E00') ] },
+        { id: 'status-hues', title: 'Status hues and fixed values', note: 'Each status has its own hue plus a non-colour cue.', cols: 6, items: [
+          t('red-400', '#F2496B'), t('green-400', '#3DD68C'), t('amber-300', '#F5C542'), t('blue-300', '#7AB8FF'),
+          t('danger', '#FF6B6B'), t('border-field', '#6B7389') ] },
+        { id: 'action', title: 'Action and selection', note: 'Primary buttons, focus ring, links, selected tab, nav item or chip.', cols: 6, items: [
+          t('accent', '#FF7A1A'), t('accent-hover', '#FF9A4A'), t('accent-press', '#E85E00'),
+          t('accent-soft', 'rgba(255,122,26,0.14)'), t('accent-text', '#FFCFA8'), t('on-accent', '#0B0D12') ] },
+        { id: 'status', title: 'Status', note: 'Live, serving, winner/loser, rating, conflict, rest, danger, success.', cols: 6, items: [
+          t('live', '#F2496B'), t('serving', '#F7F8FB'), t('winner', '#F7F8FB'), t('loser', '#A9B0C2'),
+          t('rating-up', '#3DD68C'), t('rating-down', '#A9B0C2'), t('conflict', '#F5C542'), t('conflict-soft', 'rgba(245,197,66,0.10)'),
+          t('rest', '#7AB8FF'), t('rest-soft', 'rgba(122,184,255,0.10)'), t('danger-soft', 'rgba(255,107,107,0.10)'), t('success', '#3DD68C') ] },
+        { id: 'text-surface-border', title: 'Text, surfaces and borders', note: 'Most screens use bg-app and bg-panel only.', cols: 6, items: [
+          t('fg-1', '#F7F8FB'), t('fg-2', '#E4E7EF'), t('fg-3', '#A9B0C2'), t('fg-placeholder', '#7C8396'), t('fg-disabled', '#535B6E'),
+          t('bg-app', '#0B0D12'), t('bg-panel', '#11141B'), t('bg-group', '#171B24'), t('bg-hover', '#1F2430'),
+          t('border-subtle', '#2A3040'), t('border-control', '#3A4152'), t('border-field-hover', '#A9B0C2') ] }
+      ],
+      surfaces: [ { name: 'bg-app' }, { name: 'bg-panel' }, { name: 'bg-group' } ]
+    };
+  }
+}
+</script>
+</body>
+</html>

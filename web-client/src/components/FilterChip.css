@@ -1,0 +1,49 @@
+/* A filter chip (kit.css, .fm-chip): a pill with a --border-field edge, the
+   only control with a pill radius. On, it gets --accent-soft with
+   --accent-text and a check. 34px tall, edge included.
+   [data-forced-state] draws a state without causing it (forced-state.ts). */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 14px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-field);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--fg-2);
+  font: 500 14px var(--font-ui);
+  cursor: pointer;
+  transition: background-color var(--dur-change);
+}
+.chip:hover,
+.chip[data-forced-state='hover'] {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+.chip:focus-visible,
+.chip[data-forced-state='focus'] {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.chip[aria-pressed='true'] {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.chip[aria-pressed='true']::before {
+  content: '';
+  width: 9px;
+  height: 4px;
+  margin: -3px 1px 0 -2px;
+  border-bottom: 2px solid currentColor;
+  border-left: 2px solid currentColor;
+  transform: rotate(-45deg);
+}
+.chip:disabled {
+  border-color: var(--border-subtle);
+  background: none;
+  color: var(--fg-disabled);
+  cursor: not-allowed;
+}
