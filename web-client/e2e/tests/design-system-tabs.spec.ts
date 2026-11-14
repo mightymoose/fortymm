@@ -19,9 +19,9 @@ test('a tab reached with the keyboard shows its focus ring', async ({
   designSystem,
   page,
 }) => {
-  // From the page's start: the tabs are the first stops after the page's
-  // header, which has none.
-  await page.keyboard.press('Tab')
+  // From the tab before it (the layout's top bar and sidebar come first in
+  // the tab order), one Tab on: focus by keyboard, the current page's tab.
+  await designSystem.tabs.getByRole('link', { name: 'Colour' }).focus()
   await page.keyboard.press('Tab')
   await expect(designSystem.tabs.getByRole('link', { name: 'Type' })).toBeFocused()
 
