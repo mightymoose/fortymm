@@ -1,8 +1,10 @@
+import { ControlsSection } from './ControlsSection.tsx'
+
 // The design system page, at /design-system: where each component of the
-// FortyMM design system will be shown as the app builds it, to check against
-// the design system artifact. For now only its header: the wordmark, in Bebas
-// Neue, and the page's title, in Space Grotesk. Component sections go in
-// <main>.
+// FortyMM design system is shown as the app builds it, to check against the
+// design system's reference sheet (references/design-system/). Its header
+// has the wordmark, in Bebas Neue, and the page's title, in Space Grotesk;
+// each board's section goes in <main>: so far, the controls.
 export function DesignSystemScreen() {
   return (
     <>
@@ -20,7 +22,9 @@ export function DesignSystemScreen() {
           to check against the design system.
         </p>
       </header>
-      <main aria-label="Components"></main>
+      <main aria-label="Components">
+        <ControlsSection />
+      </main>
     </>
   )
 }

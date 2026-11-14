@@ -1,0 +1,130 @@
+/* The Controls section's layout, after the reference sheet's (its ref-*
+   classes in references/design-system/reference.css): sections, the state
+   matrices, and the stages each target sits on. Nothing here styles a
+   control, except where the board does for its layout (a matrix's fields are
+   132px wide; a lone tab has no rule under it). */
+.controls__intro {
+  margin: 0 0 var(--s-8);
+  color: var(--fg-3);
+}
+
+.controls__section {
+  margin-bottom: var(--s-12);
+}
+.controls__section:last-child {
+  margin-bottom: 0;
+}
+.controls__section > h3 {
+  margin: 0 0 var(--s-1);
+}
+.controls__description {
+  margin: 0 0 var(--s-5);
+  font: 400 14px / var(--lh-normal) var(--font-ui);
+  color: var(--fg-3);
+}
+
+/* A stage: what a screenshot of a target takes. Its example sits in a row,
+   centred; --bottom aligns a row to the bottom; --column stretches it to the
+   stage's width; --block lets it fill the stage. */
+.controls__stage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--s-3);
+  min-width: 0;
+  padding: var(--s-4);
+  background: var(--bg-app);
+}
+.controls__stage--bottom {
+  align-items: flex-end;
+}
+.controls__stage--column {
+  flex-direction: column;
+  align-items: stretch;
+}
+.controls__stage--block {
+  display: block;
+}
+/* A target inside a stage, sized to what it holds. */
+.controls__target {
+  display: inline-flex;
+}
+
+/* Examples below a matrix, three to a row, each captioned. */
+.controls__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s-4);
+}
+.controls__section > .state-matrix + .controls__grid {
+  margin-top: var(--s-4);
+}
+.controls__spec {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  min-width: 0;
+  margin: 0;
+}
+.controls__caption {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s-2);
+  font: 400 var(--text-xs) / var(--lh-snug) var(--font-num);
+  color: var(--fg-3);
+}
+.controls__caption b {
+  font: 500 var(--text-sm) / var(--lh-snug) var(--font-ui);
+  color: var(--fg-2);
+}
+
+/* A state matrix: a column per state, a row per control, rows divided by
+   --border-subtle. */
+.state-matrix {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.state-matrix th {
+  padding: 0 var(--s-2) 10px 0;
+  font: 500 var(--text-sm) var(--font-ui);
+  color: var(--fg-3);
+  text-align: left;
+  white-space: nowrap;
+}
+.state-matrix tbody th {
+  box-sizing: border-box;
+  width: 140px;
+  padding: 0 var(--s-4) 0 0;
+  font: 600 14px / var(--lh-snug) var(--font-ui);
+  color: var(--fg-1);
+}
+.state-matrix td {
+  padding: 0;
+  vertical-align: middle;
+}
+.state-matrix tbody tr + tr > * {
+  border-top: 1px solid var(--border-subtle);
+}
+.state-matrix .controls__stage {
+  padding: var(--s-4) var(--s-3);
+}
+/* A state the control doesn't have. */
+.state-matrix .state-matrix__none {
+  padding-left: var(--s-3);
+  font: 400 14px var(--font-ui);
+  color: var(--ink-500);
+}
+/* The board's layout: fields in the matrix are 132px wide, and an error
+   under one is set a size smaller. */
+.state-matrix :is(.text-input, .select) {
+  width: 132px;
+}
+.state-matrix .field__error {
+  font-size: var(--text-xs);
+}
+/* A tab shown alone has no tab row, so no rule under it. */
+.controls__lone-tab .tabs {
+  box-shadow: none;
+}

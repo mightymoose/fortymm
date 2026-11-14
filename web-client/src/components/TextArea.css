@@ -1,0 +1,8 @@
+/* A text area; its edge and states are in field-control.css. */
+.text-area {
+  display: block;
+  min-height: 96px;
+  padding: 10px var(--s-3);
+  line-height: var(--lh-normal);
+  resize: vertical;
+}

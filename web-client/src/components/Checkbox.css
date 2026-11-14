@@ -1,0 +1,32 @@
+/* A checkbox; what it shares with a radio is in choice.css. Checked and
+   mixed fill with the accent: a check, or a dash. */
+.checkbox {
+  border-radius: 4px;
+}
+.checkbox:is(:checked, :indeterminate) {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.checkbox:checked::after {
+  content: '';
+  width: 10px;
+  height: 5px;
+  border-bottom: 2px solid var(--on-accent);
+  border-left: 2px solid var(--on-accent);
+  transform: translateY(-1px) rotate(-45deg);
+}
+.checkbox:indeterminate::after {
+  content: '';
+  width: 10px;
+  height: 2px;
+  border: 0;
+  background: var(--on-accent);
+  transform: none;
+}
+.checkbox:disabled:checked {
+  border-color: var(--ink-600);
+  background: var(--ink-600);
+}
+.checkbox:disabled:checked::after {
+  border-color: var(--fg-3);
+}

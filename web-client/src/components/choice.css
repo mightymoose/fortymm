@@ -1,0 +1,46 @@
+/* What a checkbox and a radio share (kit.css, .fm-check, .fm-radio): a native
+   input drawn by us, inside its label. Unchecked, its edge is --border-field;
+   selected always has a non-colour cue (a check, a dash, a dot).
+   [data-forced-state] draws a state without causing it (forced-state.ts). */
+.choice {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 10px;
+  font: 400 var(--text-base) / 1.4 var(--font-ui);
+  color: var(--fg-1);
+  cursor: pointer;
+}
+.choice__input {
+  appearance: none;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 1px 0 0;
+  box-sizing: border-box;
+  border: 1.5px solid var(--border-field);
+  background: var(--bg-app);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-change),
+    background-color var(--dur-change);
+}
+.choice__input:hover,
+.choice__input[data-forced-state='hover'] {
+  border-color: var(--border-field-hover);
+}
+.choice__input:focus-visible,
+.choice__input[data-forced-state='focus'] {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.choice:has(.choice__input:disabled) {
+  color: var(--fg-3);
+  cursor: not-allowed;
+}
+.choice__input:disabled {
+  border-color: var(--ink-600);
+  background: var(--bg-panel);
+  cursor: not-allowed;
+}
