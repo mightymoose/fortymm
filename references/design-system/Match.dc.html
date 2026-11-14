@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FortyMM reference: match, scoring, schedule</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/9f72ae45fcd4326d7bab39a709ac4598">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600;700&amp;family=Bebas+Neue&amp;display=swap">
+<style>
+body{margin:0;background:#0B0D12}
+a{color:#FF9A4A}a:hover{color:#FFCFA8}
+</style>
+</helmet>
+<main class="ref fm-test" data-testid="sheet-match" style="height: 2400px">
+<header class="ref-head">
+<div>
+<h1>Match, scoring, schedule</h1>
+<p>Match information first. Winners go bold, losers step down to <code>--loser</code>. One red Live marker per live match. Content is fixed so screenshots stay deterministic.</p>
+</div>
+<span class="ref-id">ref/match</span>
+</header>
+
+<section class="ref-sec" data-testid="section-match-row">
+<h2>Match row</h2>
+<p>Columns: name (wraps, never truncates) · serve marker · games won · current points. Column labels once per list.</p>
+<div class="ref-grid ref-grid--2">
+<figure class="ref-spec">
+<div class="ref-stage" data-testid="match-row--live" style="display: block">
+<div class="fm-matches">
+<div class="fm-match" data-state="live">
+<div class="fm-match__head"><span class="live-marker">Live</span><span>Table 3 · Open singles · R16</span></div>
+<div class="fm-match__p fm-match__cols" aria-hidden="true"><span></span><span></span><span>Games</span><span>Points</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Nguyen, Thanh<small>Riverside TT · 2,145</small></span><span class="serve-marker" role="img" aria-label="Serving"></span><span class="fm-match__games">2</span><span class="fm-match__pts">9</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Okafor, Daniel<small>Northside · 2,098</small></span><span></span><span class="fm-match__games">1</span><span class="fm-match__pts">7</span></div>
+<button class="fm-match__toggle" aria-expanded="false">Game scores <span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"></path></svg></span></button>
+</div>
+</div>
+</div>
+<figcaption class="ref-cap"><b>live</b><span>.fm-match[data-state=live]</span></figcaption>
+</figure>
+<figure class="ref-spec">
+<div class="ref-stage" data-testid="match-row--final" style="display: block">
+<div class="fm-matches">
+<div class="fm-match" data-state="final">
+<div class="fm-match__head"><span class="fm-status">Final</span><span>Table 1 · Open singles · R16</span></div>
+<div class="fm-match__p fm-match__cols" aria-hidden="true"><span></span><span></span><span>Games</span></div>
+<div class="fm-match__p w"><span class="fm-match__name">Park, Ji-ho<small>Riverside TT · 1,987 <span class="rating-up">▲ +12</span></small></span><span></span><span class="fm-match__games">3</span></div>
+<div class="fm-match__p l"><span class="fm-match__name">Kowalski, Anna<small>Lakeview · 2,010 <span class="rating-down">▼ −8</span></small></span><span></span><span class="fm-match__games">1</span></div>
+<span class="fm-match__scores">11–7 · 9–11 · 11–5 · 11–8</span>
+</div>
+</div>
+</div>
+<figcaption class="ref-cap"><b>final</b><span>winner bold · loser --loser</span></figcaption>
+</figure>
+<figure class="ref-spec">
+<div class="ref-stage" data-testid="match-row--upcoming" style="display: block">
+<div class="fm-matches">
+<div class="fm-match" data-state="upcoming">
+<div class="fm-match__head"><span class="num">12:50</span><span>Table 2 · Doubles · QF</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Okafor, Daniel / Park, Ji-ho</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Silva, Marco / Chen, Wei</span></div>
+<span class="fm-rest"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></span>Okafor rests until <span class="num">12:40</span></span>
+</div>
+</div>
+</div>
+<figcaption class="ref-cap"><b>upcoming</b><span>names only + rest</span></figcaption>
+</figure>
+<figure class="ref-spec">
+<div class="ref-stage" data-testid="match-row--offline" style="display: block">
+<div class="fm-matches">
+<div class="fm-match" data-state="offline">
+<div class="fm-match__head"><span class="fm-status fm-status--offline">Offline · updated 11:42</span><span>Table 4 · Open singles · R16</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Silva, Marco</span><span class="serve-marker" role="img" aria-label="Serving"></span><span class="fm-match__games">1</span><span class="fm-match__pts">4</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Chen, Wei</span><span></span><span class="fm-match__games">1</span><span class="fm-match__pts">6</span></div>
+</div>
+</div>
+</div>
+<figcaption class="ref-cap"><b>offline</b><span>greyed scores + last update</span></figcaption>
+</figure>
+<figure class="ref-spec">
+<div class="ref-stage" data-testid="match-row--conflict" style="display: block">
+<div class="fm-matches">
+<div class="fm-match" data-state="conflict">
+<div class="fm-match__head"><span class="fm-status fm-status--conflict"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg></span>Needs decision</span><span>Table 2 · Doubles · QF · <span class="num">12:50</span></span></div>
+<div class="fm-match__p"><span class="fm-match__name">Okafor, Daniel / Park, Ji-ho</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Silva, Marco / Chen, Wei</span></div>
+</div>
+</div>
+</div>
+<figcaption class="ref-cap"><b>conflict</b><span>amber status, names only</span></figcaption>
+</figure>
+<figure class="ref-spec">
+<div class="ref-stage" data-testid="match-list" style="display: block">
+<div class="fm-matches">
+<div class="fm-match" data-state="live">
+<div class="fm-match__p"><span class="fm-match__name">Nguyen, Thanh</span><span class="serve-marker" role="img" aria-label="Serving"></span><span class="fm-match__games">2</span><span class="fm-match__pts">9</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Okafor, Daniel</span><span></span><span class="fm-match__games">1</span><span class="fm-match__pts">7</span></div>
+</div>
+<div class="fm-match" data-state="final">
+<div class="fm-match__p w"><span class="fm-match__name">Park, Ji-ho</span><span></span><span class="fm-match__games">3</span></div>
+<div class="fm-match__p l"><span class="fm-match__name">Kowalski, Anna</span><span></span><span class="fm-match__games">1</span></div>
+</div>
+</div>
+</div>
+<figcaption class="ref-cap"><b>list</b><span>.fm-matches dividers</span></figcaption>
+</figure>
+</div>
+</section>
+
+<section class="ref-sec" data-testid="section-scoring">
+<h2>Score entry and game history</h2>
+<p>96px points, 64px "+1" targets, Undo last point. Game winner bold, current game highlighted.</p>
+<div class="ref-grid" style="grid-template-columns: minmax(0, 3fr) minmax(0, 2fr)">
+<figure class="ref-spec">
+<div class="ref-stage" data-testid="ex-score-entry" style="display: block">
+<div class="fm-scorepad">
+<div class="fm-scorepad__side">
+<div class="fm-scorepad__name">Nguyen, Thanh <span class="serve-marker" role="img" aria-label="Serving"></span></div>
+<div class="fm-scorepad__games">Games <b>2</b></div>
+<div class="fm-scorepad__pts">9</div>
+<button class="fm-btn fm-btn--primary fm-btn--xl">+1 Nguyen</button>
+</div>
+<div class="fm-scorepad__side">
+<div class="fm-scorepad__name">Okafor, Daniel</div>
+<div class="fm-scorepad__games">Games <b>1</b></div>
+<div class="fm-scorepad__pts">7</div>
+<button class="fm-btn fm-btn--primary fm-btn--xl">+1 Okafor</button>
+</div>
+<div class="fm-scorepad__bar"><button class="fm-btn fm-btn--secondary"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"></path></svg></span>Undo last point</button><span class="meta">Game 4 · best of 5</span></div>
+</div>
+</div>
+<figcaption class="ref-cap"><b>.fm-scorepad</b><span>score in --text-score</span></figcaption>
+</figure>
+<figure class="ref-spec">
+<div class="ref-stage" data-testid="ex-game-history" style="display: block">
+<table class="fm-games">
+<thead><tr><th scope="col"><span class="fm-sr">Player</span></th><th scope="col">1</th><th scope="col">2</th><th scope="col">3</th><th scope="col" class="cur">4</th></tr></thead>
+<tbody>
+<tr><th scope="row">Nguyen, Thanh</th><td class="w">11</td><td>9</td><td class="w">11</td><td class="cur">9</td></tr>
+<tr><th scope="row">Okafor, Daniel</th><td>7</td><td class="w">11</td><td>5</td><td class="cur">7</td></tr>
+</tbody>
+</table>
+</div>
+<figcaption class="ref-cap"><b>.fm-games</b><span>game 4 current</span></figcaption>
+</figure>
+</div>
+</section>
+
+<section class="ref-sec" data-testid="section-schedule">
+<h2>Schedule blocks</h2>
+<p>Surnames stacked. Each state has its own edge or fill plus a word. Selected is an orange edge.</p>
+<div class="ref-grid ref-grid--5">
+<figure class="ref-spec"><div class="ref-stage" data-testid="slot--scheduled"><button class="fm-slot" data-state="scheduled" aria-label="Nguyen, Thanh vs Okafor, Daniel, 12:10"><span class="fm-slot__status">Scheduled</span><span class="fm-slot__names"><span>Nguyen</span><span>Okafor</span></span><span class="fm-slot__time">12:10</span></button></div><figcaption class="ref-cap"><b>scheduled</b><span>--border-control</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage" data-testid="slot--live"><button class="fm-slot" data-state="live" aria-label="Live: Park vs Kowalski"><span class="fm-slot__status live-marker">Live</span><span class="fm-slot__names"><span>Park</span><span>Kowalski</span></span><span class="fm-slot__time">11:20</span></button></div><figcaption class="ref-cap"><b>live</b><span>ink-800 + Live</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage" data-testid="slot--final"><button class="fm-slot" data-state="final" aria-label="Final: Silva vs Chen"><span class="fm-slot__status">Final · 3–1</span><span class="fm-slot__names"><span>Silva</span><span>Chen</span></span><span class="fm-slot__time">10:30</span></button></div><figcaption class="ref-cap"><b>final</b><span>transparent</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage" data-testid="slot--conflict"><button class="fm-slot" data-state="conflict" aria-label="Needs decision: Okafor and Park vs Silva and Chen"><span class="fm-slot__status">Needs decision</span><span class="fm-slot__names"><span>Okafor / Park</span><span>Silva / Chen</span></span><span class="fm-slot__time">12:50</span></button></div><figcaption class="ref-cap"><b>conflict</b><span>amber</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage" data-testid="slot--offline"><button class="fm-slot" data-state="offline" aria-label="Offline: Silva vs Chen"><span class="fm-slot__status">Offline · 11:42</span><span class="fm-slot__names"><span>Silva</span><span>Chen</span></span><span class="fm-slot__time">11:30</span></button></div><figcaption class="ref-cap"><b>offline</b><span>dashed</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage" data-testid="slot--free"><div class="fm-slot" data-state="free"><span class="fm-slot__status">Free</span><span class="fm-slot__time">13:00</span></div></div><figcaption class="ref-cap"><b>free</b><span>dashed subtle</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage" data-testid="slot--rest"><button class="fm-slot" data-state="scheduled" aria-label="Okafor vs Silva, rest until 13:20"><span class="fm-slot__status rest">Rest until 13:20</span><span class="fm-slot__names"><span>Okafor</span><span>Silva</span></span><span class="fm-slot__time">13:20</span></button></div><figcaption class="ref-cap"><b>rest</b><span>--rest status</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage" data-testid="slot--hover"><button class="fm-slot is-hover" data-state="scheduled" aria-label="Nguyen vs Okafor"><span class="fm-slot__status">Scheduled</span><span class="fm-slot__names"><span>Nguyen</span><span>Okafor</span></span><span class="fm-slot__time">12:10</span></button></div><figcaption class="ref-cap"><b>hover</b><span>.is-hover</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage" data-testid="slot--focus"><button class="fm-slot is-focus" data-state="scheduled" aria-label="Nguyen vs Okafor"><span class="fm-slot__status">Scheduled</span><span class="fm-slot__names"><span>Nguyen</span><span>Okafor</span></span><span class="fm-slot__time">12:10</span></button></div><figcaption class="ref-cap"><b>focus</b><span>.is-focus</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage" data-testid="slot--selected"><button class="fm-slot" data-state="scheduled" aria-pressed="true" aria-label="Nguyen vs Okafor, selected"><span class="fm-slot__status">Scheduled</span><span class="fm-slot__names"><span>Nguyen</span><span>Okafor</span></span><span class="fm-slot__time">12:10</span></button></div><figcaption class="ref-cap"><b>selected</b><span>aria-pressed</span></figcaption></figure>
+</div>
+</section>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":2400}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FortyMM reference: containers, feedback, overlays</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/9f72ae45fcd4326d7bab39a709ac4598">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600;700&amp;family=Bebas+Neue&amp;display=swap">
+<style>
+body{margin:0;background:#0B0D12}
+a{color:#FF9A4A}a:hover{color:#FFCFA8}
+</style>
+</helmet>
+<main class="ref fm-test" data-testid="sheet-feedback" style="height: 2600px">
+<header class="ref-head">
+<div>
+<h1>Containers, feedback, overlays</h1>
+<p>Each role has its own structure: card for persistent info, notice for a sentence in the flow, alert for a problem with a fix, toast for brief success, tooltip for supplementary text. Overlays are drawn in place (static) so they screenshot without opening.</p>
+</div>
+<span class="ref-id">ref/feedback</span>
+</header>
+
+<section class="ref-sec" data-testid="section-card">
+<h2>Card</h2>
+<p><code>--bg-panel</code>, no border. Title and status top-right, label/value details, actions bottom-left with the primary first.</p>
+<div class="ref-grid ref-grid--2">
+<figure class="ref-spec">
+<div class="ref-stage" data-testid="role-card" style="display: block">
+<article class="fm-card">
+<div class="fm-card__head"><div><h3 class="fm-card__title">Nguyen, Thanh vs Okafor, Daniel</h3><p class="fm-card__sub">Open singles · Round of 16</p></div><span class="live-marker">Live</span></div>
+<div class="fm-card__body"><dl class="fm-dl"><div><dt>Table</dt><dd>3</dd></div><div><dt>Started</dt><dd class="num">11:20</dd></div><div><dt>Games</dt><dd class="num">2–1</dd></div><div><dt>Umpire</dt><dd>Park, Ji-ho</dd></div></dl></div>
+<div class="fm-card__foot"><button class="fm-btn fm-btn--primary">Enter score</button><button class="fm-btn fm-btn--secondary">Move table</button></div>
+</article>
+</div>
+<figcaption class="ref-cap"><b>.fm-card</b><span>head · .fm-dl · foot</span></figcaption>
+</figure>
+<figure class="ref-spec">
+<div class="ref-stage ref-stage--col" data-testid="role-notice-examples" style="gap: 14px; justify-content: center">
+<p class="fm-notice" data-testid="notice-default"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg></span><span>Draws are published at <b>9:30</b>. You can still swap partners until then.</span></p>
+<p class="fm-notice fm-notice--rest" data-testid="notice-rest"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></span><span>Okafor is resting until <b>19:35</b>.</span></p>
+<p class="fm-notice fm-notice--success" data-testid="notice-success"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg></span><span>All 24 players checked in.</span></p>
+<p class="fm-notice fm-notice--warning" data-testid="notice-warning"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg></span><span>Two matches are running late on Table 2.</span></p>
+</div>
+<figcaption class="ref-cap"><b>.fm-notice</b><span>default · rest · success · warning</span></figcaption>
+</figure>
+</div>
+</section>
+
+<section class="ref-sec" data-testid="section-alerts">
+<h2>Warning and error</h2>
+<p>Tinted fill and full hue edge. Title is the problem, body is why, buttons are the fix.</p>
+<div class="ref-grid ref-grid--2">
+<figure class="ref-spec">
+<div class="ref-stage" data-testid="role-warning" style="display: block">
+<div class="fm-alert fm-alert--warning"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg></span><p class="fm-alert__title">Okafor's singles is 15 min over on Table 2</p><p class="fm-alert__body">His doubles at 12:50 would start without the 10 min rest.</p><div class="fm-alert__actions"><button class="fm-btn fm-btn--secondary fm-btn--sm">Move doubles to 13:05</button><button class="fm-btn fm-btn--ghost fm-btn--sm">Keep as is</button></div></div>
+</div>
+<figcaption class="ref-cap"><b>.fm-alert--warning</b><span>--conflict</span></figcaption>
+</figure>
+<figure class="ref-spec">
+<div class="ref-stage" data-testid="role-error" style="display: block">
+<div class="fm-alert fm-alert--error" role="alert"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="8" y2="12"></line><line x1="12" x2="12.01" y1="16" y2="16"></line></svg></span><p class="fm-alert__title">Table 4's tablet stopped sending scores</p><p class="fm-alert__body">The last update was at 11:42. Scores entered there are kept on the tablet.</p><div class="fm-alert__actions"><button class="fm-btn fm-btn--secondary fm-btn--sm">Enter score here</button></div></div>
+</div>
+<figcaption class="ref-cap"><b>.fm-alert--error</b><span>--danger · role=alert</span></figcaption>
+</figure>
+</div>
+</section>
+
+<section class="ref-sec" data-testid="section-overlays">
+<h2>Toast, tooltip, menu, dialog</h2>
+<p>The only things with a shadow. Rendered static here; use the kit's <code>FM.test</code> helpers for the live versions.</p>
+<div class="ref-grid ref-grid--2">
+<figure class="ref-spec">
+<div class="ref-stage" data-testid="role-toast" style="justify-content: center; padding: 32px">
+<div class="fm-toast" role="status"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg></span><span class="fm-toast__msg">Match saved. Rating +12.</span><button class="fm-btn fm-toast__action">Undo</button><button class="fm-btn fm-toast__close" aria-label="Dismiss"><span class="fm-ic fm-ic--sm" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></span></button></div>
+</div>
+<figcaption class="ref-cap"><b>.fm-toast</b><span>success only · 6 s</span></figcaption>
+</figure>
+<figure class="ref-spec">
+<div class="ref-stage" data-testid="role-tooltip" style="justify-content: center; padding: 32px; flex-direction: column; gap: 8px">
+<span class="fm-tooltip fm-tooltip--static" role="tooltip">Nguyen, Thanh (Riverside TT) vs Okafor, Daniel (Northside)</span>
+<button class="fm-btn fm-btn--secondary fm-btn--sm">Okafor · Nguyen</button>
+</div>
+<figcaption class="ref-cap"><b>.fm-tooltip</b><span>wraps at 280px</span></figcaption>
+</figure>
+<figure class="ref-spec">
+<div class="ref-stage" data-testid="ex-menu" style="justify-content: center; padding: 32px">
+<div class="fm-overlay fm-menu" role="menu">
+<button class="fm-menu__item is-hover" role="menuitem">Call to table <small>C</small></button>
+<button class="fm-menu__item" role="menuitem">Move to another table <small>M</small></button>
+<button class="fm-menu__item" role="menuitem">Print score sheet <small>P</small></button>
+<hr>
+<button class="fm-menu__item fm-menu__item--danger" role="menuitem">Withdraw player…</button>
+</div>
+</div>
+<figcaption class="ref-cap"><b>.fm-menu</b><span>first item hovered</span></figcaption>
+</figure>
+<figure class="ref-spec">
+<div class="ref-stage" data-testid="ex-dialog" style="justify-content: center; padding: 32px">
+<div class="fm-dialog" role="dialog" aria-labelledby="ref-dlg-t">
+<h2 id="ref-dlg-t">Withdraw Okafor from Open singles?</h2>
+<p>His remaining matches go to his opponents as walkovers. You can add him back until the draw closes.</p>
+<div class="fm-dialog__actions"><button class="fm-btn fm-btn--ghost">Cancel</button><button class="fm-btn fm-btn--danger">Withdraw</button></div>
+</div>
+</div>
+<figcaption class="ref-cap"><b>.fm-dialog</b><span>static, no backdrop</span></figcaption>
+</figure>
+</div>
+</section>
+
+<section class="ref-sec" data-testid="section-data">
+<h2>Tags, avatars, table, progress</h2>
+<p>Flat surfaces, numbers in mono with tabular figures.</p>
+<div class="ref-grid ref-grid--3">
+<figure class="ref-spec"><div class="ref-stage" data-testid="ex-tags"><span class="fm-tag">Open singles</span><span class="fm-tag">U-2000</span><span class="fm-tag fm-tag--outline">Seeded 3</span><span class="fm-tag fm-tag--outline">Doubles</span></div><figcaption class="ref-cap"><b>.fm-tag</b><span>filled · outline</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage" data-testid="ex-avatars"><span class="fm-avatar" aria-hidden="true">TN</span><span class="fm-avatar" aria-hidden="true">DO</span><span class="fm-avatar" aria-hidden="true">JP</span><span class="fm-avatar" aria-hidden="true" style="width: 28px; height: 28px; font-size: 12px">AK</span></div><figcaption class="ref-cap"><b>.fm-avatar</b><span>flat initials</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage ref-stage--col" data-testid="ex-meters" style="gap: 14px"><div class="fm-meter" role="img" aria-label="62% of matches played"><i style="width: 62%"></i></div><div class="fm-meter fm-meter--rest" role="img" aria-label="Rest 40% done"><i style="width: 40%"></i></div><div class="fm-skeleton" style="height: 14px; width: 70%"></div></div><figcaption class="ref-cap"><b>.fm-meter · .fm-skeleton</b><span>default · rest · static</span></figcaption></figure>
+</div>
+<div class="ref-grid ref-grid--2" style="margin-top: 16px">
+<figure class="ref-spec">
+<div class="ref-stage ref-stage--panel" data-testid="ex-data-table" style="display: block; border-radius: 8px">
+<table class="fm-table">
+<thead><tr><th scope="col">Player</th><th scope="col">Club</th><th scope="col" class="n">Rating</th><th scope="col" class="n">Change</th></tr></thead>
+<tbody>
+<tr><td>Nguyen, Thanh</td><td>Riverside TT</td><td class="n">2,145</td><td class="n"><span class="rating-up">▲ +12</span></td></tr>
+<tr><td>Okafor, Daniel</td><td>Northside</td><td class="n">2,098</td><td class="n"><span class="rating-down">▼ −8</span></td></tr>
+<tr><td>Park, Ji-ho</td><td>Riverside TT</td><td class="n">1,987</td><td class="n"><span class="rating-up">▲ +4</span></td></tr>
+</tbody>
+</table>
+</div>
+<figcaption class="ref-cap"><b>.fm-table</b><span>.n = mono, right-aligned</span></figcaption>
+</figure>
+<figure class="ref-spec">
+<div class="ref-stage ref-stage--col" data-testid="ex-accordion" style="gap: 0">
+<details class="fm-disclosure" open=""><summary>Scheduling details</summary><p>Rest between matches is at least 10 minutes. Doubles never overlap a player's singles.</p></details>
+<details class="fm-disclosure"><summary>Entry fees</summary><p>Free.</p></details>
+</div>
+<figcaption class="ref-cap"><b>.fm-disclosure</b><span>open · closed</span></figcaption>
+</figure>
+</div>
+</section>
+
+<section class="ref-sec" data-testid="section-navigation">
+<h2>Navigation and empty state</h2>
+<p>Current page uses <code>--accent-soft</code> with <code>--accent-text</code>.</p>
+<div class="ref-grid ref-grid--3">
+<figure class="ref-spec"><div class="ref-stage" data-testid="ex-navigation"><nav class="fm-nav" aria-label="Tournament"><a href="#ref" aria-current="page">Overview</a><a href="#ref">Schedule</a><a href="#ref">Draws</a><a href="#ref">Players</a></nav></div><figcaption class="ref-cap"><b>.fm-nav</b><span>aria-current</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage ref-stage--col" data-testid="ex-crumbs-pages" style="gap: 14px; align-items: flex-start"><nav class="fm-crumbs" aria-label="Breadcrumb"><a href="#ref">Spring Open</a><span aria-hidden="true">/</span><a href="#ref">Open singles</a><span aria-hidden="true">/</span><span aria-current="page">Round of 16</span></nav><div class="fm-pages"><button aria-label="Page 1">1</button><button aria-current="page" aria-label="Page 2">2</button><button aria-label="Page 3">3</button><button aria-label="Page 4">4</button></div></div><figcaption class="ref-cap"><b>.fm-crumbs · .fm-pages</b><span>page 2 current</span></figcaption></figure>
+<figure class="ref-spec"><div class="ref-stage" data-testid="ex-empty" style="display: block; padding: 0 16px"><div class="fm-empty"><b>No matches yet.</b><span>Log one after you play.</span><button class="fm-btn fm-btn--secondary fm-btn--sm">Log a match</button></div></div><figcaption class="ref-cap"><b>.fm-empty</b><span>with <span class="fm-kbd">N</span> shortcut</span></figcaption></figure>
+</div>
+</section>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":2600}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
