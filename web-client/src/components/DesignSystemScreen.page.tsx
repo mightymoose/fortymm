@@ -1,11 +1,13 @@
 import { screen, within } from '@testing-library/react'
-import { renderRoute } from '../test/render-route.tsx'
+import { renderScreen } from '../test/render-screen.tsx'
+import { DesignSystemScreen } from './DesignSystemScreen.tsx'
 
-// The design system page (src/routes/design-system.tsx): how to open it, and
-// what a person sees on it.
-export class DesignSystemPage {
+// The design system screen (DesignSystemScreen.tsx): how to render it alone,
+// and what a person sees on it. The finders work wherever the screen is
+// mounted, through its route (src/routes/design-system.test.tsx) too.
+export class DesignSystemScreenPage {
   render() {
-    return renderRoute('/design-system')
+    return renderScreen(<DesignSystemScreen />)
   }
 
   header() {

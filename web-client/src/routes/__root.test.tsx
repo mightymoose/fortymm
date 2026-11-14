@@ -1,10 +1,11 @@
 import { expect, test } from 'vitest'
-import { NotFoundPage } from './__root.page.ts'
+import { NotFoundScreenPage } from '../components/NotFoundScreen.page.tsx'
+import { renderRoute } from '../test/render-route.tsx'
 
-test('a URL that matches no route shows the not-found page, with a link to /', async () => {
-  const notFound = new NotFoundPage()
-  await notFound.render()
+// The root route's wiring. What the not-found screen shows is its own test
+// (src/components/NotFoundScreen.test.tsx).
+test('a URL that matches no route shows the not-found screen', async () => {
+  renderRoute('/no/such/page')
 
-  expect(await notFound.heading()).toBeVisible()
-  expect(await notFound.linkToStart()).toHaveAttribute('href', '/')
+  expect(await new NotFoundScreenPage().heading()).toBeVisible()
 })
