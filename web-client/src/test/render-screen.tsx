@@ -14,10 +14,14 @@ import type { ReactNode } from 'react'
 // The screen still gets a router of its own, a bare one whose only route
 // renders it, because a <Link> or <Await> needs one to render. Nothing about
 // that router is under test; src/test/render-route.tsx mounts the app's.
-export function renderScreen(screen: ReactNode) {
+//
+// The router's address is `/` unless the test gives a `path`: a component
+// whose <Link>s mark the current page (the sidebar) is rendered at the page
+// the test wants current.
+export function renderScreen(screen: ReactNode, { path = '/' } = {}) {
   const router = createRouter({
     routeTree: createRootRoute({ component: () => screen }),
-    history: createMemoryHistory({ initialEntries: ['/'] }),
+    history: createMemoryHistory({ initialEntries: [path] }),
   })
   return render(<RouterProvider router={router} />)
 }

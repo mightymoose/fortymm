@@ -22,7 +22,7 @@ Never in a route file: JSX beyond rendering that one component with props; `useS
 
 Where neither list fits, these are decided:
 
-- **The root route's component is the router's own `Outlet`** (`component: Outlet` in `__root.tsx`): routing's shell, not markup. A layout every screen shares would be a component in `src/components/` taking the outlet as its children, `component: () => <AppLayout><Outlet /></AppLayout>`, the one place a route renders anything but a single component.
+- **The root route's component is the layout around the router's own `Outlet`**: `component: () => <AppLayout><Outlet /></AppLayout>` in `__root.tsx`, the one place a route renders anything but a single component. `AppLayout` (`src/components/`, README "The layout") holds the top bar (with the sidebar's toggle), the sidebar, whether the sidebar is expanded, and the page's one `<main>`, and takes no route data: the sidebar's current page comes from the router's `<Link>`. A screen renders no `<main>` of its own.
 - **What a loader runs that is more than one call** (deciding, waiting, reading again, turning results into what the screen shows) is a loading function in a module of its own, beside what it reads, and the loader only calls it: `ownAccount()` in `src/account.ts` (`/settings`), `checkCore()` in `src/core/check.ts` (`/health`). It returns plain data, never throws for an answer it can give, and knows nothing about screens.
 - **Answers that arrive separately** are handed to the screen as promises: the loader returns them unawaited and the screen waits for each with the router's `<Await>` and a `fallback` (`HealthScreen`). A screen may use the router's components (`<Link>`, `<Await>`); it never reads route data itself (`Route.useLoaderData()`, `getRouteApi`): the route's wrapper hands it over.
 
@@ -31,6 +31,13 @@ How each part is tested, at the narrowest seam:
 - **A screen's behavior**: `src/components/<Name>Screen.test.tsx`, with the component rendered alone, given the props each state takes, through its page object `src/components/<Name>Screen.page.tsx`. The page object's `render(props)` calls `renderScreen(<HealthScreen ... />)` (`src/test/render-screen.tsx`), which gives the screen a bare router of its own (`<Link>` and `<Await>` need one) and none of the app's routes. Its other methods only find elements, by role and accessible name, and work wherever the screen is mounted. Every state the screen can show is a case here; nothing is faked, since a screen fetches nothing.
 - **A loading function, or an api call**: its own test beside it (`src/account.test.ts`, `src/core/check.test.ts`, `src/api/health.test.ts`), with only what it reads replaced at a contract (MSW for the api, `vi.mock('./storage.ts')` for storage).
 - **A route**: `src/routes/<route>.test.tsx`, through `renderRoute(path)` (the app's real router and route tree), proves only the wiring, with the screen's page object's finders: the path shows its screen with the loader's data (one case), its pending, error or not-found component, and how params, search and redirects behave. Never a screen's states again.
+
+## Screenshot tests are for the design system pages only
+
+"let's ditch screenshot tests anywhere except the design system pages, they are fragile, I don't want to fix this test or mock the api." (the user, 2026-11-14)
+
+- A screenshot test (`toHaveScreenshot`) is only ever of a design system page, `/design-system/*` (`e2e/tests/design-system*.spec.ts`). No other screen and no part of the layout gets one, and no test mocks the api to make a picture hold still.
+- How everything else looks is pinned by no test, and never by reading a style. What a browser alone can show about it (which parts a media query shows) is a browser test by role and visibility, on a page that needs no network (`e2e/tests/app-layout.spec.ts`, on `/`).
 
 ## The design system's components
 
