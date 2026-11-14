@@ -158,6 +158,12 @@ export class AppLayout {
   link(name: string): Locator {
     return this.navigation.getByRole('link', { name })
   }
+
+  // This device's user's mark in the top bar (phones only): a link named
+  // with the username.
+  userMark(username: string): Locator {
+    return this.banner.getByRole('link', { name: username, exact: true })
+  }
 }
 
 // Each screen's page object below opens its page with goto(): by loading its
