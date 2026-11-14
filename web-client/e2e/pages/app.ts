@@ -91,17 +91,16 @@ export class App {
 }
 
 // The layout around every screen (src/components/AppLayout.tsx): the top bar
-// with the FortyMM brand, and, at non-phone widths, the sidebar with its
-// toggle and its links. No goto(): every screen's page has it.
+// with the FortyMM brand and, at non-phone widths, the sidebar's toggle; and
+// at non-phone widths, the sidebar with its links. No goto(): every screen's
+// page has it.
 export class AppLayout {
   readonly banner: Locator
   readonly brand: Locator
   readonly navigation: Locator
   readonly sidebarToggle: Locator
-  private readonly page: Page
 
   constructor(page: Page) {
-    this.page = page
     this.banner = page.getByRole('banner')
     this.brand = this.banner.getByRole('link', { name: 'FortyMM' })
     this.navigation = page.getByRole('navigation', { name: 'Main' })
@@ -111,12 +110,6 @@ export class AppLayout {
   // A link in the sidebar, by its name ("Health").
   link(name: string): Locator {
     return this.navigation.getByRole('link', { name })
-  }
-
-  // Waits until every font the page uses has loaded, so a screenshot is
-  // never taken in a fallback font.
-  async waitForFonts() {
-    await this.page.evaluate(() => document.fonts.ready.then(() => undefined))
   }
 }
 
