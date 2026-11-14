@@ -1,0 +1,46 @@
+/* The alert (kit.css, .fm-alert): the icon beside the title and body, the
+   actions under them; a tinted fill and its hue's edge. */
+.alert {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 2px var(--s-3);
+  padding: 14px var(--s-4) var(--s-4);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-md);
+  background: var(--bg-panel);
+}
+.alert > .icon {
+  grid-row: 1 / span 2;
+  margin-top: 1px;
+}
+.alert__title {
+  margin: 0;
+  font: 600 var(--text-base) / 1.4 var(--font-ui);
+  color: var(--fg-1);
+}
+.alert__body {
+  margin: 0;
+  font: 400 14px / var(--lh-normal) var(--font-ui);
+  color: var(--fg-2);
+}
+.alert__actions {
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 2;
+  gap: var(--s-2);
+  margin-top: 10px;
+}
+.alert--warning {
+  border-color: color-mix(in srgb, var(--conflict) 50%, transparent);
+  background: var(--conflict-soft);
+}
+.alert--warning > .icon {
+  color: var(--conflict);
+}
+.alert--error {
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+  background: var(--danger-soft);
+}
+.alert--error > .icon {
+  color: var(--danger);
+}

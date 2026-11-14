@@ -1,0 +1,21 @@
+/* The navigation (kit.css, .fm-nav): plain links, the current one on
+   --accent-soft. */
+.nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+}
+.nav a {
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-md);
+  font: 500 14px var(--font-ui);
+  color: var(--fg-2);
+  text-decoration: none;
+}
+.nav a:hover {
+  color: var(--fg-1);
+}
+.nav a[aria-current='page'] {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}

@@ -1,0 +1,18 @@
+/* The avatar (kit.css, .fm-avatar): initials on --ink-700, no picture. */
+.avatar {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--ink-700);
+  font: 600 var(--text-sm) var(--font-ui);
+  color: var(--fg-2);
+}
+.avatar--sm {
+  width: 28px;
+  height: 28px;
+  font-size: var(--text-xs);
+}

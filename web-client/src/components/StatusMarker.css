@@ -1,0 +1,26 @@
+/* The status markers (kit.css, .fm-status): a word with a 16px mark. */
+.status-marker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 600 var(--text-sm) / 1.2 var(--font-ui);
+  color: var(--fg-2);
+  white-space: nowrap;
+}
+.status-marker .icon {
+  width: 16px;
+  height: 16px;
+}
+.status-marker--offline::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border: 2px solid var(--fg-3);
+  border-radius: 50%;
+}
+.status-marker--conflict {
+  color: var(--conflict);
+}
+.status-marker--danger {
+  color: var(--danger);
+}

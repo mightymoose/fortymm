@@ -1,0 +1,31 @@
+/* The data table (kit.css, .fm-table): flat rows ruled in --border-subtle
+   under a header ruled in --border-control. */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 400 var(--text-base) var(--font-ui);
+  color: var(--fg-2);
+}
+.data-table th {
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--border-control);
+  font: 500 var(--text-sm) var(--font-ui);
+  color: var(--fg-3);
+  text-align: left;
+}
+.data-table td {
+  padding: 11px var(--s-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.data-table .n {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--fg-1);
+}
+.data-table th.n {
+  font-family: var(--font-ui);
+}

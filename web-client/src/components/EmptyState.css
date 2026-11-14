@@ -1,0 +1,15 @@
+/* The empty state (kit.css, .fm-empty): a stack, left-aligned, in --fg-3
+   under a --fg-1 title. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  align-items: flex-start;
+  padding: var(--s-6) 0;
+  font: 400 var(--text-base) / var(--lh-normal) var(--font-ui);
+  color: var(--fg-3);
+}
+.empty-state b {
+  font: 600 16px var(--font-ui);
+  color: var(--fg-1);
+}

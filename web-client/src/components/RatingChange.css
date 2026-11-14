@@ -1,0 +1,9 @@
+/* A rating change (colors_and_type.css, .rating-up and .rating-down): in
+   figures, --rating-up for a rise, --rating-down for a fall. */
+.rating-change {
+  font: 600 var(--text-sm) var(--font-num);
+  color: var(--rating-down);
+}
+.rating-change--up {
+  color: var(--rating-up);
+}

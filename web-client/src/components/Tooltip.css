@@ -1,0 +1,17 @@
+/* The tooltip (kit.css, .fm-tooltip, static): an overlay with the smaller
+   shadow, wrapping at 280px. */
+.tooltip {
+  display: inline-block;
+  box-sizing: border-box;
+  max-width: 280px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-sm);
+  background: var(--bg-group);
+  box-shadow: var(--shadow-tooltip);
+  font: 400 var(--text-sm) / 1.4 var(--font-ui);
+  color: var(--fg-1);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}

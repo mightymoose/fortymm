@@ -1,0 +1,5 @@
+/* The skeleton (kit.css, .fm-skeleton): a block of --ink-800. */
+.skeleton {
+  border-radius: var(--r-sm);
+  background: var(--ink-800);
+}

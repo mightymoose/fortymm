@@ -1,0 +1,33 @@
+/* The disclosure (kit.css, .fm-disclosure): a summary row ruled below, a
+   plus when closed and a minus when open, in place of the browser's
+   marker. */
+.disclosure {
+  border-bottom: 1px solid var(--border-subtle);
+}
+.disclosure summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 0;
+  border-radius: 4px;
+  font: 500 var(--text-base) var(--font-ui);
+  color: var(--fg-1);
+  list-style: none;
+  cursor: pointer;
+}
+.disclosure summary::-webkit-details-marker {
+  display: none;
+}
+.disclosure summary::after {
+  content: '+';
+  font: 400 var(--text-lg) var(--font-ui);
+  color: var(--fg-3);
+}
+.disclosure[open] summary::after {
+  content: '−';
+}
+.disclosure p {
+  margin: 0 0 14px;
+  font: 400 var(--text-base) / 1.55 var(--font-ui);
+  color: var(--fg-2);
+}

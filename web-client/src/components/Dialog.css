@@ -1,0 +1,29 @@
+/* The dialog (kit.css, .fm-dialog): an overlay, so one of the two things
+   with a shadow. */
+.dialog {
+  box-sizing: border-box;
+  width: min(460px, calc(100vw - 32px));
+  padding: var(--s-6);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-lg);
+  background: var(--bg-group);
+  box-shadow: var(--shadow-overlay);
+  color: var(--fg-1);
+}
+.dialog h2 {
+  margin: 0 0 var(--s-2);
+  font: 600 var(--text-lg) / var(--lh-snug) var(--font-ui);
+  letter-spacing: normal;
+  color: var(--fg-1);
+}
+.dialog p {
+  margin: 0 0 var(--s-5);
+  font: 400 var(--text-base) / 1.55 var(--font-ui);
+  color: var(--fg-2);
+}
+.dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  justify-content: flex-end;
+}

@@ -1,0 +1,24 @@
+/* The pagination (kit.css, .fm-pages): 36px buttons, page numbers in
+   figures; the current one on --accent-soft. */
+.pagination {
+  display: flex;
+  gap: var(--s-1);
+  align-items: center;
+}
+.pagination button {
+  min-width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  font: 500 14px var(--font-num);
+  color: var(--fg-2);
+  cursor: pointer;
+}
+.pagination button:hover {
+  background: var(--bg-hover);
+}
+.pagination button[aria-current='page'] {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}

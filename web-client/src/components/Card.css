@@ -1,0 +1,40 @@
+/* The card (kit.css, .fm-card): --bg-panel, no border, no shadow. */
+.card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-radius: var(--r-md);
+  background: var(--bg-panel);
+}
+.card__head {
+  display: flex;
+  gap: var(--s-3);
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 18px var(--s-5) 0;
+}
+.card__title {
+  margin: 0;
+  font: 600 18px / var(--lh-snug) var(--font-ui);
+  letter-spacing: normal;
+  color: var(--fg-1);
+}
+.card__sub {
+  margin: var(--s-1) 0 0;
+  font: 400 14px / 1.4 var(--font-ui);
+  color: var(--fg-3);
+}
+.card__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  min-width: 0;
+  padding: var(--s-4) var(--s-5);
+}
+.card__foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+  padding: var(--s-1) var(--s-5) var(--s-5);
+}
