@@ -9,9 +9,9 @@ import { AppLayout, HealthPage } from '../pages/app.ts'
 //
 // The pictures are of /health: its sidebar link is the current page, so the
 // selected item is in the picture, and once both its answers have arrived
-// (no api behind vite preview, so "unknown"; the core's fixed player's
-// username) nothing on it changes. One screen is enough: the layout is the
-// same around every one.
+// ("unknown" from the api, which the spec answers itself, below; the core's
+// fixed player's username) nothing on it changes. One screen is enough: the
+// layout is the same around every one.
 //
 // Baselines are made by the suite's own container: ./bin/mise run
 // web-client:e2e -- --update-snapshots, then look at each changed picture.
@@ -30,9 +30,18 @@ const desktop = { width: 1280, height: 800 }
 const phone = { width: 390, height: 844 }
 
 // Opens /health and waits until it is drawn: both answers in, fonts loaded.
+//
+// The page's request to the api is answered here, at once, with the 502 and
+// empty body vite preview gives when no api is behind it, so the page says
+// the api's health is unknown. Left to vite preview, the answer waits on its
+// proxy looking up the host `api`, which isn't on the suite's network: quick
+// on a laptop, but with a resolver that takes 5s to give up (reproduced by
+// giving web-client-preview a DNS server that never answers), the page was
+// still checking when the test stopped waiting, and every picture failed.
 async function openHealth(page: Page) {
   const health = new HealthPage(page)
   const layout = new AppLayout(page)
+  await page.route('**/api/**', (route) => route.fulfill({ status: 502 }))
   await health.goto()
   await expect(health.unknown).toBeVisible()
   await expect(health.coreLoaded).toBeVisible()
