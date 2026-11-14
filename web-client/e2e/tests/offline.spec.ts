@@ -90,7 +90,7 @@ test('after a visit to the start page only, /health opens with no connection, an
   const health = new HealthPage(reopened)
   await health.goto()
 
-  await expect(health.coreLoaded).toContainText(/\bmerry-otter-0rdf\b/)
+  await expect(health.coreLoaded).toContainText(/\btiptoeing-pinto-hng5\b/)
 })
 
 test('with no connection, an unknown path opens the app’s not-found page', async ({

@@ -16,5 +16,5 @@ test('/health shows the health screen with the api’s answer and the shared cor
   const page = new HealthScreenPage()
 
   expect(await page.healthy()).toBeVisible()
-  expect(await page.coreLoaded()).toHaveTextContent(/\bmerry-otter-0rdf\b/)
+  expect(await page.coreLoaded()).toHaveTextContent(/\btiptoeing-pinto-hng5\b/)
 })
