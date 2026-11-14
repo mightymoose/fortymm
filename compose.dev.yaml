@@ -38,28 +38,6 @@ x-api-listening: &api-listening
   timeout: 2s
   retries: 5
 
-# web-client's Worker in the local Workers runtime (wrangler dev), serving
-# web-client/dist. The services below run it with three api origins
-# (API_ORIGIN): api-release, none, and one that can't be reached.
-x-web-client-worker: &web-client-worker
-  profiles: [e2e]
-  build:
-    context: ./dev/web-client-worker
-  user: *host-user
-  volumes:
-    - ./web-client:/app
-    - web-client-worker-node-modules:/app/worker/node_modules
-  # Liveness only: the runtime answers HTTP. Deliberately not "/ is the
-  # app", so a broken rule is the suite's to report, not a reason the stack
-  # never starts.
-  healthcheck:
-    test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/').then(() => process.exit(0), () => process.exit(1))"]
-    interval: 5s
-    timeout: 2s
-    retries: 3
-    start_period: 120s
-    start_interval: 1s
-
 services:
   web-client:
     build:
@@ -186,23 +164,26 @@ services:
   # api-release). Its image also runs Wrangler for web-client:deploy-check and
   # web-client:deploy.
   web-client-worker:
-    <<: *web-client-worker
+    profiles: [e2e]
+    build:
+      context: ./dev/web-client-worker
+    user: *host-user
+    volumes:
+      - ./web-client:/app
+      - web-client-worker-node-modules:/app/worker/node_modules
     command: ["npx", "wrangler", "dev", "--ip", "0.0.0.0", "--port", "8787", "--show-interactive-dev-session=false", "--var", "API_ORIGIN:http://api-release:8000"]
     ports:
       - "127.0.0.1::8787"
-
-  # The same Worker, deployed without an api origin, as the production Worker
-  # is until the api has a production address: /api/* is a plain 404. The
-  # cross-app suite's project worker-without-api.
-  web-client-worker-without-api:
-    <<: *web-client-worker
-
-  # The same Worker, with an api it can't reach (a name that never resolves):
-  # /api/* is a plain-text 502. The cross-app suite's project
-  # worker-api-unreachable.
-  web-client-worker-api-unreachable:
-    <<: *web-client-worker
-    command: ["npx", "wrangler", "dev", "--ip", "0.0.0.0", "--port", "8787", "--show-interactive-dev-session=false", "--var", "API_ORIGIN:http://api.unreachable.invalid"]
+    # Liveness only: the runtime answers HTTP. Deliberately not "/ is the
+    # app", so a broken rule is the suite's to report, not a reason the stack
+    # never starts.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/').then(() => process.exit(0), () => process.exit(1))"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 120s
+      start_interval: 1s
 
   # api's production image (api/Dockerfile) with its real start command,
   # configured like the dev server and using the same api-db.
@@ -243,9 +224,8 @@ services:
   # what can fail only because of how the apps are served or connected. It
   # drives web-client-worker, which forwards /api/* to api-release (api's
   # production image) and its api-db (the hosting's rules and the api
-  # wiring), and the same Worker without an api and with one it can't reach;
-  # the e2e task stops them all. web-client:hosting-check runs it with
-  # --no-deps against another address.
+  # wiring); the e2e task stops all three. web-client:hosting-check runs it
+  # with --no-deps against another address.
   e2e:
     profiles: [e2e]
     build:
@@ -256,8 +236,6 @@ services:
     ipc: host
     environment:
       WORKER_URL: http://web-client-worker:8787
-      WORKER_WITHOUT_API_URL: http://web-client-worker-without-api:8787
-      WORKER_API_UNREACHABLE_URL: http://web-client-worker-api-unreachable:8787
       CI: ${CI:-}
     volumes:
       - ./e2e:/app
@@ -266,10 +244,6 @@ services:
       - ./web-client/dist:/build:ro
     depends_on:
       web-client-worker:
-        condition: service_healthy
-      web-client-worker-without-api:
-        condition: service_healthy
-      web-client-worker-api-unreachable:
         condition: service_healthy
       # Behind web-client-worker's proxy. The Worker resolves its name per
       # request, so it needs it only once the tests run.
