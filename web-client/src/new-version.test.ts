@@ -33,9 +33,19 @@ class FakeRegistration extends EventTarget implements Registration {
   installing: FakeWorker | null = null
   waiting: FakeWorker | null = null
   checks = 0
-  update = vi.fn(async () => {
+  // The next look fails, as it does with no connection.
+  failNextCheck = false
+
+  // Not a vi.fn(): Vitest's mock handles the promises it returns, which
+  // would hide a rejection the app leaves unhandled.
+  update() {
     this.checks += 1
-  })
+    if (this.failNextCheck) {
+      this.failNextCheck = false
+      return Promise.reject(new TypeError('Failed to fetch'))
+    }
+    return Promise.resolve()
+  }
 }
 
 class FakeContainer extends EventTarget implements Container {
@@ -244,12 +254,16 @@ test('an open page looks for a new deployment when it comes back into view, and 
   expect(registration.checks).toBe(2)
 })
 
+// A rejection nobody handles fails the run (Vitest reports it), once a real
+// task has passed: hence real timers here.
 test('a look that fails (no connection) is no error', async () => {
-  const { registration } = openPage()
-  registration.update.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+  vi.useRealTimers()
+  const { registration, newVersion } = openPage()
+  registration.failNextCheck = true
 
   window.dispatchEvent(new Event('online'))
-  await vi.advanceTimersByTimeAsync(0)
+  await new Promise((resolve) => setTimeout(resolve, 10))
 
-  expect(registration.update).toHaveBeenCalledOnce()
+  expect(registration.checks).toBe(1)
+  expect(newVersion.ready()).toBe(false)
 })
