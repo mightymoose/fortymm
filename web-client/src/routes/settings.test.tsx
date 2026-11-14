@@ -21,7 +21,7 @@ const user: User = {
   unconfirmed: true,
 }
 
-test('/settings shows the settings screen with this device’s account from its loader', async () => {
+test('/settings shows the settings screen with this device’s user, read by the user store its loader awaits', async () => {
   vi.mocked(loadMe).mockResolvedValue({ ok: true, user })
   renderRoute('/settings')
 
