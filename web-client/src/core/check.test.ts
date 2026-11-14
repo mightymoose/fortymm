@@ -9,7 +9,7 @@ test('checkCore says the core loaded, with the username the core gives player e2
   expect(await checkCore()).toEqual({
     loaded: true,
     playerId: 'e2286f7cd2dc62c15a00bdb33f6e78167112a99a9f072d066e4e9dd3fc9d1c25',
-    username: 'merry-otter-0rdf',
+    username: 'tiptoeing-pinto-hng5',
   })
 })
 

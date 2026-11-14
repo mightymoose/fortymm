@@ -38,7 +38,7 @@ test('the hosted health page loads the shared core and shows its answer', async 
 
   await health.open()
 
-  await expect(health.coreLoaded).toContainText(/\bmerry-otter-0rdf\b/)
+  await expect(health.coreLoaded).toContainText(/\btiptoeing-pinto-hng5\b/)
 })
 
 // The service worker keeps the app as the hosting serves it: every file of

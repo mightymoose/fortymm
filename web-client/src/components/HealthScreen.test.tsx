@@ -11,7 +11,7 @@ import { HealthScreenPage } from './HealthScreen.page.tsx'
 const coreLoaded: CoreCheck = {
   loaded: true,
   playerId: 'e2286f7cd2dc62c15a00bdb33f6e78167112a99a9f072d066e4e9dd3fc9d1c25',
-  username: 'merry-otter-0rdf',
+  username: 'tiptoeing-pinto-hng5',
 }
 
 // An answer still on its way, until the test settles it.
@@ -73,7 +73,7 @@ test('the health screen says the shared core loaded, with the username it gives 
     core: Promise.resolve(coreLoaded),
   })
 
-  expect(await page.coreLoaded()).toHaveTextContent(/\bmerry-otter-0rdf\b/)
+  expect(await page.coreLoaded()).toHaveTextContent(/\btiptoeing-pinto-hng5\b/)
 })
 
 // The core doesn't wait for the api, which can take seconds to fail (a host
@@ -83,7 +83,7 @@ test('the health screen shows the shared core’s answer while the api’s answe
   const page = new HealthScreenPage()
   page.render({ health: health.promise, core: Promise.resolve(coreLoaded) })
 
-  expect(await page.coreLoaded()).toHaveTextContent(/\bmerry-otter-0rdf\b/)
+  expect(await page.coreLoaded()).toHaveTextContent(/\btiptoeing-pinto-hng5\b/)
   expect(await page.checking()).toBeVisible()
 
   health.settle({ status: 'healthy' })

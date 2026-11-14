@@ -12,5 +12,5 @@ test('the shipped app’s /health loads the shared core and shows its answer', a
   const health = new HealthPage(page)
   await health.goto()
 
-  await expect(health.coreLoaded).toContainText(/\bmerry-otter-0rdf\b/)
+  await expect(health.coreLoaded).toContainText(/\btiptoeing-pinto-hng5\b/)
 })
