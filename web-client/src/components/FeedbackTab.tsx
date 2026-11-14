@@ -22,6 +22,7 @@ import { Skeleton } from './Skeleton.tsx'
 import { Tag } from './Tag.tsx'
 import { Toast } from './Toast.tsx'
 import { Tooltip } from './Tooltip.tsx'
+import { UpdateNotice } from './UpdateNotice.tsx'
 import './FeedbackTab.css'
 
 // The design system page's Feedback tab (/design-system/feedback): the
@@ -348,6 +349,25 @@ export function FeedbackTab() {
               >
                 Log one after you play.
               </EmptyState>
+            </Stage>
+          </Spec>
+        </BoardGrid>
+      </BoardSection>
+
+      <BoardSection
+        id="feedback-update-notice"
+        testId="section-update-notice"
+        title="Update notice"
+        description="Not on the reference sheet: the app’s own, built as the toast is. Over every screen, bottom centre, until it is answered. Drawn in place here."
+      >
+        <BoardGrid columns={2}>
+          <Spec title="Update notice" detail="no timer · grey icon">
+            <Stage
+              testId="role-update-notice"
+              layout="center"
+              className="overlay-stage"
+            >
+              <UpdateNotice shown onReload={() => {}} onDismiss={() => {}} />
             </Stage>
           </Spec>
         </BoardGrid>

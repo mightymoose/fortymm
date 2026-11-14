@@ -46,3 +46,20 @@
   border-top: 1px solid var(--border-subtle);
   padding: var(--s-6) var(--s-4);
 }
+/* The notice that a new version is ready (UpdateNotice): over every screen,
+   bottom centre, where the design system puts a toast, out of the flow so
+   nothing on the screen moves when it appears. Above the phone's home
+   indicator where there is one. */
+.app-layout > .update-notice {
+  position: fixed;
+  z-index: 1;
+  right: 0;
+  bottom: calc(var(--s-4) + env(safe-area-inset-bottom, 0px));
+  left: 0;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+.app-layout > .update-notice > * {
+  pointer-events: auto;
+}
