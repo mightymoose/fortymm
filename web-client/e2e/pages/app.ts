@@ -105,7 +105,7 @@ export class AppLayout {
     this.banner = page.getByRole('banner')
     this.brand = this.banner.getByRole('link', { name: 'FortyMM' })
     this.navigation = page.getByRole('navigation', { name: 'Main' })
-    this.sidebarToggle = page.getByRole('button', { name: 'Sidebar' })
+    this.sidebarToggle = this.banner.getByRole('button', { name: 'Sidebar' })
   }
 
   // A link in the sidebar, by its name ("Health").

@@ -16,11 +16,14 @@ import { AppLayout, HealthPage } from '../pages/app.ts'
 // Baselines are made by the suite's own container: ./bin/mise run
 // web-client:e2e -- --update-snapshots, then look at each changed picture.
 
-// How far a pixel's colour may move before it counts as changed: 0.05
-// (pixelmatch's YIQ distance), not Playwright's 0.2. At 0.2, the selected
-// item's accent-soft swapped for bg-hover passed: the two have the same
-// brightness, and only the hue differs.
-const threshold = 0.05
+// How far a pixel's colour may move before it counts as changed: 0.02, not
+// Playwright's 0.2. pixelmatch counts a pixel as changed when its YIQ
+// distance from the baseline's is over 35215 × threshold², 1409 at 0.2 and
+// 14 at 0.02. The top bar and the sidebar are on bg-panel over the page's
+// bg-app: those two are 25 apart, so at 0.2 (and at 0.05, 88) losing the
+// panels passed. So did the selected item's accent-soft swapped for bg-hover
+// (the same brightness, only the hue differs) at 0.2.
+const threshold = 0.02
 
 const desktop = { width: 1280, height: 800 }
 // An iPhone's width, under the layout's 768px breakpoint (AppLayout.css).
