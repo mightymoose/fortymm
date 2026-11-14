@@ -14,10 +14,9 @@
 #                  connected)
 #   <app>-<role>   anything else a suite needs, e.g. api-release (api's
 #                  production image), web-client-preview (serves a
-#                  web-client build to its own suite), web-client-worker
+#                  web-client build to its own suite) or web-client-worker
 #                  (web-client's production hosting in the local Workers
-#                  runtime) or web-client-hosting (an nginx stand-in for it
-#                  that forwards /api/* to the api, until the Worker can)
+#                  runtime, forwarding /api/* to api-release)
 #
 # Tools a task runs once, such as api-oasdiff, are in the `tools` profile.
 
@@ -159,9 +158,11 @@ services:
   # web-client's production hosting, the Worker in web-client/worker/, in the
   # local Workers runtime (wrangler dev): the same configuration Cloudflare
   # runs, serving the production build in web-client/dist (made by
-  # web-client:build). The cross-app suite's hosting tests drive it
-  # (web-client:worker-up starts it alone). Its image also runs Wrangler for
-  # web-client:deploy-check and web-client:deploy.
+  # web-client:build), with api-release behind its proxy: API_ORIGIN, which a
+  # deployment gets from web-client:deploy. The cross-app suite's worker and
+  # api-wiring projects drive it (web-client:worker-up starts it with
+  # api-release). Its image also runs Wrangler for web-client:deploy-check and
+  # web-client:deploy.
   web-client-worker:
     profiles: [e2e]
     build:
@@ -170,6 +171,7 @@ services:
     volumes:
       - ./web-client:/app
       - web-client-worker-node-modules:/app/worker/node_modules
+    command: ["npx", "wrangler", "dev", "--ip", "0.0.0.0", "--port", "8787", "--show-interactive-dev-session=false", "--var", "API_ORIGIN:http://api-release:8000"]
     ports:
       - "127.0.0.1::8787"
     # Liveness only: the runtime answers HTTP. Deliberately not "/ is the
@@ -181,30 +183,6 @@ services:
       timeout: 2s
       retries: 3
       start_period: 120s
-      start_interval: 1s
-
-  # Stands in for web-client's production hosting where the Worker can't yet:
-  # the Worker has no proxy to the api, so the cross-app suite's api-wiring
-  # tests (e2e/tests/health.spec.ts) go through this nginx instead. It serves
-  # web-client/dist and forwards /api/* to api-release, stripping /api, as the
-  # Worker must once its proxy lands (dev/web-client-hosting/default.conf).
-  # Delete it then, and point those tests at web-client-worker.
-  web-client-hosting:
-    profiles: [e2e]
-    build:
-      context: ./dev/web-client-hosting
-    volumes:
-      - ./web-client/dist:/usr/share/nginx/html:ro
-    depends_on:
-      # nginx resolves the api's name when it starts.
-      api-release:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
-      interval: 5s
-      timeout: 2s
-      retries: 3
-      start_period: 30s
       start_interval: 1s
 
   # api's production image (api/Dockerfile) with its real start command,
@@ -244,10 +222,10 @@ services:
 
   # Playwright for the cross-app suite in e2e/ (the `e2e` task, CI's stage 2):
   # what can fail only because of how the apps are served or connected. It
-  # drives web-client-worker (the hosting's rules) and web-client-hosting,
-  # which forwards /api/* to api-release (api's production image) and its
-  # api-db (the api wiring); the e2e task stops all four.
-  # web-client:hosting-check runs it with --no-deps against another address.
+  # drives web-client-worker, which forwards /api/* to api-release (api's
+  # production image) and its api-db (the hosting's rules and the api
+  # wiring); the e2e task stops all three. web-client:hosting-check runs it
+  # with --no-deps against another address.
   e2e:
     profiles: [e2e]
     build:
@@ -258,7 +236,6 @@ services:
     ipc: host
     environment:
       WORKER_URL: http://web-client-worker:8787
-      STAND_IN_URL: http://web-client-hosting
       CI: ${CI:-}
     volumes:
       - ./e2e:/app
@@ -268,7 +245,9 @@ services:
     depends_on:
       web-client-worker:
         condition: service_healthy
-      web-client-hosting:
+      # Behind web-client-worker's proxy. The Worker resolves its name per
+      # request, so it needs it only once the tests run.
+      api-release:
         condition: service_healthy
 
   # ---- tools ----------------------------------------------------------------

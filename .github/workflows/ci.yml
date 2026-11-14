@@ -15,10 +15,13 @@
 #                    e2e/ (what can fail only because of how the apps are
 #                    served or connected), once every app is valid. One suite,
 #                    so no matrix.
-# preview:           on a pull request from this repository: web-client:preview,
-#                    the pull request's build to its own Worker on Cloudflare
-#                    (fortymm-pr-<number>), then the hosting checks against it.
-#                    Skipped where there are no secrets (a fork, Dependabot).
+# preview:           on a pull request from this repository, after preview-api:
+#                    web-client:preview, the pull request's build to its own
+#                    Worker on Cloudflare (fortymm-pr-<number>), forwarding
+#                    /api/* to the pull request's api (preview-api's address),
+#                    then the hosting checks against it. Skipped where there
+#                    are no secrets (a fork, Dependabot), and when preview-api
+#                    failed.
 # preview-api:       on the same pull requests: api:preview, the pull request's
 #                    api to its own Cloud Run service on Google Cloud
 #                    (fortymm-api-pr-<number>) with its own database
@@ -159,16 +162,20 @@ jobs:
           retention-days: 14
 
   # Deploys the pull request's build to its own Worker, fortymm-pr-<number>,
-  # and runs the hosting checks against its address (they first wait until it
-  # serves this build: every pull request's first run is a first deploy). The
-  # address goes in the job summary, and to preview-comment as the job's
-  # output (empty when nothing was deployed); this job never gets
-  # pull-requests: write itself. Only on a pull request from a branch of
-  # this repository, not opened by Dependabot: elsewhere the secrets are not
-  # given, so the job is skipped, and ci-passed accepts that. When it runs, a
-  # failure fails ci-passed.
+  # forwarding /api/* to the pull request's own api (API_ORIGIN, the address
+  # preview-api deployed it to, so it waits for that job), and runs the
+  # hosting checks against its address, the page reaching that api included
+  # (they first wait until it serves this build: every pull request's first
+  # run is a first deploy). The address goes in the job summary, and to
+  # preview-comment as the job's output (empty when nothing was deployed);
+  # this job never gets pull-requests: write itself. Only on a pull request
+  # from a branch of this repository, not opened by Dependabot: elsewhere the
+  # secrets are not given, so the job is skipped, and ci-passed accepts that.
+  # When it runs, a failure fails ci-passed; when preview-api failed, it is
+  # skipped, and ci-passed fails for preview-api.
   preview:
     name: preview (web-client)
+    needs: preview-api
     if: >-
       ${{ github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
@@ -186,12 +193,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: ./bin/mise run web-client:preview -- fortymm-pr-${{ github.event.pull_request.number }}
+      - name: ./bin/mise run web-client:preview -- fortymm-pr-${{ github.event.pull_request.number }} <the api preview's address>
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           WORKER: fortymm-pr-${{ github.event.pull_request.number }}
-        run: ./bin/mise run web-client:preview -- "$WORKER"
+          API_ORIGIN: ${{ needs.preview-api.outputs.address }}
+        run: ./bin/mise run web-client:preview -- "$WORKER" "$API_ORIGIN"
       - name: Show the preview's address
         if: ${{ !cancelled() }}
         run: |

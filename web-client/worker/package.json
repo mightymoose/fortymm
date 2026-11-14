@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "types": "wrangler types",
+    "types": "wrangler types --strict-vars=false",
     "typecheck": "tsc -p ."
   },
   "devDependencies": {

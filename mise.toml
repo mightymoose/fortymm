@@ -76,18 +76,17 @@ docker compose --profile tools run --rm -T workflows sh -c '
 # The cross-app suite in e2e/ (CI's stage 2): what can fail only because of how
 # the apps are served or connected. Everything an app can prove by itself runs
 # in its <app>:validate instead. Typechecks the suite, builds web-client,
-# serves the build from web-client-worker (its production hosting, the Worker,
-# in the local Workers runtime) and from web-client-hosting (an nginx stand-in
-# that forwards /api/* to api-release, api's production image, and its
-# api-db, which the Worker can't do yet), runs the suite against both, then
-# stops what it started (api-db only if it wasn't already running).
+# serves the build from its production hosting, the Worker, in the local
+# Workers runtime (web-client-worker), forwarding /api/* to api-release (api's
+# production image) and its api-db, runs the suite against it, then stops
+# what it started (api-db only if it wasn't already running).
 [tasks.e2e]
-description = "Run the cross-app end-to-end suite in e2e/: typecheck, then Playwright against web-client's build in its Worker, and through a stand-in to api's production image"
+description = "Run the cross-app end-to-end suite in e2e/: typecheck, then Playwright against web-client's build in its Worker, forwarding to api's production image"
 depends = ["web-client:build"]
 run = """
 db_was_running=$(docker compose ps --quiet --status running api-db)
-trap 'docker compose --profile e2e rm --stop --force web-client-worker web-client-hosting api-release; [ -n "$db_was_running" ] || docker compose rm --stop --force api-db' EXIT
-docker compose --profile e2e build e2e web-client-worker web-client-hosting api-release
+trap 'docker compose --profile e2e rm --stop --force web-client-worker api-release; [ -n "$db_was_running" ] || docker compose rm --stop --force api-db' EXIT
+docker compose --profile e2e build e2e web-client-worker api-release
 docker compose --profile e2e run --rm --no-deps e2e npm run typecheck
 docker compose --profile e2e run --rm e2e
 """
@@ -218,16 +217,16 @@ description = "Run a Wrangler command for web-client's Worker: ./bin/mise run we
 run = "docker compose run --rm --build -e CLOUDFLARE_API_TOKEN -e CLOUDFLARE_ACCOUNT_ID web-client-worker npx wrangler"
 
 [tasks."web-client:worker-up"]
-description = "Build web-client and serve it from the Worker in the local Workers runtime (wrangler dev), and print its URL"
+description = "Build web-client and serve it from the Worker in the local Workers runtime (wrangler dev), forwarding /api/* to api's production image, and print its URL"
 depends = ["web-client:build"]
 run = [
-  "docker compose up --detach --build --wait web-client-worker",
+  "docker compose up --detach --build --wait web-client-worker api-release",
   'docker compose ps --format "$DEV_PORTS_FORMAT" web-client-worker | grep -v "^$"',
 ]
 
 [tasks."web-client:worker-down"]
-description = "Stop the Worker in the local Workers runtime"
-run = "docker compose rm --stop --force web-client-worker"
+description = "Stop the Worker in the local Workers runtime, and the api behind it (keeps api-db)"
+run = "docker compose rm --stop --force web-client-worker api-release"
 
 # What can be proven about deploying without credentials: the Worker
 # typechecks; Wrangler accepts the configuration and bundles the Worker with
@@ -246,8 +245,8 @@ rm -rf "$dry_runs"
 docker compose build web-client-worker
 docker compose run --rm web-client-worker sh -c 'npm run types && npm run typecheck'
 docker compose run --rm web-client-worker env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID sh -c '
-  sh scripts/deploy.sh "" --dry-run --outdir .wrangler/dry-run/default &&
-  sh scripts/deploy.sh fortymm-trial --dry-run --outdir .wrangler/dry-run/trial'
+  sh scripts/deploy.sh "" "" --dry-run --outdir .wrangler/dry-run/default &&
+  sh scripts/deploy.sh fortymm-trial "" --dry-run --outdir .wrangler/dry-run/trial'
 for expected in 'default:the worker "fortymm"' 'trial:the worker "fortymm-trial"'; do
   if ! grep -qF "${expected#*:}" "$dry_runs/${expected%%:*}/README.md"; then
     echo "web-client:deploy-check: the ${expected%%:*} dry run did not target ${expected#*:}: $(cat "$dry_runs/${expected%%:*}/README.md")" >&2
@@ -288,7 +287,7 @@ case "$out" in
   *) echo "web-client:deploy-check: the preview delete stopped at fortymm-pr-9, but said: $out" >&2; exit 1 ;;
 esac
 # A tested deployment (web-client:preview) never targets production.
-if out=$(env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID ./bin/mise run web-client:preview -- fortymm 2>&1); then
+if out=$(env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID ./bin/mise run web-client:preview -- fortymm https://fortymm-api-trial-1.example.run.app 2>&1); then
   echo "web-client:deploy-check: web-client:preview accepted the production Worker." >&2
   exit 1
 fi
@@ -302,10 +301,14 @@ esac
 # configuration, and nothing more: no checks against the address, since
 # nothing is tested against production. It writes the deployed address to
 # web-client/worker/.wrangler/address (for web-client:preview and CI's job
-# summary). CI's deploy job runs it on main, to the production Worker.
+# summary). CI's deploy job runs it on main, to the production Worker, with no
+# api origin (the api has no production address yet), so its /api/* is a 404.
 [tasks."web-client:deploy"]
-description = "Deploy web-client to Cloudflare Workers, no checks (needs CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID); another Worker: -- <name>"
-usage = 'arg "[worker]" help="The Worker to deploy to; without it, the production Worker named in web-client/worker/wrangler.jsonc" default=""'
+description = "Deploy web-client to Cloudflare Workers, no checks (needs CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID); another Worker, and the api it forwards /api/* to: -- <name> <https://api-origin>"
+usage = '''
+arg "[worker]" help="The Worker to deploy to; without it, the production Worker named in web-client/worker/wrangler.jsonc" default=""
+arg "[api]" help="The api's origin (https://host), where the Worker forwards /api/*; without it, /api/* is a 404" default=""
+'''
 run = """
 set -o pipefail
 sh web-client/worker/scripts/with-credentials.sh
@@ -315,7 +318,7 @@ log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 docker compose build web-client-worker
 docker compose run --rm -T -e CLOUDFLARE_API_TOKEN -e CLOUDFLARE_ACCOUNT_ID web-client-worker \
-  sh scripts/with-credentials.sh sh scripts/deploy.sh "$usage_worker" | tee "$log"
+  sh scripts/with-credentials.sh sh scripts/deploy.sh "$usage_worker" "$usage_api" | tee "$log"
 address=$(grep -Eo 'https://[A-Za-z0-9.-]+[.]workers[.]dev' "$log" | head -n 1 || true)
 if [ -z "$address" ]; then
   echo "web-client:deploy: deployed, but found no workers.dev address in Wrangler's output." >&2
@@ -327,19 +330,24 @@ echo "web-client:deploy: deployed to $address"
 """
 
 # A deployment that is tested: deploys web-client to the named Worker, never
-# the production one, then runs the hosting checks against its address. CI's
-# preview job runs it for each pull request (fortymm-pr-<number>); a person
-# can run it with their own token to a trial Worker (fortymm-trial).
+# the production one, forwarding /api/* to the given api, then runs the
+# hosting checks against its address, the page reaching that api included.
+# CI's preview job runs it for each pull request (fortymm-pr-<number>, with
+# that pull request's api preview); a person can run it with their own token
+# to a trial Worker (fortymm-trial, with the api's trial preview).
 [tasks."web-client:preview"]
-description = "Deploy web-client to a non-production Worker and run the hosting checks against it: ./bin/mise run web-client:preview -- fortymm-trial"
-usage = 'arg "<worker>" help="The Worker to deploy to, e.g. fortymm-pr-9 or fortymm-trial; never the production one"'
+description = "Deploy web-client to a non-production Worker, forwarding /api/* to an api, and run the hosting checks against it: ./bin/mise run web-client:preview -- fortymm-trial https://fortymm-api-trial-<number>.<region>.run.app"
+usage = '''
+arg "<worker>" help="The Worker to deploy to, e.g. fortymm-pr-9 or fortymm-trial; never the production one"
+arg "<api>" help="The api's origin (https://host), where the Worker forwards /api/*, e.g. the pull request's api preview"
+'''
 run = '''
 production=$(sed -n 's/^  "name": "\(.*\)",$/\1/p' web-client/worker/wrangler.jsonc)
 if [ -z "$production" ] || [ "$usage_worker" = "$production" ]; then
   echo "web-client:preview: refusing '$usage_worker': nothing is tested against the production Worker ('$production'). Deploy it with web-client:deploy." >&2
   exit 2
 fi
-./bin/mise run web-client:deploy -- "$usage_worker"
+./bin/mise run web-client:deploy -- "$usage_worker" "$usage_api"
 ./bin/mise run web-client:hosting-check -- "$(cat web-client/worker/.wrangler/address)"
 '''
 
@@ -368,7 +376,7 @@ usage = 'arg "<address>" help="The address that serves the web client, e.g. http
 run = """
 docker compose --profile e2e build e2e
 docker compose --profile e2e run --rm --no-deps e2e npm run typecheck
-docker compose --profile e2e run --rm --no-deps -e WORKER_URL="$usage_address" -e STAND_IN_URL= e2e
+docker compose --profile e2e run --rm --no-deps -e WORKER_URL="$usage_address" e2e
 """
 
 # ---- api --------------------------------------------------------------------

@@ -2,9 +2,12 @@
 // binding, web-client/dist; see wrangler.jsonc) and decides, for every
 // request:
 //
-// - /api and /api/*: the api's, never the app's page. The proxy to the api
-//   (api.fortymm.com, with /api stripped) is not built yet, so for now every
-//   method gets a plain 404.
+// - /api and /api/*: the api's, never the app's page. Forwarded to the api at
+//   API_ORIGIN, the deployment's configuration (wrangler.jsonc, set by
+//   web-client:deploy), with /api stripped: /api/v1/health to
+//   <API_ORIGIN>/v1/health. A deployment without one (the production Worker,
+//   until the api has a production address) answers a plain 404 for every
+//   method; an api it can't reach, a plain 502 (toApi says what passes).
 // - A file of the build: that file.
 // - Any other path: the app's page (index.html), and the router decides what
 //   it shows, its own not-found page included. Except under /assets/, and for
@@ -21,7 +24,9 @@
 //   cache, so the browser always reaches this deployment's file.
 // - Files under /assets/, whose names carry a hash of their content: cached
 //   for a year, immutable.
-// - Everything: X-Content-Type-Options: nosniff.
+// - The api's answers: Cache-Control: no-store, whatever the api says: the
+//   browser always asks the api (the service worker never keeps them either).
+// - Everything: X-Content-Type-Options: nosniff, the api's answers included.
 //
 // Content types are the assets' own, from each file's extension (sw.js is
 // JavaScript, manifest.webmanifest is application/manifest+json).
@@ -37,16 +42,14 @@ const uncached = new Set(['/', appPage, '/sw.js', '/manifest.webmanifest'])
 
 export default {
   async fetch(request, env) {
-    const { pathname } = new URL(request.url)
+    const url = new URL(request.url)
+    const { pathname } = url
 
     if (pathname === '/api' || pathname.startsWith('/api/')) {
-      // The proxy to the api goes here.
-      return withHeaders(
-        new Response('Not found\n', {
-          status: 404,
-          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-        }),
-      )
+      if (!env.API_ORIGIN) {
+        return withHeaders(plainText(404, 'Not found\n'))
+      }
+      return toApi(request, url, env.API_ORIGIN)
     }
 
     const file = await env.ASSETS.fetch(request)
@@ -66,6 +69,67 @@ export default {
     return withHeaders(file)
   },
 } satisfies ExportedHandler<Env>
+
+// Forwards a request under /api to the api at `origin` (https://host, no
+// path), and gives back its answer. To the browser the api is the app's own
+// server, on the app's origin, so the proxy is transparent, as Vite's proxy
+// is in dev:
+//
+// - The path with /api stripped, and the query. The rest of the path is
+//   appended to the origin as text, never resolved against it, so a path
+//   such as /api//example.com/x still goes to the api's host.
+// - Every method, every request header (cookies and Authorization included)
+//   but Host, which is the api's own, and the body as it streams in.
+// - The api's status, headers and body as they are, except: Cache-Control:
+//   no-store and nosniff, whatever the api says; and a redirect to the api's
+//   own address points under /api on the app's origin instead, so the
+//   browser never leaves it (the api builds absolute URLs from its own host).
+//   Redirects are handed to the browser, never followed here.
+// - An api that can't be reached (a refused connection, a name that doesn't
+//   resolve): a plain-text 502, never the app's page.
+async function toApi(
+  request: Request,
+  url: URL,
+  origin: string,
+): Promise<Response> {
+  const target = new URL(
+    origin + (url.pathname.slice('/api'.length) || '/') + url.search,
+  )
+  const headers = new Headers(request.headers)
+  headers.delete('Host')
+
+  let answer: Response
+  try {
+    answer = await fetch(target, {
+      method: request.method,
+      headers,
+      body:
+        request.method === 'GET' || request.method === 'HEAD'
+          ? null
+          : request.body,
+      redirect: 'manual',
+    })
+  } catch {
+    answer = plainText(502, 'The api can’t be reached\n')
+  }
+
+  const rules: Record<string, string> = { 'Cache-Control': 'no-store' }
+  const location = answer.headers.get('Location')
+  if (location) {
+    const to = new URL(location, target)
+    if (to.host === target.host) {
+      rules['Location'] = `/api${to.pathname}${to.search}${to.hash}`
+    }
+  }
+  return withHeaders(answer, rules)
+}
+
+function plainText(status: number, text: string): Response {
+  return new Response(text, {
+    status,
+    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+  })
+}
 
 // Only a page load (GET or HEAD) gets the app's page; any other method keeps
 // the assets' own answer.

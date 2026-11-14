@@ -11,6 +11,9 @@ import {
 // script answered with the app's page breaks it, an api path answered with
 // the app's page looks like an answer from the api. Run against the local
 // Workers runtime by the e2e task, or a deployment (web-client:hosting-check).
+// The proxy to the api has no rule tests of its own here: the hosted health
+// page reaching the api (health.spec.ts) is its check, in the stack and on
+// each pull request's preview.
 
 // The page every unknown path gets, recognised by the element the app mounts
 // in (web-client/index.html).
@@ -85,23 +88,6 @@ test('a missing file under /assets/ is a 404, not the app’s page', async ({
   expect(response.status()).toBe(404)
   expect(await isTheAppPage(response)).toBe(false)
 })
-
-// The page loads, GET and HEAD: the only methods any other unknown path
-// answers with the app's page, so the only ones the /api rule changes until
-// the proxy exists. Other methods never get the app's page from any path
-// (the POST test below).
-for (const method of ['GET', 'HEAD']) {
-  for (const path of ['/api', '/api/v1/health']) {
-    test(`${method} ${path} is a 404, not the app’s page`, async ({
-      request,
-    }) => {
-      const response = await request.fetch(path, { method })
-
-      expect(response.status()).toBe(404)
-      expect(await isTheAppPage(response)).toBe(false)
-    })
-  }
-}
 
 // The app's page is for page loads only. A form or a script posting to a
 // path the build doesn't have gets a 404, not the page and not an error.

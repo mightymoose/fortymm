@@ -5,38 +5,34 @@ import { defineConfig, devices, type Project } from '@playwright/test'
 // app can prove by itself belongs in that app's own validate. Run it with
 // ./bin/mise run e2e.
 //
-// Two projects, one per thing that serves the web client's production build
-// (set by compose.dev.yaml; a project whose URL is empty is left out):
-// - worker (WORKER_URL): the web client's production hosting, the Worker in
-//   web-client/worker/, in the local Workers runtime (web-client-worker). Its
-//   rules: tests/hosting*.spec.ts. ./bin/mise run web-client:hosting-check
-//   runs this project alone against any address, such as a deployment.
-// - api-wiring (STAND_IN_URL): web-client-hosting, an nginx stand-in that
-//   forwards /api/* to the api, which the Worker can't do yet. Only the
-//   tests that need the api: tests/health.spec.ts.
+// Both projects drive the web client's production hosting, the Worker in
+// web-client/worker/, with the api behind its proxy (WORKER_URL, set by
+// compose.dev.yaml): in the stack, the local Workers runtime
+// (web-client-worker) forwarding /api/* to api-release; or a pull request's
+// preview, forwarding to that pull request's api.
+// - worker: the hosting's rules (tests/hosting*.spec.ts).
+// - api-wiring: the web client reaching the api through it
+//   (tests/health.spec.ts), the one check of the proxy.
+// ./bin/mise run web-client:hosting-check runs both against any address,
+// such as a deployment.
 const workerURL = process.env.WORKER_URL
-const standInURL = process.env.STAND_IN_URL
+if (!workerURL) {
+  throw new Error('WORKER_URL is not set; run ./bin/mise run e2e')
+}
 
-const projects: Project[] = []
-if (workerURL) {
-  // Every hosting check runs only once the address serves this checkout's
-  // build (tests/hosting-serves-build.setup.ts).
-  projects.push(
-    project('worker-serves-build', workerURL, /hosting-serves-build\.setup\.ts/),
-    {
-      ...project('worker', workerURL, /hosting.*\.spec\.ts/),
-      dependencies: ['worker-serves-build'],
-    },
-  )
-}
-if (standInURL) {
-  projects.push(project('api-wiring', standInURL, /health\.spec\.ts/))
-}
-if (projects.length === 0) {
-  throw new Error(
-    'Neither WORKER_URL nor STAND_IN_URL is set; run ./bin/mise run e2e',
-  )
-}
+// Every test against the address runs only once it serves this checkout's
+// build (tests/hosting-serves-build.setup.ts).
+const projects: Project[] = [
+  project('worker-serves-build', workerURL, /hosting-serves-build\.setup\.ts/),
+  {
+    ...project('worker', workerURL, /hosting.*\.spec\.ts/),
+    dependencies: ['worker-serves-build'],
+  },
+  {
+    ...project('api-wiring', workerURL, /health\.spec\.ts/),
+    dependencies: ['worker-serves-build'],
+  },
+]
 
 export default defineConfig({
   testDir: './tests',
