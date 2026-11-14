@@ -90,6 +90,36 @@ export class App {
   }
 }
 
+// The layout around every screen (src/components/AppLayout.tsx): the top bar
+// with the FortyMM brand, and, at non-phone widths, the sidebar with its
+// toggle and its links. No goto(): every screen's page has it.
+export class AppLayout {
+  readonly banner: Locator
+  readonly brand: Locator
+  readonly navigation: Locator
+  readonly sidebarToggle: Locator
+  private readonly page: Page
+
+  constructor(page: Page) {
+    this.page = page
+    this.banner = page.getByRole('banner')
+    this.brand = this.banner.getByRole('link', { name: 'FortyMM' })
+    this.navigation = page.getByRole('navigation', { name: 'Main' })
+    this.sidebarToggle = page.getByRole('button', { name: 'Sidebar' })
+  }
+
+  // A link in the sidebar, by its name ("Health").
+  link(name: string): Locator {
+    return this.navigation.getByRole('link', { name })
+  }
+
+  // Waits until every font the page uses has loaded, so a screenshot is
+  // never taken in a fallback font.
+  async waitForFonts() {
+    await this.page.evaluate(() => document.fonts.ready.then(() => undefined))
+  }
+}
+
 // Each screen's page object below opens its page with goto(): by loading its
 // address directly, as a person does by typing it, with a bookmark, a reload
 // or the home-screen icon, so the browser answers the request, not the router
@@ -113,7 +143,8 @@ export class StartPage {
 
 // Where each design system component is checked against the design system's
 // reference sheet (references/design-system/): its header (the wordmark and
-// the page's title), then a section per board, so far the controls.
+// the page's title), then a section per board, so far the controls. It is
+// all in the layout's main landmark; the layout's top bar is the banner.
 export class DesignSystemPage {
   readonly wordmark: Locator
   readonly heading: Locator
@@ -122,9 +153,9 @@ export class DesignSystemPage {
 
   constructor(page: Page) {
     this.page = page
-    const header = page.getByRole('banner')
-    this.wordmark = header.getByRole('img', { name: 'FortyMM' })
-    this.heading = header.getByRole('heading', {
+    const main = page.getByRole('main')
+    this.wordmark = main.getByRole('img', { name: 'FortyMM' })
+    this.heading = main.getByRole('heading', {
       level: 1,
       name: 'Design system',
     })

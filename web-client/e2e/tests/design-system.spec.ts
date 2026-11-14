@@ -14,9 +14,10 @@ import { DesignSystemPage } from '../pages/app.ts'
 // at each changed picture beside the board before committing it.
 
 // The board's width: its 1280px less its 48px margins, plus the app's own
-// 16px margins on each side, so each section is laid out at the board's
+// 16px margins on each side, plus the layout's sidebar, expanded as it
+// starts (240px, Sidebar.css), so each section is laid out at the board's
 // width and a target here is the size of the same target there.
-base.use({ viewport: { width: 1216, height: 900 } })
+base.use({ viewport: { width: 1216 + 240, height: 900 } })
 
 // Each test starts on the page, drawn, fonts loaded. (Playwright's `use`
 // is named `provide` here: lint takes a call to `use` for React's hook.)
