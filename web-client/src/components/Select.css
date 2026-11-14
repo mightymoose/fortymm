@@ -1,12 +1,15 @@
 /* A select; its edge and states are in field-control.css. The chevron is two
-   triangles of --fg-2, as the kit draws it. */
+   triangles of --fg-2, as the kit draws it, with each hard stop a hair off
+   50%: at exactly 50% the 45° edge passes through pixel centres, and which
+   side those pixels fall on differs between Chromium on arm64 and on amd64,
+   so screenshots would differ between a laptop and CI. */
 .select {
   appearance: none;
   height: 44px;
   padding: 0 36px 0 var(--s-3);
   background-image:
-    linear-gradient(45deg, transparent 50%, var(--fg-2) 50%),
-    linear-gradient(135deg, var(--fg-2) 50%, transparent 50%);
+    linear-gradient(45deg, transparent 50.1%, var(--fg-2) 50.1%),
+    linear-gradient(135deg, var(--fg-2) 49.9%, transparent 49.9%);
   background-position:
     calc(100% - 19px) 50%,
     calc(100% - 14px) 50%;
