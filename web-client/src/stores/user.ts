@@ -4,11 +4,15 @@ import { launchAtStartup, startupLaunchSettled } from '../first-launch.ts'
 import { loadMe, type LoadUserResult, type User } from '../storage.ts'
 import { createQueue } from './queue.ts'
 
-// This device's user, in memory, for the pages that show it (/settings). It
-// holds nothing that isn't on disk: every value was read from IndexedDB with
-// loadMe (src/storage.ts), after the write that produced it finished. No
-// action sets the user itself: the first launch writes, storage announces
-// the change (src/changes.ts), and the store reads again.
+// This device's user, in memory, for whatever shows it (/settings, and the
+// layout). It holds nothing that isn't on disk: every value was read from
+// IndexedDB with loadMe (src/storage.ts), after the write that produced it
+// finished. No action sets the user itself: the first launch writes, storage
+// announces the change (src/changes.ts), and the store reads again.
+//
+// It is always on: every page shows the user, so every change to this
+// device's account is read again, with no watcher to ask. The match stores
+// of the plan are not like this: they read again only what a page watches.
 
 // This device's account, as stored on the device.
 // - user: this device's user.
@@ -19,7 +23,7 @@ export type Account =
   | { state: 'none' }
   | { state: 'storage-unavailable' }
 
-// unread: not read since it last changed, and no page is showing it.
+// unread: not read yet (before the first load or launch).
 export type UserState = { state: 'unread' } | Account
 
 export type UserStore = {
@@ -29,11 +33,9 @@ export type UserStore = {
   // up to its bound (startupLaunchSettled), and reads again. It makes
   // nothing, and never rejects.
   load(): Promise<void>
-  // A mounted page is showing the user: while watched, every change to this
-  // device's account is read again. Gives the function that stops watching.
-  watchUser(): () => void
-  // main.tsx, after the first paint: the first launch (launchAtStartup,
-  // src/first-launch.ts), then a reload. Never rejects.
+  // main.tsx, after the first paint: one read of the user, then the first
+  // launch (launchAtStartup, src/first-launch.ts), then a read again. Never
+  // rejects.
   launch(): Promise<void>
 }
 
@@ -41,51 +43,37 @@ export type UserStore = {
 // userStore; a test builds a fresh one.
 export function createUserStore() {
   const queue = createQueue()
-  let watchers = 0
 
-  // Reads the user once and puts it in the store, on the queue.
+  // Reads the user once and puts it in the store, on the queue. What the
+  // store had stays until the new read lands, so nothing flashes.
   const reload = () =>
     queue(async () => {
       store.setState({ user: accountOf(await loadMe()) })
     })
 
-  // After a change: read again what a page shows; forget what none does.
-  const refresh = () =>
-    watchers > 0
-      ? reload()
-      : queue(async () => store.setState({ user: { state: 'unread' } }))
-
-  const store = createStore<UserStore>()((set, get) => {
-    return {
-      user: { state: 'unread' },
-      load: () =>
-        queue(async () => {
-          let loaded = await loadMe()
-          if (loaded.ok && loaded.user === null) {
-            await startupLaunchSettled()
-            loaded = await loadMe()
-          }
-          set({ user: accountOf(loaded) })
-        }),
-      watchUser: () => {
-        watchers += 1
-        // Forgotten while no page watched it: read it for this one.
-        if (get().user.state === 'unread') void reload()
-        let watching = true
-        return () => {
-          if (watching) watchers -= 1
-          watching = false
+  const store = createStore<UserStore>()((set) => ({
+    user: { state: 'unread' },
+    load: () =>
+      queue(async () => {
+        let loaded = await loadMe()
+        if (loaded.ok && loaded.user === null) {
+          await startupLaunchSettled()
+          loaded = await loadMe()
         }
-      },
-      launch: async () => {
-        await launchAtStartup()
-        await refresh()
-      },
-    }
-  })
+        set({ user: accountOf(loaded) })
+      }),
+    launch: async () => {
+      // Read first: a device that already has its user shows it at once,
+      // on every page, without waiting for the launch (which waits for the
+      // core's module). Then read again once the launch has settled.
+      void reload()
+      await launchAtStartup()
+      await reload()
+    },
+  }))
 
   onChange((change: Change) => {
-    if (change.account) void refresh()
+    if (change.account) void reload()
   })
   return store
 }
@@ -95,10 +83,6 @@ export const userStore = createUserStore()
 // This device's user, for a connected component (src/components/Settings.tsx).
 export function useUser(): UserState {
   return useStore(userStore, (store) => store.user)
-}
-
-export function watchUser(): () => void {
-  return userStore.getState().watchUser()
 }
 
 function accountOf(loaded: LoadUserResult): Account {
