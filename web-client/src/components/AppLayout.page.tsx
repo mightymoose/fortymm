@@ -15,13 +15,19 @@ export class AppLayoutPage {
     return renderScreen(<AppLayout>{children}</AppLayout>, options)
   }
 
-  renderTopBar() {
-    return renderScreen(<TopBar />)
+  // The top bar, its toggle saying whether the sidebar (`sidebarId`) is
+  // expanded, and calling `onToggleSidebar` when pressed.
+  renderTopBar(props: Parameters<typeof TopBar>[0]) {
+    return renderScreen(<TopBar {...props} />)
   }
 
-  // The sidebar, with `path` the current page (`/` unless given).
-  renderSidebar(options?: { path?: string }) {
-    return renderScreen(<Sidebar />, options)
+  // The sidebar, expanded unless given, with `path` the current page (`/`
+  // unless given).
+  renderSidebar(options?: { path?: string; expanded?: boolean }) {
+    return renderScreen(
+      <Sidebar id="sidebar" expanded={options?.expanded ?? true} />,
+      options,
+    )
   }
 
   // The top bar.
@@ -49,7 +55,10 @@ export class AppLayoutPage {
     return within(await this.navigation()).findByRole('link', { name })
   }
 
-  // The button that collapses and expands the sidebar.
+  // The button that collapses and expands the sidebar, in the top bar. Found
+  // in the whole page, not within banner(): jsdom takes a screen's own
+  // <header> inside <main> for a second banner (the design system page's),
+  // where a browser doesn't.
   sidebarToggle() {
     return screen.findByRole('button', { name: 'Sidebar' })
   }

@@ -98,8 +98,8 @@ a:hover {
   box-shadow: var(--focus-ring);
 }
 
-/* The FortyMM wordmark: the scoreboard-display style, the only place in the
-   app Bebas Neue is used. */
+/* The FortyMM wordmark at its full size, on the design system page: the
+   scoreboard-display style. (The top bar sets its own, smaller.) */
 .wordmark {
   display: block;
   color: var(--fg-1);
