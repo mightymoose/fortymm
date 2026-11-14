@@ -76,18 +76,21 @@ docker compose --profile tools run --rm -T workflows sh -c '
 # The cross-app suite in e2e/ (CI's stage 2): what can fail only because of how
 # the apps are served or connected. Everything an app can prove by itself runs
 # in its <app>:validate instead. Typechecks the suite, builds web-client,
-# serves the build from web-client-worker (its production hosting, the Worker,
-# in the local Workers runtime) and from web-client-hosting (an nginx stand-in
-# that forwards /api/* to api-release, api's production image, and its
-# api-db, which the Worker can't do yet), runs the suite against both, then
-# stops what it started (api-db only if it wasn't already running).
+# serves the build from its production hosting, the Worker, in the local
+# Workers runtime, three times: forwarding /api/* to api-release (api's
+# production image, with its api-db), without an api, and with an api it
+# can't reach. Runs the suite against them, then stops what it started
+# (api-db only if it wasn't already running). The Worker's dependencies are
+# installed once first, so the three don't install them at the same time.
 [tasks.e2e]
-description = "Run the cross-app end-to-end suite in e2e/: typecheck, then Playwright against web-client's build in its Worker, and through a stand-in to api's production image"
+description = "Run the cross-app end-to-end suite in e2e/: typecheck, then Playwright against web-client's build in its Worker, forwarding to api's production image"
 depends = ["web-client:build"]
 run = """
 db_was_running=$(docker compose ps --quiet --status running api-db)
-trap 'docker compose --profile e2e rm --stop --force web-client-worker web-client-hosting api-release; [ -n "$db_was_running" ] || docker compose rm --stop --force api-db' EXIT
-docker compose --profile e2e build e2e web-client-worker web-client-hosting api-release
+workers='web-client-worker web-client-worker-without-api web-client-worker-api-unreachable'
+trap 'docker compose --profile e2e rm --stop --force $workers api-release; [ -n "$db_was_running" ] || docker compose rm --stop --force api-db' EXIT
+docker compose --profile e2e build e2e $workers api-release
+docker compose --profile e2e run --rm --no-deps web-client-worker true
 docker compose --profile e2e run --rm --no-deps e2e npm run typecheck
 docker compose --profile e2e run --rm e2e
 """
@@ -218,16 +221,16 @@ description = "Run a Wrangler command for web-client's Worker: ./bin/mise run we
 run = "docker compose run --rm --build -e CLOUDFLARE_API_TOKEN -e CLOUDFLARE_ACCOUNT_ID web-client-worker npx wrangler"
 
 [tasks."web-client:worker-up"]
-description = "Build web-client and serve it from the Worker in the local Workers runtime (wrangler dev), and print its URL"
+description = "Build web-client and serve it from the Worker in the local Workers runtime (wrangler dev), forwarding /api/* to api's production image, and print its URL"
 depends = ["web-client:build"]
 run = [
-  "docker compose up --detach --build --wait web-client-worker",
+  "docker compose up --detach --build --wait web-client-worker api-release",
   'docker compose ps --format "$DEV_PORTS_FORMAT" web-client-worker | grep -v "^$"',
 ]
 
 [tasks."web-client:worker-down"]
-description = "Stop the Worker in the local Workers runtime"
-run = "docker compose rm --stop --force web-client-worker"
+description = "Stop the Worker in the local Workers runtime, and the api behind it (keeps api-db)"
+run = "docker compose rm --stop --force web-client-worker api-release"
 
 # What can be proven about deploying without credentials: the Worker
 # typechecks; Wrangler accepts the configuration and bundles the Worker with
@@ -368,7 +371,7 @@ usage = 'arg "<address>" help="The address that serves the web client, e.g. http
 run = """
 docker compose --profile e2e build e2e
 docker compose --profile e2e run --rm --no-deps e2e npm run typecheck
-docker compose --profile e2e run --rm --no-deps -e WORKER_URL="$usage_address" -e STAND_IN_URL= e2e
+docker compose --profile e2e run --rm --no-deps -e WORKER_URL="$usage_address" -e WORKER_WITHOUT_API_URL= -e WORKER_API_UNREACHABLE_URL= e2e
 """
 
 # ---- api --------------------------------------------------------------------

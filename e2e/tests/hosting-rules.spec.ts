@@ -1,21 +1,19 @@
-import {
-  expect,
-  test,
-  type APIRequestContext,
-  type APIResponse,
-} from '@playwright/test'
+import { expect, test, type APIRequestContext } from '@playwright/test'
+import { isTheAppPage, methods } from '../pages/app-page.ts'
 
 // The HTTP rules of the web client's production hosting, the Worker in
-// web-client/worker/ (src/index.ts says why each one). No person sees these
-// until they go wrong: a stale sw.js leaves phones on an old version, a
-// script answered with the app's page breaks it, an api path answered with
-// the app's page looks like an answer from the api. Run against the local
-// Workers runtime by the e2e task, or a deployment (web-client:hosting-check).
+// web-client/worker/ (src/index.ts says why each one), with the api behind
+// its proxy. No person sees these until they go wrong: a stale sw.js leaves
+// phones on an old version, a script answered with the app's page breaks it,
+// an api path answered with the app's page looks like an answer from the api.
+// Run against the local Workers runtime, proxying to api-release, by the e2e
+// task; or a pull request's preview, proxying to its api
+// (web-client:hosting-check).
 
-// The page every unknown path gets, recognised by the element the app mounts
-// in (web-client/index.html).
-async function isTheAppPage(response: APIResponse): Promise<boolean> {
-  return (await response.text()).includes('<div id="root">')
+// What the api answers at /v1/health when it reaches its database
+// (api/openapi.json, HealthDocument).
+const apiHealthy = {
+  data: { type: 'health', id: 'api', attributes: { database: 'ok' } },
 }
 
 // A file of the build whose name carries a hash of its content: the script
@@ -86,22 +84,89 @@ test('a missing file under /assets/ is a 404, not the app’s page', async ({
   expect(await isTheAppPage(response)).toBe(false)
 })
 
-// The page loads, GET and HEAD: the only methods any other unknown path
-// answers with the app's page, so the only ones the /api rule changes until
-// the proxy exists. Other methods never get the app's page from any path
-// (the POST test below).
-for (const method of ['GET', 'HEAD']) {
-  for (const path of ['/api', '/api/v1/health']) {
-    test(`${method} ${path} is a 404, not the app’s page`, async ({
-      request,
-    }) => {
-      const response = await request.fetch(path, { method })
+test('GET /api/v1/health is the api’s answer to /v1/health', async ({
+  request,
+}) => {
+  const response = await request.get('/api/v1/health')
 
-      expect(response.status()).toBe(404)
-      expect(await isTheAppPage(response)).toBe(false)
-    })
-  }
+  expect(response.status()).toBe(200)
+  expect(response.headers()['content-type']).toMatch(/^application\/json\b/)
+  expect(await response.json()).toEqual(apiHealthy)
+})
+
+// Every answer of the api is JSON, its errors included (FastAPI's own 404 and
+// 405 too), so a JSON answer here is the api's, and the app's page never is.
+for (const method of methods) {
+  test(`${method} to /api and /api/* is the api’s answer, never the app’s page`, async ({
+    request,
+  }) => {
+    const wrong = []
+    for (const path of ['/api', '/api/', '/api/v1/health', '/api/no/such/path']) {
+      const response = await request.fetch(path, { method, maxRedirects: 0 })
+      const type = response.headers()['content-type'] ?? ''
+      if ((await isTheAppPage(response)) || !type.startsWith('application/json')) {
+        wrong.push(`${path}: ${response.status()} ${type}`)
+      }
+    }
+
+    expect(wrong).toEqual([])
+  })
 }
+
+// The method reaches the api as sent: /v1/health takes only GET, so a POST
+// gets the api's 405.
+test('a POST to /api/v1/health reaches the api as a POST', async ({
+  request,
+}) => {
+  const response = await request.post('/api/v1/health', { data: 'x' })
+
+  expect(response.status()).toBe(405)
+  expect((await response.json()).errors[0].code).toBe('method_not_allowed')
+})
+
+// /api/ is stripped by joining the rest of the path to the api's origin, so a
+// path that would read as another address on its own still goes to the api.
+test('a path under /api/ that looks like another address still goes to the api', async ({
+  request,
+}) => {
+  const response = await request.get('/api//example.com/v1/health')
+
+  expect(response.status()).toBe(404)
+  expect((await response.json()).errors[0].code).toBe('not_found')
+})
+
+// The api redirects to its own address (FastAPI's /v1/health/ to
+// /v1/health); the browser must stay on the app's origin, under /api.
+test('a redirect from the api stays on the app’s origin, under /api', async ({
+  request,
+}) => {
+  const response = await request.get('/api/v1/health/', { maxRedirects: 0 })
+
+  expect(response.status()).toBe(307)
+  expect(response.headers()['location']).toBe('/api/v1/health')
+})
+
+// The browser must always ask the api, and the api's own headers never
+// weaken the hosting's.
+test('the api’s answers are never cached, and carry nosniff', async ({
+  request,
+}) => {
+  const response = await request.get('/api/v1/health')
+
+  expect(await response.json()).toEqual(apiHealthy)
+  expect(response.headers()['cache-control']).toBe('no-store')
+  expect(response.headers()['x-content-type-options']).toBe('nosniff')
+})
+
+// Only /api and what is under /api/ are the api's.
+test('a path that only starts like /api gets the app’s page', async ({
+  request,
+}) => {
+  const response = await request.get('/apiary')
+
+  expect(response.status()).toBe(200)
+  expect(await isTheAppPage(response)).toBe(true)
+})
 
 // The app's page is for page loads only. A form or a script posting to a
 // path the build doesn't have gets a 404, not the page and not an error.

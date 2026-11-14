@@ -30,18 +30,6 @@ test('the hosting serves the app at a deep path, and the bundle runs', async ({
   expect(pageErrors).toEqual([])
 })
 
-// The hosting has no proxy to the api yet: /api/* is a 404, never the app's
-// page, so the health page, loaded directly, says it can't reach the api.
-test('the hosted health page says it can’t reach the api, which the hosting does not serve yet', async ({
-  page,
-}) => {
-  const health = new HealthPage(page)
-
-  await health.open()
-
-  await expect(health.unknown).toBeVisible()
-})
-
 // The shared core's WebAssembly module, as the hosting serves it, is one the
 // browser instantiates: the page shows the core's answer for a fixed player
 // id, its golden vector (core/vectors/vectors.json, "usernames").
