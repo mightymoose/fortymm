@@ -31,19 +31,27 @@ const phone = { width: 390, height: 844 }
 
 // Opens /health and waits until it is drawn: both answers in, fonts loaded.
 //
-// The page's request to the api is answered here, at once, with the 502 and
-// empty body vite preview gives when no api is behind it, so the page says
-// the api's health is unknown. Left to vite preview, the answer waits on its
-// proxy looking up the host `api`, which isn't on the suite's network: quick
-// on a laptop, but with a resolver that takes 5s to give up (reproduced by
-// giving web-client-preview a DNS server that never answers), the page was
-// still checking when the test stopped waiting, and every picture failed.
+// The page's request to the api fails here, at once, in the browser, so the
+// page says the api's health is unknown whatever the network does. Left to
+// vite preview, the answer waited on its proxy looking up the host `api`,
+// which isn't on the suite's network: 3ms on a laptop, but about 5s on CI's
+// runners (a resolver that never answers), so the page was still checking
+// when the test stopped waiting, and every picture failed. And were an api
+// reachable as `api` (the dev stack up in the same checkout), the page would
+// say "healthy". The route is the browser context's, not the page's: only
+// the context's sees requests that go through the app's service worker. The
+// test fails if it answered nothing, so it can't silently stop applying.
 async function openHealth(page: Page) {
   const health = new HealthPage(page)
   const layout = new AppLayout(page)
-  await page.route('**/api/**', (route) => route.fulfill({ status: 502 }))
+  let apiRequests = 0
+  await page.context().route('**/api/**', (route) => {
+    apiRequests += 1
+    return route.abort()
+  })
   await health.goto()
   await expect(health.unknown).toBeVisible()
+  expect(apiRequests, 'api requests the spec answered').toBeGreaterThan(0)
   await expect(health.coreLoaded).toBeVisible()
   await layout.waitForFonts()
   return layout
