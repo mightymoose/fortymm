@@ -87,7 +87,7 @@ test('a first visit straight to /settings on a fresh device shows the username o
   expect(await storage.kept()).toEqual({ records: 1, users: 1 })
 })
 
-test('with the launch held back by another tab holding the append lock, a first visit to /settings stops waiting after the bound and says there is no account yet, having made nothing', async ({
+test('with the launch held back by another tab holding the append lock, a first visit to /settings stops waiting after the bound and says there is no account yet, having made nothing; once the lock is released, the page shows the username the launch made, with no reload', async ({
   context,
   page,
 }) => {
@@ -108,7 +108,56 @@ test('with the launch held back by another tab holding the append lock, a first 
   const storage = new StorageHarness(await context.newPage())
   await storage.open()
   expect(await storage.kept()).toEqual({ records: 0, users: 0 })
+  // Survives only while the page isn't reloaded.
+  await opened.evaluate(() => {
+    ;(window as { notReloaded?: boolean }).notReloaded = true
+  })
+
   await holder.releaseAppendLock()
+
+  expect(await new App(opened).firstLaunch()).toEqual({ ok: true, outcome: 'made' })
+  const { username } = await storage.expectedUser()
+  await expect(settings.username).toHaveText(username)
+  expect(
+    await opened.evaluate(() => (window as { notReloaded?: boolean }).notReloaded),
+  ).toBe(true)
+})
+
+test.describe('with this tab’s own launch failing', () => {
+  // So the page fetches the core itself, where the route below refuses it,
+  // rather than from the service worker's kept copy.
+  test.use({ serviceWorkers: 'block' })
+
+  test('a /settings page that says there is no account yet shows the username once another tab’s launch makes it, with no reload', async ({
+    context,
+    page,
+  }) => {
+    // This page alone can't load the core, so its launch fails and stores
+    // nothing.
+    await page.route('**/*.wasm', (route) => route.abort())
+    await new SettingsPage(page).goto()
+    const settings = new SettingsPage(page)
+    expect(await new App(page).firstLaunch()).toEqual({
+      ok: false,
+      reason: 'core-unavailable',
+    })
+    await expect(settings.noAccount).toBeVisible()
+    await page.evaluate(() => {
+      ;(window as { notReloaded?: boolean }).notReloaded = true
+    })
+
+    const other = await context.newPage()
+    await new StartPage(other).goto()
+    expect(await new App(other).firstLaunch()).toEqual({ ok: true, outcome: 'made' })
+
+    const storage = new StorageHarness(await context.newPage())
+    await storage.open()
+    const { username } = await storage.expectedUser()
+    await expect(settings.username).toHaveText(username)
+    expect(
+      await page.evaluate(() => (window as { notReloaded?: boolean }).notReloaded),
+    ).toBe(true)
+  })
 })
 
 test.describe('with the shared core held back', () => {

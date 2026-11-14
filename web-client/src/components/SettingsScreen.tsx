@@ -1,9 +1,10 @@
 import { Link } from '@tanstack/react-router'
-import type { Account } from '../account.ts'
 import type { User } from '../storage.ts'
+import type { Account } from '../stores/user.ts'
 
-// The account settings page, at /settings: this device's account, as read by
-// ownAccount (src/account.ts). It shows what it is given and makes nothing.
+// The account settings page, at /settings: this device's account, as the
+// user store read it (src/stores/user.ts), handed over by Settings.tsx. It
+// shows what it is given and makes nothing.
 export function SettingsScreen({ account }: { account: Account }) {
   return (
     <section id="center">

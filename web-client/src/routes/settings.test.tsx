@@ -3,11 +3,13 @@ import { SettingsScreenPage } from '../components/SettingsScreen.page.tsx'
 import { loadMe, type User } from '../storage.ts'
 import { renderRoute } from '../test/render-route.tsx'
 
-// The route's wiring: its loader's account reaches the screen, and its pending
-// view shows while the loader runs. Only the storage it reads is replaced
-// (loadMe; jsdom has no IndexedDB). What each account shows is the screen's
-// test (src/components/SettingsScreen.test.tsx); how the account is read is
-// ownAccount's (src/account.test.ts); the page over real storage is the
+// The route's wiring: the user its loader has the store read reaches the
+// screen, and its pending view shows while the loader runs. Only the storage
+// the store reads is replaced (loadMe; jsdom has no IndexedDB). What each
+// account shows is the screen's test (src/components/SettingsScreen.test.tsx);
+// how the user is read is the store's (src/stores/user.test.ts); following
+// the store once mounted, the connected component's
+// (src/components/Settings.test.tsx); the page over real storage is the
 // browser suite's (e2e/tests/settings.spec.ts).
 vi.mock('../storage.ts', () => ({ loadMe: vi.fn(), storeRecord: vi.fn() }))
 
@@ -19,7 +21,7 @@ const user: User = {
   unconfirmed: true,
 }
 
-test('/settings shows the settings screen with this device’s account from its loader', async () => {
+test('/settings shows the settings screen with this device’s user, read by the user store its loader awaits', async () => {
   vi.mocked(loadMe).mockResolvedValue({ ok: true, user })
   renderRoute('/settings')
 

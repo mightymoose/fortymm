@@ -3,7 +3,7 @@ import type { User } from '../storage.ts'
 import { SettingsScreenPage } from './SettingsScreen.page.tsx'
 
 // What the screen shows for each account it is handed. How the account is
-// read (and that reading makes nothing) is ownAccount's (src/account.test.ts);
+// read (and that reading makes nothing) is the user store’s (src/stores/user.test.ts);
 // that /settings hands the screen its loader's account is the route's
 // (src/routes/settings.test.tsx); the page over real storage is the browser
 // suite's (e2e/tests/settings.spec.ts).

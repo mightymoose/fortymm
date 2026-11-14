@@ -1,16 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { ownAccount } from '../account.ts'
-import {
-  SettingsScreen,
-  SettingsScreenPending,
-} from '../components/SettingsScreen.tsx'
+import { Settings } from '../components/Settings.tsx'
+import { SettingsScreenPending } from '../components/SettingsScreen.tsx'
+import { userStore } from '../stores/user.ts'
 
 export const Route = createFileRoute('/settings')({
-  loader: () => ownAccount(),
+  loader: () => userStore.getState().load(),
   pendingComponent: SettingsScreenPending,
-  component: SettingsRoute,
+  component: Settings,
 })
-
-function SettingsRoute() {
-  return <SettingsScreen account={Route.useLoaderData()} />
-}
