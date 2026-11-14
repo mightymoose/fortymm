@@ -1,7 +1,6 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../pages/test.ts'
 import { App, SettingsPage, StartPage } from '../pages/app.ts'
 import { blockedSiteData } from '../pages/blocked-site-data.ts'
-import { deploy } from '../pages/deployment.ts'
 import { DeviceKeyHarness } from '../pages/device-key.ts'
 import { StorageHarness } from '../pages/storage.ts'
 
@@ -13,9 +12,7 @@ import { StorageHarness } from '../pages/storage.ts'
 // profile. /settings after a launch, a reload and with no connection is in
 // settings.spec.ts.
 
-test.beforeEach(async () => {
-  await deploy('harness')
-})
+test.use({ build: 'harness' })
 
 test('on a fresh device, the app’s start stores one key, one hello and one user: the user the core gives for that key', async ({
   context,

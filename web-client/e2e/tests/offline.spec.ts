@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../pages/test.ts'
 import {
   App,
   DesignSystemPage,
@@ -13,10 +13,6 @@ import { deploy } from '../pages/deployment.ts'
 // starts from a fresh browser profile with the current build deployed.
 // "Opening" is loading the address directly in a new page, the way a tab or
 // the home-screen icon does.
-
-test.beforeEach(async () => {
-  await deploy('current')
-})
 
 // The start page's heading is rendered by the app, so seeing it means the
 // kept bundle ran.

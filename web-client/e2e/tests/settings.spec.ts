@@ -1,6 +1,5 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../pages/test.ts'
 import { App, SettingsPage, StartPage } from '../pages/app.ts'
-import { deploy } from '../pages/deployment.ts'
 import { DeviceKeyHarness } from '../pages/device-key.ts'
 import { StorageHarness } from '../pages/storage.ts'
 
@@ -12,9 +11,7 @@ import { StorageHarness } from '../pages/storage.ts'
 // The launch itself (one key, hello and user; two tabs; failures) is in
 // first-launch.spec.ts.
 
-test.beforeEach(async () => {
-  await deploy('harness')
-})
+test.use({ build: 'harness' })
 
 test('after the app’s first start, /settings shows the username the core gives for this device’s key', async ({
   context,

@@ -1,6 +1,5 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../pages/test.ts'
 import { App, StartPage } from '../pages/app.ts'
-import { deploy } from '../pages/deployment.ts'
 import { DeviceKeyHarness } from '../pages/device-key.ts'
 import { StorageHarness } from '../pages/storage.ts'
 
@@ -11,9 +10,7 @@ import { StorageHarness } from '../pages/storage.ts'
 // browser profile. What needs no browser (the records refused, the failures
 // when IndexedDB or Web Locks is missing) is in src/storage.test.ts.
 
-test.beforeEach(async () => {
-  await deploy('harness')
-})
+test.use({ build: 'harness' })
 
 test('a stored hello gives the user with the player id, account id, username and key the core gives for its key, unconfirmed', async ({
   page,

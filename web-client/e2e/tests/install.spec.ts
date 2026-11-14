@@ -1,10 +1,5 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../pages/test.ts'
 import { App, StartPage } from '../pages/app.ts'
-import { deploy } from '../pages/deployment.ts'
-
-test.beforeEach(async () => {
-  await deploy('current')
-})
 
 type InstallabilityError = { errorId: string }
 

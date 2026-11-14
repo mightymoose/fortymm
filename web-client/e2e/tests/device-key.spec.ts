@@ -1,8 +1,7 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../pages/test.ts'
 import { App, StartPage } from '../pages/app.ts'
 import { blockedSiteData } from '../pages/blocked-site-data.ts'
 import { DeviceKeyHarness } from '../pages/device-key.ts'
-import { deploy } from '../pages/deployment.ts'
 
 // This device's signing key (src/device-key.ts) in a real browser: a
 // non-extractable WebCrypto P-256 key kept in IndexedDB. No screen uses it,
@@ -12,9 +11,7 @@ import { deploy } from '../pages/deployment.ts'
 // failure when WebCrypto, IndexedDB or Web Locks is missing) is in
 // src/device-key.test.ts.
 
-test.beforeEach(async () => {
-  await deploy('harness')
-})
+test.use({ build: 'harness' })
 
 const publicKeyShape = /^0[23][0-9a-f]{64}$/
 
