@@ -1,17 +1,19 @@
+import { within } from '@testing-library/react'
 import { expect, test } from 'vitest'
 import { AppLayoutPage } from './AppLayout.page.tsx'
 import { UserMarkLink } from './UserMarkLink.tsx'
 
 // The user's mark in the top bar, given a username. Which username it gets
-// from the store is UserMark.test.tsx; that it shows on phones only is the
-// browser suite's (e2e/tests/app-layout.spec.ts).
+// from the store is UserMark.test.tsx; that phones show only the initials
+// and wider screens the username too is the browser suite's
+// (e2e/tests/app-layout.spec.ts).
 const sidebar = {
   sidebarExpanded: true,
   sidebarId: 'sidebar',
   onToggleSidebar: () => {},
 }
 
-test('with a username, the top bar has a link to /settings named with the full username, showing its initials', async () => {
+test('with a username, the top bar has one link to /settings showing the initials and the full username, named with the username alone', async () => {
   const page = new AppLayoutPage()
   page.renderTopBar({
     ...sidebar,
@@ -20,7 +22,9 @@ test('with a username, the top bar has a link to /settings named with the full u
 
   const mark = await page.userMark('agile-meerkat-4b8z')
   expect(mark).toHaveAttribute('href', '/settings')
-  expect(mark).toHaveTextContent(/^AM$/)
+  expect(mark).toHaveAccessibleName('agile-meerkat-4b8z')
+  expect(within(mark).getByText('AM')).toBeInTheDocument()
+  expect(within(mark).getByText('agile-meerkat-4b8z')).toBeInTheDocument()
   expect(mark).not.toHaveAttribute('aria-current')
 })
 

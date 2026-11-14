@@ -159,10 +159,15 @@ export class AppLayout {
     return this.navigation.getByRole('link', { name })
   }
 
-  // This device's user's mark in the top bar (phones only): a link named
-  // with the username.
+  // This device's user's mark in the top bar: a link named with the
+  // username, showing the initials and, at non-phone widths, the username.
   userMark(username: string): Locator {
     return this.banner.getByRole('link', { name: username, exact: true })
+  }
+
+  // The username written out in the user's mark.
+  userMarkName(username: string): Locator {
+    return this.userMark(username).getByText(username, { exact: true })
   }
 }
 

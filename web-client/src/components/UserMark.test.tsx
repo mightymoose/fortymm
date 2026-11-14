@@ -58,6 +58,6 @@ test('with no account yet, the top bar has no user’s mark; once the store read
 
   announce(accountChanged)
 
-  expect(await page.userMark('agile-meerkat-4b8z')).toHaveTextContent(/^AM$/)
+  expect(await page.userMark('agile-meerkat-4b8z')).toBeInTheDocument()
   expect(await page.brand()).toBe(brand)
 })

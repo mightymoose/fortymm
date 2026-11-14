@@ -48,8 +48,8 @@ test.describe('at a phone width', () => {
   })
 })
 
-// This device's user's mark, at the top bar's right end on phones only
-// (src/components/UserMark.tsx). The app's own first launch stores the user;
+// This device's user's mark, at the top bar's right end: the initials on
+// phones, the initials and the username wider (src/components/UserMark.tsx). The app's own first launch stores the user;
 // the "harness" build's storage page gives the username the core makes for
 // this device's key. Where the mark and the brand are is measured from their
 // boxes, never from a style.
@@ -65,7 +65,7 @@ test.describe('this device’s user’s mark', () => {
   test.describe('at a phone width', () => {
     test.use({ viewport: phone })
 
-    test('after the first launch, the top bar shows the user’s mark, wholly on screen, clear of the brand, with the brand still centred', async ({
+    test('after the first launch, the top bar shows the user’s mark, its initials only, wholly on screen, clear of the brand, with the brand still centred', async ({
       context,
       page,
     }) => {
@@ -81,6 +81,7 @@ test.describe('this device’s user’s mark', () => {
 
       const mark = layout.userMark(username)
       await expect(mark).toBeInViewport({ ratio: 1 })
+      await expect(layout.userMarkName(username)).toBeHidden()
       const markBox = (await mark.boundingBox())!
       const brandBox = (await layout.brand.boundingBox())!
       expect(markBox.x).toBeGreaterThanOrEqual(brandBox.x + brandBox.width)
@@ -145,7 +146,7 @@ test.describe('this device’s user’s mark', () => {
   test.describe('at a desktop width', () => {
     test.use({ viewport: desktop })
 
-    test('after the first launch, the top bar shows no user’s mark', async ({
+    test('after the first launch, the top bar shows the user’s mark with the full username, wholly on screen, at the bar’s right end, clear of the toggle and the brand', async ({
       context,
       page,
     }) => {
@@ -159,8 +160,16 @@ test.describe('this device’s user’s mark', () => {
       await storage.open()
       const { username } = await storage.expectedUser()
 
-      await expect(layout.brand).toBeVisible()
-      await expect(layout.userMark(username)).toBeHidden()
+      const mark = layout.userMark(username)
+      await expect(mark).toBeInViewport({ ratio: 1 })
+      await expect(layout.userMarkName(username)).toBeInViewport({ ratio: 1 })
+      const markBox = (await mark.boundingBox())!
+      const brandBox = (await layout.brand.boundingBox())!
+      const toggleBox = (await layout.sidebarToggle.boundingBox())!
+      expect(markBox.x).toBeGreaterThanOrEqual(brandBox.x + brandBox.width)
+      expect(markBox.x).toBeGreaterThanOrEqual(toggleBox.x + toggleBox.width)
+      // At the right end: its right edge within the screen's 16px margin.
+      expect(desktop.width - (markBox.x + markBox.width)).toBeLessThanOrEqual(16)
     })
   })
 })

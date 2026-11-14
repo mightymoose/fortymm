@@ -12,9 +12,9 @@ import './TopBar.css'
 // The toggle collapses the sidebar (`sidebarId`, its <nav>) to icons only and
 // expands it again; the layout keeps whether it is expanded.
 //
-// On phones only, `user` (this device's user's mark, UserMark.tsx) sits at
-// the right end, in a place of its own that is there, empty, before the mark
-// arrives, so the wordmark stays centred and never moves.
+// `user` (this device's user's mark, UserMark.tsx) sits at the right end, in
+// a place of its own that is there, empty, before the mark arrives. On
+// phones that place is out of the flow, so the centred wordmark never moves.
 export function TopBar({
   sidebarExpanded,
   sidebarId,

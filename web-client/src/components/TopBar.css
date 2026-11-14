@@ -53,18 +53,23 @@
   border-radius: var(--r-sm);
 }
 
-/* This device's user's mark (UserMark), on phones only (the layout's
-   breakpoint): an avatar's width (36px) at the right end, 16px in like the
-   screen's margins, centred in the 40px row. Out of the flow, so the brand,
-   centred by the flex box, stays where it is whether or not the mark is
-   there; the place is kept, empty, until the mark arrives. */
+/* This device's user's mark (UserMark), at the right end, 16px in like the
+   screen's margins (the bar's 8px padding and 8px more), centred in the
+   40px row. On phones (the layout's breakpoint) it is out of the flow, an
+   avatar's width (36px), so the brand, centred by the flex box, stays where
+   it is whether or not the mark is there. At non-phone widths it is in the
+   flow, pushed to the end after the toggle and the brand, and may shrink
+   (the username's ellipsis) rather than push into them. */
 .top-bar__user {
-  position: absolute;
+  position: var(--app-layout-user-position, static);
   top: 0;
-  right: var(--s-4);
+  right: var(--s-2);
   bottom: 0;
-  display: var(--app-layout-user-display, none);
+  display: flex;
   align-items: center;
   justify-content: flex-end;
-  width: 36px;
+  width: var(--app-layout-user-width, auto);
+  min-width: 0;
+  margin-right: var(--s-2);
+  margin-left: auto;
 }
