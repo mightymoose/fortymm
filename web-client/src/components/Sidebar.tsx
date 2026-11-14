@@ -4,6 +4,7 @@ import './Sidebar.css'
 
 // The pages the sidebar links to, in order.
 const links = [
+  { to: '/dashboard', label: 'Dashboard', icon: 'layout-dashboard' },
   { to: '/health', label: 'Health', icon: 'heart-pulse' },
   { to: '/settings', label: 'Settings', icon: 'settings' },
   { to: '/design-system', label: 'Design system', icon: 'palette' },

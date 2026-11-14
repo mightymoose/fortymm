@@ -1,7 +1,15 @@
 import { expect, test } from 'vitest'
 import { AppLayoutPage } from './AppLayout.page.tsx'
 
-test('the sidebar links to the health, settings and design system pages, in that order', async () => {
+test('on the dashboard, its link is the current page', async () => {
+  const page = new AppLayoutPage()
+  page.renderSidebar({ path: '/dashboard' })
+
+  expect(await page.link('Dashboard')).toHaveAttribute('aria-current', 'page')
+  expect(await page.link('Health')).not.toHaveAttribute('aria-current')
+})
+
+test('the sidebar links to the dashboard, health, settings and design system pages, in that order', async () => {
   const page = new AppLayoutPage()
   page.renderSidebar()
 
@@ -10,6 +18,7 @@ test('the sidebar links to the health, settings and design system pages, in that
   expect(
     links.map((link) => [link.textContent, link.getAttribute('href')]),
   ).toEqual([
+    ['Dashboard', '/dashboard'],
     ['Health', '/health'],
     ['Settings', '/settings'],
     ['Design system', '/design-system'],
@@ -20,7 +29,7 @@ test('collapsed, each of the sidebar’s links keeps its name', async () => {
   const page = new AppLayoutPage()
   page.renderSidebar({ expanded: false })
 
-  for (const name of ['Health', 'Settings', 'Design system']) {
+  for (const name of ['Dashboard', 'Health', 'Settings', 'Design system']) {
     expect(await page.link(name)).toBeInTheDocument()
   }
 })

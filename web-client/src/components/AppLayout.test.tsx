@@ -28,7 +28,7 @@ test('the sidebar starts expanded, and the toggle in the top bar collapses it an
 
   await user.click(toggle)
   expect(toggle).toHaveAttribute('aria-expanded', 'false')
-  for (const name of ['Health', 'Settings', 'Design system']) {
+  for (const name of ['Dashboard', 'Health', 'Settings', 'Design system']) {
     expect(await page.link(name)).toBeInTheDocument()
   }
 

@@ -27,7 +27,7 @@ test.describe('at a desktop width', () => {
     await expect(layout.brand).toBeVisible()
     await expect(layout.sidebarToggle).toBeVisible()
     await expect(layout.navigation).toBeVisible()
-    for (const name of ['Health', 'Settings', 'Design system']) {
+    for (const name of ['Dashboard', 'Health', 'Settings', 'Design system']) {
       await expect(layout.link(name)).toBeVisible()
     }
   })
