@@ -1,3 +1,4 @@
+import { screen } from '@testing-library/react'
 import { expect, test } from 'vitest'
 import type { User } from '../storage.ts'
 import { SettingsScreenPage } from './SettingsScreen.page.tsx'
@@ -15,6 +16,14 @@ const user: User = {
   publicKey: '02' + 'ef'.repeat(32),
   unconfirmed: true,
 }
+
+test('the settings screen has no link of its own', async () => {
+  const page = new SettingsScreenPage()
+  page.render({ state: 'user', user })
+  await page.heading()
+
+  expect(screen.queryAllByRole('link')).toEqual([])
+})
 
 test('the settings screen shows the username of this device’s user', async () => {
   const page = new SettingsScreenPage()

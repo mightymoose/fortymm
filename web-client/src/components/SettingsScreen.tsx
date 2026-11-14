@@ -1,4 +1,3 @@
-import { Link } from '@tanstack/react-router'
 import type { User } from '../storage.ts'
 import type { Account } from '../stores/user.ts'
 
@@ -12,7 +11,6 @@ export function SettingsScreen({ account }: { account: Account }) {
         <h1>Account settings</h1>
         <AccountAnswer account={account} />
       </div>
-      <Link to="/">Go to the start page</Link>
     </section>
   )
 }

@@ -13,8 +13,4 @@ export class NotFoundScreenPage {
   heading() {
     return screen.findByRole('heading', { name: 'Page not found' })
   }
-
-  linkToStart() {
-    return screen.findByRole('link', { name: 'Go to the start page' })
-  }
 }

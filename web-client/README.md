@@ -355,7 +355,7 @@ A component test renders the screen alone; a route test mounts the app at a URL.
   expect(await page.healthy()).toBeVisible()
   ```
 
-- The rest only find elements, by role and accessible name (`heading()`, `linkToStart()`). They work wherever the screen is mounted, so a route test uses them too.
+- The rest only find elements, by role and accessible name (`heading()`, `healthy()`). They work wherever the screen is mounted, so a route test uses them too.
 
 A route test mounts the whole app at the route's URL with `renderRoute(path)` (`src/test/render-route.tsx`: the real route tree and router configuration, with an in-memory history), replacing only what the loader reads at a contract (MSW for the api, `vi.mock` for storage), and checks the wiring with the screen's finders:
 
@@ -367,7 +367,7 @@ expect(await new HealthScreenPage().healthy()).toBeVisible()
 
 `renderRoute` gives the router too, for a test of where a redirect ends (`router.state.location.pathname`: `/design-system` ends on `/design-system/colour`). `renderScreen(screen, { at })` puts the bare router at an address, for a screen whose links show which is the current page (`TabNav`, `DesignSystemLayout`); a link the test follows keeps the screen, at the link's address.
 
-The test does any interactions itself, with user-event, so they read in its body: `const user = userEvent.setup()`, then `await user.click(await page.linkToStart())`.
+The test does any interactions itself, with user-event, so they read in its body: `const user = userEvent.setup()`, then `await user.click(await page.brand())`.
 
 ### A call to the api, in tests
 

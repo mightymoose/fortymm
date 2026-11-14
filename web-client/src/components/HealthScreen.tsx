@@ -1,4 +1,4 @@
-import { Await, Link } from '@tanstack/react-router'
+import { Await } from '@tanstack/react-router'
 import type { Health } from '../api/health.ts'
 import type { CoreCheck } from '../core/check.ts'
 
@@ -36,7 +36,6 @@ export function HealthScreen({
           </Await>
         </div>
       </div>
-      <Link to="/">Go to the start page</Link>
     </section>
   )
 }

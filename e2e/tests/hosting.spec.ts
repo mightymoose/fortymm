@@ -17,13 +17,13 @@ test('the hosting serves the app at a deep path, and the bundle runs', async ({
   const pageErrors: Error[] = []
   page.on('pageerror', (error) => pageErrors.push(error))
   const notFound = new NotFoundPage(page)
-  const start = new DashboardPage(page)
+  const dashboard = new DashboardPage(page)
 
   await notFound.open('/no/such/page')
   await expect(notFound.heading).toBeVisible()
 
-  await notFound.linkToStart.click()
-  await expect(start.heading).toBeVisible()
+  await notFound.brandLink.click()
+  await expect(dashboard.heading).toBeVisible()
 
   expect(pageErrors).toEqual([])
 })
