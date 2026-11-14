@@ -7,6 +7,7 @@
    20px from the left edge, over the sidebar's icons. Left or centred, and the
    toggle shown or not, come from the layout's breakpoint (AppLayout.css). */
 .top-bar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: var(--app-layout-brand-justify, flex-start);
@@ -50,4 +51,20 @@
   color: var(--fg-1);
   text-decoration: none;
   border-radius: var(--r-sm);
+}
+
+/* This device's user's mark (UserMark), on phones only (the layout's
+   breakpoint): an avatar's width (36px) at the right end, 16px in like the
+   screen's margins, centred in the 40px row. Out of the flow, so the brand,
+   centred by the flex box, stays where it is whether or not the mark is
+   there; the place is kept, empty, until the mark arrives. */
+.top-bar__user {
+  position: absolute;
+  top: 0;
+  right: var(--s-4);
+  bottom: 0;
+  display: var(--app-layout-user-display, none);
+  align-items: center;
+  justify-content: flex-end;
+  width: 36px;
 }

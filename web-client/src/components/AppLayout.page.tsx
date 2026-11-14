@@ -16,9 +16,13 @@ export class AppLayoutPage {
   }
 
   // The top bar, its toggle saying whether the sidebar (`sidebarId`) is
-  // expanded, and calling `onToggleSidebar` when pressed.
-  renderTopBar(props: Parameters<typeof TopBar>[0]) {
-    return renderScreen(<TopBar {...props} />)
+  // expanded, and calling `onToggleSidebar` when pressed, at `path` (`/`
+  // unless given).
+  renderTopBar(
+    props: Parameters<typeof TopBar>[0],
+    options?: { path?: string },
+  ) {
+    return renderScreen(<TopBar {...props} />, options)
   }
 
   // The sidebar, expanded unless given, with `path` the current page (`/`
@@ -38,6 +42,18 @@ export class AppLayoutPage {
   // The FortyMM brand in the top bar, a link to the start page.
   async brand() {
     return within(await this.banner()).findByRole('link', { name: 'FortyMM' })
+  }
+
+  // This device's user's mark in the top bar, a link named with the
+  // username (`agile-meerkat-4b8z`).
+  async userMark(username: string) {
+    return within(await this.banner()).findByRole('link', { name: username })
+  }
+
+  // Every link in the top bar, in order: the brand, then the user's mark
+  // when there is one.
+  async bannerLinks() {
+    return within(await this.banner()).queryAllByRole('link')
   }
 
   // The sidebar's navigation.

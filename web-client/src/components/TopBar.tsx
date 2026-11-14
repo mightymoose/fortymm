@@ -1,4 +1,5 @@
 import { Link } from '@tanstack/react-router'
+import type { ReactNode } from 'react'
 import { Icon } from './Icon.tsx'
 import './TopBar.css'
 
@@ -10,14 +11,20 @@ import './TopBar.css'
 //
 // The toggle collapses the sidebar (`sidebarId`, its <nav>) to icons only and
 // expands it again; the layout keeps whether it is expanded.
+//
+// On phones only, `user` (this device's user's mark, UserMark.tsx) sits at
+// the right end, in a place of its own that is there, empty, before the mark
+// arrives, so the wordmark stays centred and never moves.
 export function TopBar({
   sidebarExpanded,
   sidebarId,
   onToggleSidebar,
+  user,
 }: {
   sidebarExpanded: boolean
   sidebarId: string
   onToggleSidebar: () => void
+  user?: ReactNode
 }) {
   return (
     <header className="top-bar">
@@ -38,6 +45,7 @@ export function TopBar({
       >
         FortyMM
       </Link>
+      <div className="top-bar__user">{user}</div>
     </header>
   )
 }

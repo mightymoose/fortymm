@@ -3,6 +3,7 @@ import { useNewVersion } from '../new-version.ts'
 import { Sidebar } from './Sidebar.tsx'
 import { TopBar } from './TopBar.tsx'
 import { UpdateNotice } from './UpdateNotice.tsx'
+import { UserMark } from './UserMark.tsx'
 import './AppLayout.css'
 
 // The layout every screen shares (the root route renders each screen in it):
@@ -19,6 +20,9 @@ import './AppLayout.css'
 // stay in view (Sidebar.css). On phones there is no sidebar and no toggle,
 // and no other way to navigate by link yet.
 //
+// On phones the top bar also shows this device's user's mark (UserMark, from
+// the user store), a link to /settings.
+//
 // Over every screen, bottom centre, the notice that a new version of the app
 // is ready to reload into (src/new-version.ts), when there is one.
 export function AppLayout({ children }: { children: ReactNode }) {
@@ -32,6 +36,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
         sidebarExpanded={sidebarExpanded}
         sidebarId={sidebarId}
         onToggleSidebar={() => setSidebarExpanded(!sidebarExpanded)}
+        user={<UserMark />}
       />
       <Sidebar id={sidebarId} expanded={sidebarExpanded} />
       <main className="app-layout__content">{children}</main>

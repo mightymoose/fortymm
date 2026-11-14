@@ -2,14 +2,16 @@
 
    The phone/non-phone breakpoint is 768px, written here and nowhere else (a
    media query can't read a custom property). Narrower is a phone: no
-   sidebar and no toggle for it, the brand centred. At 768px and wider, the
-   sidebar and its toggle show, and the brand sits on the left after the
-   toggle. The top bar and the sidebar read what the breakpoint decides from
-   the two custom properties set here, so no other file has a media query
-   for it. */
+   sidebar and no toggle for it, the brand centred, and this device's user's
+   mark at the top bar's right end. At 768px and wider, the sidebar and its
+   toggle show, the brand sits on the left after the toggle, and there is no
+   user mark. The top bar and the sidebar read what the breakpoint decides
+   from the three custom properties set here, so no other file has a media
+   query for it. */
 .app-layout {
   --app-layout-sidebar-display: none;
   --app-layout-brand-justify: center;
+  --app-layout-user-display: flex;
 
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -23,6 +25,7 @@
   .app-layout {
     --app-layout-sidebar-display: flex;
     --app-layout-brand-justify: flex-start;
+    --app-layout-user-display: none;
 
     grid-template-columns: auto minmax(0, 1fr);
     grid-template-areas:
