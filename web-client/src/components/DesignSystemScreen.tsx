@@ -4,7 +4,9 @@ import { ControlsSection } from './ControlsSection.tsx'
 // FortyMM design system is shown as the app builds it, to check against the
 // design system's reference sheet (references/design-system/). Its header
 // has the wordmark, in Bebas Neue, and the page's title, in Space Grotesk;
-// each board's section goes in <main>: so far, the controls.
+// then each board's section: so far, the controls. It renders in the
+// layout's <main> (AppLayout), so its <header> is the page's own, not a
+// banner.
 export function DesignSystemScreen() {
   return (
     <>
@@ -22,9 +24,7 @@ export function DesignSystemScreen() {
           to check against the design system.
         </p>
       </header>
-      <main aria-label="Components">
-        <ControlsSection />
-      </main>
+      <ControlsSection />
     </>
   )
 }

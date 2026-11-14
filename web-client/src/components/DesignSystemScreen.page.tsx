@@ -10,13 +10,11 @@ export class DesignSystemScreenPage {
     return renderScreen(<DesignSystemScreen />)
   }
 
-  header() {
-    return screen.findByRole('banner')
-  }
-
-  // The FortyMM wordmark, in the page's header.
-  async wordmark() {
-    return within(await this.header()).findByRole('img', { name: 'FortyMM' })
+  // The FortyMM wordmark, in the page's header. (The page's header is not a
+  // banner landmark: in the app it sits in the layout's <main>, whose top
+  // bar is the banner.)
+  wordmark() {
+    return screen.findByRole('img', { name: 'FortyMM' })
   }
 
   // The section showing each control in each state.
@@ -33,10 +31,7 @@ export class DesignSystemScreenPage {
   }
 
   // The page's title, in its header.
-  async heading() {
-    return within(await this.header()).findByRole('heading', {
-      level: 1,
-      name: 'Design system',
-    })
+  heading() {
+    return screen.findByRole('heading', { level: 1, name: 'Design system' })
   }
 }

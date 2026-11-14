@@ -1,0 +1,43 @@
+/* The layout: the top bar across the top, then the sidebar and the screen.
+
+   The phone/non-phone breakpoint is 768px, written here and nowhere else (a
+   media query can't read a custom property). Narrower is a phone: no
+   sidebar, the brand centred. At 768px and wider, the sidebar shows and the
+   brand sits on the left. The top bar and the sidebar read what the
+   breakpoint decides from the two custom properties set here, so no other
+   file has a media query for it. */
+.app-layout {
+  --app-layout-sidebar-display: none;
+  --app-layout-brand-justify: center;
+
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    'top'
+    'content';
+  min-height: 100svh;
+}
+@media (min-width: 768px) {
+  .app-layout {
+    --app-layout-sidebar-display: flex;
+    --app-layout-brand-justify: flex-start;
+
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      'top top'
+      'side content';
+  }
+}
+.app-layout > .top-bar {
+  grid-area: top;
+}
+.app-layout > .sidebar {
+  grid-area: side;
+}
+/* The screen: the rest of the page, with the app's margins. */
+.app-layout__content {
+  grid-area: content;
+  min-width: 0;
+  padding: var(--s-6) var(--s-4);
+}

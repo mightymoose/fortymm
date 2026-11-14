@@ -1,0 +1,74 @@
+/* The sidebar: a panel (bg-panel on bg-app, flat) with a divider on its
+   right, running the page's full height. Its contents stick to the top of
+   the viewport, so the toggle and the links stay in view on a long page. It
+   shows only at non-phone widths (AppLayout.css decides its display).
+
+   Each item, the toggle or a link, is a row 40px high with 12px either side
+   of its 20px icon. Collapsed, the sidebar is one item wide: 8px, 12px, the
+   icon, 12px, 8px, then the divider. Expanded, 240px. The width changes over
+   --dur-change, as feedback to the toggle (reduced motion: theme.css). */
+.sidebar {
+  display: var(--app-layout-sidebar-display, flex);
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 240px;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  transition: width var(--dur-change) var(--ease-out);
+}
+.sidebar--collapsed {
+  width: calc(2 * var(--s-2) + 2 * var(--s-3) + 20px + 1px);
+}
+.sidebar__inner {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-2);
+  padding: var(--s-2);
+  overflow: hidden;
+}
+.sidebar__inner > nav {
+  align-self: stretch;
+}
+.sidebar__links {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* An item (the kit's .fm-nav a, stacked): the label style (13px, weight 500,
+   sentence case) in fg-2; hover lifts it to bg-hover and fg-1; the current
+   page is the selected item, accent-soft with accent-text, the only orange
+   in the layout. */
+.sidebar__item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 40px;
+  padding: 0 var(--s-3);
+  box-sizing: border-box;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--fg-2);
+  font: 500 var(--text-sm) / var(--lh-snug) var(--font-ui);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-change) var(--ease-out),
+    color var(--dur-change) var(--ease-out);
+}
+.sidebar__item:hover {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+.sidebar__item[aria-current='page'] {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}

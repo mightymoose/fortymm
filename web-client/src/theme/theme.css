@@ -54,9 +54,6 @@ body {
   min-height: 100svh;
   background: var(--bg-app);
 }
-#root {
-  padding: var(--s-6) var(--s-4);
-}
 
 /* Type roles (tokens.json, "type"): h1, h2 and h3 are the headings' styles;
    body copy is fg-2. */

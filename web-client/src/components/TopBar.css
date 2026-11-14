@@ -1,0 +1,18 @@
+/* The top bar: on bg-app, flat, with a divider below. The brand is the
+   wordmark (the scoreboard-display style) in fg-1: it isn't an action, so it
+   isn't orange and has no underline. Left or centred comes from the layout's
+   breakpoint (AppLayout.css). */
+.top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: var(--app-layout-brand-justify, flex-start);
+  padding: var(--s-2) var(--s-4);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-app);
+}
+.top-bar__brand,
+.top-bar__brand:hover {
+  color: var(--fg-1);
+  text-decoration: none;
+  border-radius: var(--r-sm);
+}
