@@ -1,0 +1,31 @@
+/* The Feedback tab's stages, after the "Containers, feedback, overlays"
+   board (references/design-system/Feedback.dc.html), which gives some of
+   them spacing of their own. */
+.board__stage.notice-stage {
+  justify-content: center;
+  gap: 14px;
+}
+/* An overlay, with room around it for its shadow. */
+.board__stage.overlay-stage {
+  padding: var(--s-8);
+}
+.board__stage.tooltip-stage {
+  flex-direction: column;
+  gap: var(--s-2);
+}
+.board__stage.meter-stage {
+  gap: 14px;
+}
+.data-grid {
+  margin-top: var(--s-4);
+}
+.board__stage.accordion-stage {
+  gap: 0;
+}
+.board__stage.crumbs-stage {
+  align-items: flex-start;
+  gap: 14px;
+}
+.board__stage.empty-stage {
+  padding: 0 var(--s-4);
+}

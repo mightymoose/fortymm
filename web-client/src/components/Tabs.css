@@ -1,7 +1,9 @@
 /* Tabs (kit.css, .fm-tabs): a row of tabs on a --border-subtle rule. The
    selected tab is --fg-1, heavier, and underlined in the accent: weight and
    underline, not only colour. Focus draws an accent edge inside the tab.
-   [data-forced-state] draws a state without causing it (forced-state.ts). */
+   [data-forced-state] draws a state without causing it (forced-state.ts).
+   The same look serves both forms: Tabs' buttons (selected: aria-selected)
+   and TabNav's links (selected: aria-current="page"). */
 .tabs {
   display: flex;
   gap: var(--s-1);
@@ -21,6 +23,12 @@
   font: 500 var(--text-base) var(--font-ui);
   cursor: pointer;
 }
+/* A link has no button's centring, underline or link colours of its own. */
+a.tabs__tab {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
 .tabs__tab:hover,
 .tabs__tab[data-forced-state='hover'] {
   color: var(--fg-1);
@@ -30,12 +38,12 @@
   outline: none;
   box-shadow: inset 0 0 0 2px var(--accent);
 }
-.tabs__tab[aria-selected='true'] {
+.tabs__tab:is([aria-selected='true'], [aria-current='page']) {
   color: var(--fg-1);
   font-weight: 600;
   box-shadow: inset 0 -2px 0 var(--accent);
 }
-.tabs__tab[aria-selected='true']:is(
+.tabs__tab:is([aria-selected='true'], [aria-current='page']):is(
     :focus-visible,
     [data-forced-state='focus']
   ) {

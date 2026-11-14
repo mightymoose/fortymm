@@ -134,15 +134,30 @@ export class StartPage {
   }
 }
 
+// The design system page's tabs, each a page of its own: its address and
+// its board's title. Each tab's path is written only here.
+const designSystemTabs = {
+  colour: { path: '/design-system/colour', title: 'Colour' },
+  type: { path: '/design-system/type', title: 'Type' },
+  foundations: { path: '/design-system/foundations', title: 'Foundations' },
+  controls: { path: '/design-system/controls', title: 'Controls' },
+  feedback: { path: '/design-system/feedback', title: 'Feedback' },
+}
+
+export type DesignSystemTab = keyof typeof designSystemTabs
+
 // Where each design system component is checked against the design system's
 // reference sheet (references/design-system/): its header (the wordmark and
-// the page's title), then a section per board, so far the controls. It is
-// all in the layout's main landmark; the layout's top bar is the banner.
+// the page's title), its tabs, a page per board of the sheet, and the
+// current tab's board. It is all in the layout's main landmark; the
+// layout's top bar is the banner.
 export class DesignSystemPage {
   readonly wordmark: Locator
   readonly heading: Locator
-  readonly controls: Locator
+  readonly tabs: Locator
   private readonly page: Page
+  // The tab goto() opened (/design-system opens Colour).
+  private shown: DesignSystemTab = 'colour'
 
   constructor(page: Page) {
     this.page = page
@@ -152,22 +167,33 @@ export class DesignSystemPage {
       level: 1,
       name: 'Design system',
     })
-    this.controls = page.getByRole('region', { name: 'Controls' })
+    this.tabs = main.getByRole('navigation', { name: 'Design system' })
   }
 
-  async goto() {
-    await this.page.goto('/design-system')
+  // Opens a tab's page, or /design-system itself, which shows Colour.
+  async goto(tab?: DesignSystemTab) {
+    this.shown = tab ?? 'colour'
+    await this.page.goto(tab ? designSystemTabs[tab].path : '/design-system')
   }
 
-  // Waits until the page shows its sections and every font it uses has
-  // loaded, so a screenshot is never taken in a fallback font.
+  // A tab's board, by its tab ('controls'): the region named by its title.
+  board(tab: DesignSystemTab): Locator {
+    return this.page.getByRole('region', {
+      name: designSystemTabs[tab].title,
+      exact: true,
+    })
+  }
+
+  // Waits until the page shows the tab it opened and every font it uses
+  // has loaded, so a screenshot is never taken in a fallback font.
   async waitUntilDrawn() {
-    await expect(this.controls).toBeVisible()
+    await expect(this.board(this.shown)).toBeVisible()
     await this.page.evaluate(() => document.fonts.ready.then(() => undefined))
   }
 
   // A target of the reference sheet's boards, by the data-testid the board
-  // gives it (state-primary-button--hover, field-anatomy, section-buttons).
+  // gives it (state-primary-button--hover, color-ink-950, section-buttons),
+  // or the tabs themselves (design-system-tabs).
   target(testId: string): Locator {
     return this.page.getByTestId(testId)
   }

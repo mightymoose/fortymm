@@ -16,11 +16,15 @@ import type { ReactNode } from 'react'
 // that router is under test; src/test/render-route.tsx mounts the app's.
 //
 // The router's address is `/` unless the test gives a `path`: a component
-// whose <Link>s mark the current page (the sidebar) is rendered at the page
-// the test wants current.
+// whose <Link>s mark the current page (the sidebar, the design system
+// page's tabs) is rendered at the page the test wants current. It follows a
+// link the test clicks: the screen stays, at the link's address.
 export function renderScreen(screen: ReactNode, { path = '/' } = {}) {
   const router = createRouter({
-    routeTree: createRootRoute({ component: () => screen }),
+    routeTree: createRootRoute({
+      component: () => screen,
+      notFoundComponent: () => null,
+    }),
     history: createMemoryHistory({ initialEntries: [path] }),
   })
   return render(<RouterProvider router={router} />)

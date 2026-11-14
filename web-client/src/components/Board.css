@@ -1,0 +1,98 @@
+/* The design system page's board layout (Board.tsx), after the reference
+   sheet's ref-* classes (references/design-system/reference.css): sections,
+   grids of examples, the stages each target sits on and their captions.
+   Nothing here styles a component of the design system. */
+.board__intro {
+  margin: 0 0 var(--s-8);
+  color: var(--fg-3);
+}
+
+.board__section {
+  margin-bottom: var(--s-12);
+}
+.board__section:last-child {
+  margin-bottom: 0;
+}
+.board__section > h3 {
+  margin: 0 0 var(--s-1);
+}
+.board__description {
+  margin: 0 0 var(--s-5);
+  font: 400 14px / var(--lh-normal) var(--font-ui);
+  color: var(--fg-3);
+}
+
+/* Examples side by side, as ref-grid--<n>. */
+.board__grid {
+  display: grid;
+  gap: var(--s-4);
+}
+.board__grid--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.board__grid--3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.board__grid--4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.board__grid--6 {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+.board__grid--7 {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+.board__grid--8 {
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+}
+
+/* A stage: what a screenshot of a target takes (ref-stage). Its size
+   includes its padding, as on the sheet (a min-height is the stage's). */
+.board__stage {
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--s-3);
+  min-width: 0;
+  padding: var(--s-4);
+  background: var(--bg-app);
+}
+.board__stage--bottom {
+  align-items: flex-end;
+}
+.board__stage--center {
+  justify-content: center;
+}
+.board__stage--column {
+  flex-direction: column;
+  align-items: stretch;
+}
+.board__stage--block {
+  display: block;
+}
+.board__stage--panel {
+  border-radius: var(--r-md);
+  background: var(--bg-panel);
+}
+
+/* One example and its caption (ref-spec, ref-cap). */
+.board__spec {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  min-width: 0;
+  margin: 0;
+}
+.board__caption {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s-2);
+  font: 400 var(--text-xs) / var(--lh-snug) var(--font-num);
+  color: var(--fg-3);
+}
+.board__caption b {
+  font: 500 var(--text-sm) / var(--lh-snug) var(--font-ui);
+  color: var(--fg-2);
+}

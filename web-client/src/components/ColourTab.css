@@ -1,0 +1,80 @@
+/* The Colour tab, after the Colour board (references/design-system/
+   Main.dc.html and reference.css's ref-sw). */
+
+/* A swatch: the colour over its name and value. A hairline of fg-1 at 8%
+   edges the colour, so the darkest inks show against the page. */
+.swatch {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.swatch__chip {
+  height: 72px;
+  border-radius: var(--r-md) var(--r-md) 0 0;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg-1) 8%, transparent);
+}
+.swatch__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px var(--s-3) var(--s-3);
+  border-radius: 0 0 var(--r-md) var(--r-md);
+  background: var(--bg-panel);
+}
+.swatch__meta b {
+  font: 600 var(--text-sm) / var(--lh-snug) var(--font-ui);
+  color: var(--fg-1);
+}
+.swatch__meta span {
+  font: 400 var(--text-xs) / var(--lh-snug) var(--font-num);
+  color: var(--fg-3);
+}
+
+/* Each foreground token on one surface. */
+.board__stage.text-on-surface {
+  gap: 6px;
+  padding: var(--s-5);
+  border-radius: var(--r-md);
+}
+.board__stage.text-on-surface--bg-app {
+  background: var(--bg-app);
+}
+.board__stage.text-on-surface--bg-panel {
+  background: var(--bg-panel);
+}
+.board__stage.text-on-surface--bg-group {
+  background: var(--bg-group);
+}
+.text-on-surface__name {
+  margin-bottom: var(--s-1);
+  font: 500 var(--text-sm) / var(--lh-snug) var(--font-ui);
+  color: var(--fg-3);
+}
+.text-on-surface__fg-1 {
+  font: 600 var(--text-md) / var(--lh-snug) var(--font-ui);
+  color: var(--fg-1);
+}
+.text-on-surface__fg-2 {
+  font: 400 var(--text-base) / var(--lh-normal) var(--font-ui);
+  color: var(--fg-2);
+}
+.text-on-surface__fg-3 {
+  font: 400 var(--text-sm) / var(--lh-snug) var(--font-ui);
+  color: var(--fg-3);
+}
+.text-on-surface__placeholder {
+  font: 400 var(--text-base) / var(--lh-normal) var(--font-ui);
+  color: var(--fg-placeholder);
+}
+.text-on-surface__disabled {
+  font: 400 var(--text-base) / var(--lh-normal) var(--font-ui);
+  color: var(--fg-disabled);
+}
+.text-on-surface__accent {
+  align-self: flex-start;
+  padding: 2px var(--s-2);
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  font: 500 var(--text-base) / var(--lh-normal) var(--font-ui);
+  color: var(--accent-text);
+}

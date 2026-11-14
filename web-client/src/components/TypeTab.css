@@ -1,0 +1,108 @@
+/* The Type tab, after the Type board (references/design-system/
+   Typography.dc.html). */
+
+/* A family at each weight. */
+.board__stage.family {
+  gap: var(--s-1);
+}
+.board__stage.family--display {
+  justify-content: center;
+  min-height: 172px;
+}
+.family__ui,
+.family__num {
+  font: 400 var(--text-xl) / var(--lh-snug) var(--font-ui);
+}
+.family__num {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+.family .w500 {
+  font-weight: 500;
+}
+.family .w600 {
+  font-weight: 600;
+}
+.family .w700 {
+  font-weight: 700;
+}
+.family .scoreboard-display {
+  color: var(--fg-1);
+}
+
+/* The type styles: one row each, the class and its spec beside the
+   sample. */
+.type-styles {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.type-styles__row {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: var(--s-6);
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.type-styles__name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--s-4) 0;
+}
+.type-styles__name span:first-child {
+  font: 600 14px / var(--lh-snug) var(--font-ui);
+  color: var(--fg-1);
+}
+.type-styles__name span:last-child {
+  font: 400 var(--text-xs) / 1.4 var(--font-num);
+  color: var(--fg-3);
+}
+.board__stage.type-styles__stage {
+  padding: var(--s-4) 0;
+}
+/* The roles' colours (tokens.json "type": body copy is fg-2, meta and
+   labels fg-3) and the score's tabular figures, which tokens.css's role
+   classes leave to where they are used. */
+.type-sample {
+  color: var(--fg-1);
+}
+.type-sample.body {
+  color: var(--fg-2);
+}
+.type-sample:is(.meta, .label) {
+  color: var(--fg-3);
+}
+.type-sample.score {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The size scale: each size's token and value beside a sample in it. */
+.board__stage.size-scale {
+  gap: 0;
+  padding: 0;
+}
+.size-scale__row {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: var(--s-6);
+  align-items: baseline;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.size-scale__name {
+  font: 400 var(--text-xs) / 1.4 var(--font-num);
+  color: var(--fg-3);
+}
+.size-scale__sample {
+  font-family: var(--font-ui);
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--fg-1);
+}
+
+/* A line height: two lines, their boxes edged so the leading shows. */
+.line-height__sample {
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
+  font: 500 var(--text-lg) var(--font-ui);
+  color: var(--fg-1);
+}

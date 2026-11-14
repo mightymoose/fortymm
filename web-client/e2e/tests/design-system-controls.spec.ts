@@ -1,40 +1,18 @@
-import { expect, test as base } from '../pages/test.ts'
-import { DesignSystemPage } from '../pages/app.ts'
+import { designSystemScreenshots } from '../pages/design-system.ts'
 
-// How the design system page's controls look, proven by pictures: each
+// How the design system page's Controls tab looks, proven by pictures: each
 // target of the reference sheet's Controls board
 // (references/design-system/Controls.dc.html), found by the data-testid the
-// board gives it, against a baseline in __screenshots__/design-system.spec.ts/
-// that was compared by eye with the board when it was made. One test per
-// section, matrix row or group of examples; inside one, each target is a
-// soft assertion, so every target that changed is named.
+// board gives it, against a baseline in
+// __screenshots__/design-system-controls.spec.ts/ that was compared by eye
+// with the board when it was made. One test per section, matrix row or
+// group of examples; inside one, each target is a soft assertion, so every
+// target that changed is named.
 //
 // Baselines are made by the suite's own container (Linux, the pinned
 // Chromium): ./bin/mise run web-client:e2e -- --update-snapshots, then look
 // at each changed picture beside the board before committing it.
-
-// The board's width: its 1280px less its 48px margins, plus the app's own
-// 16px margins on each side, plus the layout's sidebar, expanded as it
-// starts (240px, Sidebar.css), so each section is laid out at the board's
-// width and a target here is the size of the same target there.
-base.use({ viewport: { width: 1216 + 240, height: 900 } })
-
-// Each test starts on the page, drawn, fonts loaded. (Playwright's `use`
-// is named `provide` here: lint takes a call to `use` for React's hook.)
-const test = base.extend<{ designSystem: DesignSystemPage }>({
-  designSystem: async ({ page }, provide) => {
-    const designSystem = new DesignSystemPage(page)
-    await designSystem.goto()
-    await designSystem.waitUntilDrawn()
-    await provide(designSystem)
-  },
-})
-
-async function looksAsBefore(designSystem: DesignSystemPage, testId: string) {
-  await expect
-    .soft(designSystem.target(testId))
-    .toHaveScreenshot(`${testId}.png`)
-}
+const { test, looksAsBefore } = designSystemScreenshots('controls')
 
 // Each matrix row of the board, and its cells: state-<component>--<state>.
 // A state a control doesn't have has no cell.

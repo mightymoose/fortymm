@@ -13,38 +13,44 @@ import { Switch } from './Switch.tsx'
 import { Tabs } from './Tabs.tsx'
 import { TextArea } from './TextArea.tsx'
 import { TextInput } from './TextInput.tsx'
-import './ControlsSection.css'
+import {
+  Board,
+  BoardGrid,
+  BoardSection,
+  Spec,
+  Stage,
+  type StageLayout,
+} from './Board.tsx'
+import './ControlsTab.css'
 
-// The design system page's Controls section: each control the app has, in
-// each state, laid out as the reference sheet's "Controls: state matrix"
-// board (references/design-system/Controls.dc.html), with the board's
-// data-testid on each target, so a screenshot of a target here can be set
-// beside the same target there.
+// The design system page's Controls tab (/design-system/controls): each
+// control the app has, in each state, laid out as the reference sheet's
+// "Controls: state matrix" board (references/design-system/Controls.dc.html),
+// with the board's data-testid on each target, so a screenshot of a target
+// here can be set beside the same target there.
 //
 // In the state matrices, hover, focus and pressed are forced (forcedState:
 // the control is drawn in that state, forced-state.ts) and the controls are
 // inert, so the pointer and the keyboard can't change what they show. The
 // controls below the matrices (sizes, fields, groups) are live.
-export function ControlsSection() {
+export function ControlsTab() {
   return (
-    <section className="controls" aria-labelledby="controls-heading">
-      <h2 id="controls-heading">Controls</h2>
-      <p className="controls__intro">
-        Each control in each state. In the state matrices, hover, focus and
-        pressed are forced and the controls are inert; below them, the
-        controls are live.
-      </p>
-
-      <section
-        className="controls__section"
-        aria-labelledby="controls-buttons"
-        data-testid="section-buttons"
+    <Board
+      id="controls"
+      title="Controls"
+      intro="Each control in each state. In the state matrices, hover, focus and pressed are forced and the controls are inert; below them, the controls are live."
+    >
+      <BoardSection
+        id="controls-buttons"
+        testId="section-buttons"
+        title="Buttons"
+        description={
+          <>
+            Disabled wins over hover. Loading keeps the variant colours and shows
+            a static ring.
+          </>
+        }
       >
-        <h3 id="controls-buttons">Buttons</h3>
-        <p className="controls__description">
-          Disabled wins over hover. Loading keeps the variant colours and shows
-          a static ring.
-        </p>
         {matrix({
           testId: 'state-matrix-buttons',
           label: 'Buttons in each state',
@@ -88,22 +94,20 @@ export function ControlsSection() {
             },
           ],
         })}
-      </section>
+      </BoardSection>
 
-      <section
-        className="controls__section"
-        aria-labelledby="controls-button-sizes"
-        data-testid="section-button-sizes"
+      <BoardSection
+        id="controls-button-sizes"
+        testId="section-button-sizes"
+        title="Button sizes"
+        description={
+          <>
+            sm 32 · default 40 · lg 48 · xl 64 (score pad targets) · icon 40
+            square.
+          </>
+        }
       >
-        <h3 id="controls-button-sizes">Button sizes</h3>
-        <p className="controls__description">
-          sm 32 · default 40 · lg 48 · xl 64 (score pad targets) · icon 40
-          square.
-        </p>
-        <div
-          className="controls__stage controls__stage--bottom"
-          data-testid="button-sizes"
-        >
+        <Stage testId="button-sizes" layout="bottom">
           <Button variant="primary" size="sm" data-testid="button-size-sm">
             Call to table
           </Button>
@@ -137,20 +141,21 @@ export function ControlsSection() {
             <Icon name="plus" />
             Add player
           </Button>
-        </div>
-      </section>
+        </Stage>
+      </BoardSection>
 
-      <section
-        className="controls__section"
-        aria-labelledby="controls-fields"
-        data-testid="section-fields"
+      <BoardSection
+        id="controls-fields"
+        testId="section-fields"
+        title="Fields"
+        description={
+          <>
+            Interactive edges use <code>--border-field</code>. A focused invalid
+            field keeps its red edge, icon and message; the ring is added
+            outside.
+          </>
+        }
       >
-        <h3 id="controls-fields">Fields</h3>
-        <p className="controls__description">
-          Interactive edges use <code>--border-field</code>. A focused invalid
-          field keeps its red edge, icon and message; the ring is added
-          outside.
-        </p>
         {matrix({
           testId: 'state-matrix-fields',
           label: 'Fields in each state',
@@ -200,7 +205,7 @@ export function ControlsSection() {
             },
           ],
         })}
-        <div className="controls__grid">
+        <BoardGrid columns={3}>
           {spec({
             testId: 'field-anatomy',
             title: 'Field: label, placeholder, help',
@@ -244,19 +249,20 @@ export function ControlsSection() {
               </Field>
             ),
           })}
-        </div>
-      </section>
+        </BoardGrid>
+      </BoardSection>
 
-      <section
-        className="controls__section"
-        aria-labelledby="controls-choices"
-        data-testid="section-choices"
+      <BoardSection
+        id="controls-choices"
+        testId="section-choices"
+        title="Choices and selection"
+        description={
+          <>
+            Selected always has a non-colour cue: a check, a knob position, a
+            filled weight or an underline.
+          </>
+        }
       >
-        <h3 id="controls-choices">Choices and selection</h3>
-        <p className="controls__description">
-          Selected always has a non-colour cue: a check, a knob position, a
-          filled weight or an underline.
-        </p>
         {matrix({
           testId: 'state-matrix-choices',
           label: 'Choices in each state',
@@ -365,19 +371,20 @@ export function ControlsSection() {
             },
           ],
         })}
-      </section>
+      </BoardSection>
 
-      <section
-        className="controls__section"
-        aria-labelledby="controls-selection-groups"
-        data-testid="section-selection-groups"
+      <BoardSection
+        id="controls-selection-groups"
+        testId="section-selection-groups"
+        title="Selection groups"
+        description={
+          <>
+            Tabs switch sibling sections. Segmented is another view of the same
+            data. Chips narrow a list. Never a switch to filter.
+          </>
+        }
       >
-        <h3 id="controls-selection-groups">Selection groups</h3>
-        <p className="controls__description">
-          Tabs switch sibling sections. Segmented is another view of the same
-          data. Chips narrow a list. Never a switch to filter.
-        </p>
-        <div className="controls__grid">
+        <BoardGrid columns={3}>
           {spec({
             testId: 'group-tabs',
             title: 'Tabs',
@@ -431,9 +438,9 @@ export function ControlsSection() {
               />
             ),
           })}
-        </div>
-      </section>
-    </section>
+        </BoardGrid>
+      </BoardSection>
+    </Board>
   )
 }
 
@@ -486,12 +493,9 @@ function matrix({
                 </td>
               ) : (
                 <td key={state}>
-                  <div
-                    className="controls__stage"
-                    data-testid={`state-${row.id}--${state}`}
-                  >
+                  <Stage testId={`state-${row.id}--${state}`}>
                     {row.cells[state]}
-                  </div>
+                  </Stage>
                 </td>
               ),
             )}
@@ -655,21 +659,14 @@ function spec({
   testId: string
   title: string
   component: string
-  layout: 'row' | 'column' | 'block'
+  layout: StageLayout
   example: ReactNode
 }) {
   return (
-    <figure className="controls__spec">
-      <div
-        className={`controls__stage controls__stage--${layout}`}
-        data-testid={testId}
-      >
+    <Spec title={title} detail={component}>
+      <Stage testId={testId} layout={layout}>
         {example}
-      </div>
-      <figcaption className="controls__caption">
-        <b>{title}</b>
-        <span>{component}</span>
-      </figcaption>
-    </figure>
+      </Stage>
+    </Spec>
   )
 }

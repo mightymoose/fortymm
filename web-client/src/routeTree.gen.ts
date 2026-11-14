@@ -13,6 +13,12 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as DesignSystemRouteImport } from './routes/design-system'
 import { Route as HealthRouteImport } from './routes/health'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as DesignSystemIndexRouteImport } from './routes/design-system/index'
+import { Route as DesignSystemColourRouteImport } from './routes/design-system/colour'
+import { Route as DesignSystemControlsRouteImport } from './routes/design-system/controls'
+import { Route as DesignSystemFeedbackRouteImport } from './routes/design-system/feedback'
+import { Route as DesignSystemFoundationsRouteImport } from './routes/design-system/foundations'
+import { Route as DesignSystemTypeRouteImport } from './routes/design-system/type'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -34,37 +40,114 @@ const SettingsRoute = SettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DesignSystemIndexRoute = DesignSystemIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => DesignSystemRoute,
+} as any)
+const DesignSystemColourRoute = DesignSystemColourRouteImport.update({
+  id: '/colour',
+  path: '/colour',
+  getParentRoute: () => DesignSystemRoute,
+} as any)
+const DesignSystemControlsRoute = DesignSystemControlsRouteImport.update({
+  id: '/controls',
+  path: '/controls',
+  getParentRoute: () => DesignSystemRoute,
+} as any)
+const DesignSystemFeedbackRoute = DesignSystemFeedbackRouteImport.update({
+  id: '/feedback',
+  path: '/feedback',
+  getParentRoute: () => DesignSystemRoute,
+} as any)
+const DesignSystemFoundationsRoute = DesignSystemFoundationsRouteImport.update({
+  id: '/foundations',
+  path: '/foundations',
+  getParentRoute: () => DesignSystemRoute,
+} as any)
+const DesignSystemTypeRoute = DesignSystemTypeRouteImport.update({
+  id: '/type',
+  path: '/type',
+  getParentRoute: () => DesignSystemRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/design-system': typeof DesignSystemRoute
+  '/design-system': typeof DesignSystemRouteWithChildren
   '/health': typeof HealthRoute
   '/settings': typeof SettingsRoute
+  '/design-system/colour': typeof DesignSystemColourRoute
+  '/design-system/controls': typeof DesignSystemControlsRoute
+  '/design-system/feedback': typeof DesignSystemFeedbackRoute
+  '/design-system/foundations': typeof DesignSystemFoundationsRoute
+  '/design-system/type': typeof DesignSystemTypeRoute
+  '/design-system/': typeof DesignSystemIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/design-system': typeof DesignSystemRoute
   '/health': typeof HealthRoute
   '/settings': typeof SettingsRoute
+  '/design-system/colour': typeof DesignSystemColourRoute
+  '/design-system/controls': typeof DesignSystemControlsRoute
+  '/design-system/feedback': typeof DesignSystemFeedbackRoute
+  '/design-system/foundations': typeof DesignSystemFoundationsRoute
+  '/design-system/type': typeof DesignSystemTypeRoute
+  '/design-system': typeof DesignSystemIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/design-system': typeof DesignSystemRoute
+  '/design-system': typeof DesignSystemRouteWithChildren
   '/health': typeof HealthRoute
   '/settings': typeof SettingsRoute
+  '/design-system/colour': typeof DesignSystemColourRoute
+  '/design-system/controls': typeof DesignSystemControlsRoute
+  '/design-system/feedback': typeof DesignSystemFeedbackRoute
+  '/design-system/foundations': typeof DesignSystemFoundationsRoute
+  '/design-system/type': typeof DesignSystemTypeRoute
+  '/design-system/': typeof DesignSystemIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/design-system' | '/health' | '/settings'
+  fullPaths:
+    | '/'
+    | '/design-system'
+    | '/health'
+    | '/settings'
+    | '/design-system/colour'
+    | '/design-system/controls'
+    | '/design-system/feedback'
+    | '/design-system/foundations'
+    | '/design-system/type'
+    | '/design-system/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/design-system' | '/health' | '/settings'
-  id: '__root__' | '/' | '/design-system' | '/health' | '/settings'
+  to:
+    | '/'
+    | '/health'
+    | '/settings'
+    | '/design-system/colour'
+    | '/design-system/controls'
+    | '/design-system/feedback'
+    | '/design-system/foundations'
+    | '/design-system/type'
+    | '/design-system'
+  id:
+    | '__root__'
+    | '/'
+    | '/design-system'
+    | '/health'
+    | '/settings'
+    | '/design-system/colour'
+    | '/design-system/controls'
+    | '/design-system/feedback'
+    | '/design-system/foundations'
+    | '/design-system/type'
+    | '/design-system/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  DesignSystemRoute: typeof DesignSystemRoute
+  DesignSystemRoute: typeof DesignSystemRouteWithChildren
   HealthRoute: typeof HealthRoute
   SettingsRoute: typeof SettingsRoute
 }
@@ -99,12 +182,76 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/design-system/': {
+      id: '/design-system/'
+      path: '/'
+      fullPath: '/design-system/'
+      preLoaderRoute: typeof DesignSystemIndexRouteImport
+      parentRoute: typeof DesignSystemRoute
+    }
+    '/design-system/colour': {
+      id: '/design-system/colour'
+      path: '/colour'
+      fullPath: '/design-system/colour'
+      preLoaderRoute: typeof DesignSystemColourRouteImport
+      parentRoute: typeof DesignSystemRoute
+    }
+    '/design-system/controls': {
+      id: '/design-system/controls'
+      path: '/controls'
+      fullPath: '/design-system/controls'
+      preLoaderRoute: typeof DesignSystemControlsRouteImport
+      parentRoute: typeof DesignSystemRoute
+    }
+    '/design-system/feedback': {
+      id: '/design-system/feedback'
+      path: '/feedback'
+      fullPath: '/design-system/feedback'
+      preLoaderRoute: typeof DesignSystemFeedbackRouteImport
+      parentRoute: typeof DesignSystemRoute
+    }
+    '/design-system/foundations': {
+      id: '/design-system/foundations'
+      path: '/foundations'
+      fullPath: '/design-system/foundations'
+      preLoaderRoute: typeof DesignSystemFoundationsRouteImport
+      parentRoute: typeof DesignSystemRoute
+    }
+    '/design-system/type': {
+      id: '/design-system/type'
+      path: '/type'
+      fullPath: '/design-system/type'
+      preLoaderRoute: typeof DesignSystemTypeRouteImport
+      parentRoute: typeof DesignSystemRoute
+    }
   }
 }
 
+interface DesignSystemRouteChildren {
+  DesignSystemColourRoute: typeof DesignSystemColourRoute
+  DesignSystemControlsRoute: typeof DesignSystemControlsRoute
+  DesignSystemFeedbackRoute: typeof DesignSystemFeedbackRoute
+  DesignSystemFoundationsRoute: typeof DesignSystemFoundationsRoute
+  DesignSystemTypeRoute: typeof DesignSystemTypeRoute
+  DesignSystemIndexRoute: typeof DesignSystemIndexRoute
+}
+
+const DesignSystemRouteChildren: DesignSystemRouteChildren = {
+  DesignSystemColourRoute: DesignSystemColourRoute,
+  DesignSystemControlsRoute: DesignSystemControlsRoute,
+  DesignSystemFeedbackRoute: DesignSystemFeedbackRoute,
+  DesignSystemFoundationsRoute: DesignSystemFoundationsRoute,
+  DesignSystemTypeRoute: DesignSystemTypeRoute,
+  DesignSystemIndexRoute: DesignSystemIndexRoute,
+}
+
+const DesignSystemRouteWithChildren = DesignSystemRoute._addFileChildren(
+  DesignSystemRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  DesignSystemRoute: DesignSystemRoute,
+  DesignSystemRoute: DesignSystemRouteWithChildren,
   HealthRoute: HealthRoute,
   SettingsRoute: SettingsRoute,
 }
