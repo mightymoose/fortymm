@@ -32,6 +32,13 @@ How each part is tested, at the narrowest seam:
 - **A loading function, or an api call**: its own test beside it (`src/account.test.ts`, `src/core/check.test.ts`, `src/api/health.test.ts`), with only what it reads replaced at a contract (MSW for the api, `vi.mock('./storage.ts')` for storage).
 - **A route**: `src/routes/<route>.test.tsx`, through `renderRoute(path)` (the app's real router and route tree), proves only the wiring, with the screen's page object's finders: the path shows its screen with the loader's data (one case), its pending, error or not-found component, and how params, search and redirects behave. Never a screen's states again.
 
+## Screenshot tests are for the design system pages only
+
+"let's ditch screenshot tests anywhere except the design system pages, they are fragile, I don't want to fix this test or mock the api." (the user, 2026-11-14)
+
+- A screenshot test (`toHaveScreenshot`) is only ever of a design system page, `/design-system/*` (`e2e/tests/design-system*.spec.ts`). No other screen and no part of the layout gets one, and no test mocks the api to make a picture hold still.
+- How everything else looks is pinned by no test, and never by reading a style. What a browser alone can show about it (which parts a media query shows) is a browser test by role and visibility, on a page that needs no network (`e2e/tests/app-layout.spec.ts`, on `/`).
+
 ## The design system's components
 
 The controls in `src/components/` (`Button`, `Field`, `Checkbox`, `Tabs`...; README "The controls") are the design system's, checked against its reference sheet, `../references/design-system/`.
@@ -39,7 +46,7 @@ The controls in `src/components/` (`Button`, `Field`, `Checkbox`, `Tabs`...; REA
 - A component is the real element (`<button>`, `<input>` inside its `<label>`, `role="tab"`, `role="switch"`), named the way the design system says, one per file with its CSS beside it. Every colour is a token (mix a token with `color-mix()` rather than copy a value); only sizes the tokens lack are px.
 - Its CSS follows the kit's `fm-*` rule for it in `reference.css`. A change to how one looks changes its screenshots: write them again (`./bin/mise run web-client:e2e -- --update-snapshots`) and look at each beside the same `data-testid` on the board before committing.
 - A state the design system page draws without causing it (hover, focus, pressed) is the `forcedState` prop, rendered as `data-forced-state`, beside the real pseudo-class in the same CSS rule. Nothing else sets it.
-- What a component does is its own test, `src/components/<Name>.test.tsx`, rendered alone, by role and accessible name; how it looks is only ever a screenshot (`e2e/tests/design-system.spec.ts`; the layout's, `e2e/tests/app-layout.spec.ts`), never a style read in a test.
+- What a component does is its own test, `src/components/<Name>.test.tsx`, rendered alone, by role and accessible name; how it looks is only ever a screenshot (`e2e/tests/design-system.spec.ts`), never a style read in a test.
 - A new target on the board gets the board's `data-testid` in `ControlsSection` and a line in `design-system.spec.ts`.
 
 ## Answers from the api are parsed with zod, at the boundary
