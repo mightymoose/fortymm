@@ -2,6 +2,36 @@
 
 The repository's `CLAUDE.md` covers the tasks and layout; `README.md` here has the details. This file holds the conventions for code in the web client.
 
+## Route files are cheap wiring; screens are components
+
+"I'd prefer the route files to just be cheap wiring to a component in components/ for the web client and handling only routing specific concerns, this makes the components easier to test." (the user, 2026-11-14)
+
+Each screen is one component in `src/components/`, named for the screen (`HealthScreen.tsx`, its CSS beside it if it has any). It takes everything it shows as props and holds the screen's markup, state and display logic. A route file in `src/routes/` holds only what the router needs to reach it.
+
+A route file may contain only:
+
+- `createFileRoute('<path>')({...})` with the path.
+- `component:` pointing at one component from `src/components/`, rendered with no markup of its own around it; likewise `pendingComponent`, `errorComponent` and `notFoundComponent`, each a component from `src/components/`.
+- Validating and typing route inputs: `validateSearch` (zod), `params` parse and stringify, search defaults.
+- Loading: `loader`, `beforeLoad`, `loaderDeps`, caching options, and calls from a loader to the typed api functions (`src/api/`) or to a loading function (below). Redirects and `notFound()`/`redirect()` guards (auth, "first launch settled", and so on).
+- Reading route data (`Route.useParams()`, `Route.useSearch()`, `Route.useLoaderData()`) in a tiny wrapper whose only job is to hand them to the component as props. Declare it as a function below `Route` (`function HealthRoute()`), not inline: TypeScript can't type `Route` used inside its own initializer.
+- `head`/meta (the page title) and the route's `staticData`.
+- Router navigation concerns: the type of a link's `to`, preload settings.
+
+Never in a route file: JSX beyond rendering that one component with props; `useState`, `useEffect` or any other state or effect; data fetching inside a component; CSS or styling; formatting or business logic; any markup (headings, wrappers, `<main>`).
+
+Where neither list fits, these are decided:
+
+- **The root route's component is the router's own `Outlet`** (`component: Outlet` in `__root.tsx`): routing's shell, not markup. A layout every screen shares would be a component in `src/components/` taking the outlet as its children, `component: () => <AppLayout><Outlet /></AppLayout>`, the one place a route renders anything but a single component.
+- **What a loader runs that is more than one call** (deciding, waiting, reading again, turning results into what the screen shows) is a loading function in a module of its own, beside what it reads, and the loader only calls it: `ownAccount()` in `src/account.ts` (`/settings`), `checkCore()` in `src/core/check.ts` (`/health`). It returns plain data, never throws for an answer it can give, and knows nothing about screens.
+- **Answers that arrive separately** are handed to the screen as promises: the loader returns them unawaited and the screen waits for each with the router's `<Await>` and a `fallback` (`HealthScreen`). A screen may use the router's components (`<Link>`, `<Await>`); it never reads route data itself (`Route.useLoaderData()`, `getRouteApi`): the route's wrapper hands it over.
+
+How each part is tested, at the narrowest seam:
+
+- **A screen's behavior**: `src/components/<Name>Screen.test.tsx`, with the component rendered alone, given the props each state takes, through its page object `src/components/<Name>Screen.page.tsx`. The page object's `render(props)` calls `renderScreen(<HealthScreen ... />)` (`src/test/render-screen.tsx`), which gives the screen a bare router of its own (`<Link>` and `<Await>` need one) and none of the app's routes. Its other methods only find elements, by role and accessible name, and work wherever the screen is mounted. Every state the screen can show is a case here; nothing is faked, since a screen fetches nothing.
+- **A loading function, or an api call**: its own test beside it (`src/account.test.ts`, `src/core/check.test.ts`, `src/api/health.test.ts`), with only what it reads replaced at a contract (MSW for the api, `vi.mock('./storage.ts')` for storage).
+- **A route**: `src/routes/<route>.test.tsx`, through `renderRoute(path)` (the app's real router and route tree), proves only the wiring, with the screen's page object's finders: the path shows its screen with the loader's data (one case), its pending, error or not-found component, and how params, search and redirects behave. Never a screen's states again.
+
 ## Answers from the api are parsed with zod, at the boundary
 
 Every conversion at the api boundary is done with zod, in the schema: telling a call's answers apart, camelCase keys, date values and conveniences like them. Never do them by hand in components or helpers.
@@ -43,7 +73,7 @@ Every conversion at the api boundary is done with zod, in the schema: telling a 
 - A record and every row it mints are written in one transaction, with strict durability, inside the append lock (`appendLock`). Never write one without the other.
 - The "me" pointer (store `me`) says which stored user is this device's. It is written in the same transaction as that user (`storeRecord(record, { me: true })`), so it never points at a user that isn't stored. `loadMe` reads it and the user in one transaction, with no lock.
 - Failures are typed results (`{ ok: false, reason }`), never thrown, as in `device-key.ts`. A missing row is `null`, not a failure.
-- Claims about what is kept go in the browser suite (`e2e/tests/storage.spec.ts`, through `e2e/harness/storage.html`). A screen's component test replaces only the storage it reads (`vi.mock('../storage.ts')`, `loadMe` for this device's user), as `src/routes/settings.test.tsx` does.
+- Claims about what is kept go in the browser suite (`e2e/tests/storage.spec.ts`, through `e2e/harness/storage.html`). A test of code that reads storage replaces only the storage it reads (`vi.mock('./storage.ts')`, `loadMe` for this device's user), as `src/account.test.ts` and the route test `src/routes/settings.test.tsx` do; a screen reads none, so its test replaces nothing.
 
 ## The app is kept on the device
 

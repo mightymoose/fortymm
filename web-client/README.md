@@ -4,15 +4,30 @@ The fortymm web client: Vite, React, TypeScript and [TanStack Router](https://ta
 
 ## Routes
 
-Each screen is a file in `src/routes/`. The file name is the URL (`index.tsx` is `/`; `about.tsx` would be `/about`). See TanStack Router's [file naming conventions](https://tanstack.com/router/latest/docs/framework/react/routing/file-naming-conventions).
+Each screen has a route file in `src/routes/` and a component in `src/components/`. The file name is the URL (`index.tsx` is `/`; `about.tsx` would be `/about`). See TanStack Router's [file naming conventions](https://tanstack.com/router/latest/docs/framework/react/routing/file-naming-conventions).
 
-- `src/routes/__root.tsx` is the root route: the layout every screen renders inside, and the not-found page shown for any URL that matches no route.
-- `src/routes/index.tsx` is the start page at `/`. It is blank, on the theme's background; its one element is a heading for screen readers.
-- `src/routes/design-system.tsx` is the design system page at `/design-system` ("The theme" below).
-- `src/routes/settings.tsx` is the account settings page at `/settings` ("The account settings page" below).
+Route files are cheap wiring (the user's rule; the allow list and the decisions are in `CLAUDE.md`, "Route files are cheap wiring; screens are components"). A route file names its path, loads what the screen needs, and hands it to one screen component, `src/components/<Name>Screen.tsx`, as props; the screen holds every bit of markup, state and display logic, so it can be tested alone. What a loader runs beyond one call lives in a loading function of its own (`ownAccount()` in `src/account.ts`, `checkCore()` in `src/core/check.ts`). `/health`'s route file is all of it:
+
+```tsx
+export const Route = createFileRoute('/health')({
+  loader: () => ({ health: fetchHealth(), core: checkCore() }),
+  component: HealthRoute,
+})
+
+function HealthRoute() {
+  const { health, core } = Route.useLoaderData()
+  return <HealthScreen health={health} core={core} />
+}
+```
+
+- `src/routes/__root.tsx` is the root route: every screen renders in its `<Outlet />`, with no layout around it yet; its `notFoundComponent`, `NotFoundScreen`, is shown for any URL that matches no route.
+- `src/routes/index.tsx` is the start page at `/` (`StartScreen`). It is blank, on the theme's background; its one element is a heading for screen readers.
+- `src/routes/design-system.tsx` is the design system page at `/design-system` (`DesignSystemScreen`, "The theme" below).
+- `src/routes/health.tsx` is the health page at `/health` (`HealthScreen`, "The shared core" below).
+- `src/routes/settings.tsx` is the account settings page at `/settings` (`SettingsScreen`, and `SettingsScreenPending` while it reads; "The account settings page" below).
 - `src/router.ts` creates the router and registers it with the type checker, so a `<Link>` or `navigate()` to a path with no route file fails `web-client:typecheck`.
 
-To add a screen, add a route file that exports `Route = createFileRoute('/path')({ component })`. Nothing else needs registering. The Vite plugin regenerates `src/routeTree.gen.ts` when the dev server (`web-client:up`) starts, whenever a route file changes, and on build.
+To add a screen, add its component in `src/components/` and a route file that exports `Route = createFileRoute('/path')({ component })` pointing at it. Nothing else needs registering. The Vite plugin regenerates `src/routeTree.gen.ts` when the dev server (`web-client:up`) starts, whenever a route file changes, and on build.
 
 `src/routeTree.gen.ts` is generated but committed, so the type checker and editors work on a fresh checkout. Don't edit it. If it disagrees with `src/routes/`, `web-client:routes-check` (first step of `web-client:validate`, so in CI) fails, regenerates it, and you commit the result. Generator options go in `tsr.config.json`, which both the Vite plugin and the check read. Lint skips the file.
 
@@ -33,7 +48,7 @@ To add a screen, add a route file that exports `Route = createFileRoute('/path')
   - *Out:* `.transform(...)` turns the wire shape into the app's type (`Health`). This is where snake_case keys will become camelCase and date strings date values. App code uses only the output types.
   - A body that matches no variant (another status, an HTML page, a changed api) is an answer of its own (`unknown`), not a thrown error. `web-client/CLAUDE.md` has the rules in short.
 - **Where the api is.** At `/api` on the app's own origin. Whatever serves the app forwards `/api/*` to the api with `/api` stripped, so `/api/v1/health` reaches the api's `/v1/health`: Vite's `server.proxy` in dev (`vite.config.ts`, to the `api` service), and the production hosting, the Worker ("Hosting" below), to the api its deployment names (a pull request's preview: that pull request's api; the cross-app suite: `api-release`). A Worker deployed without an api, as production is for now, answers `/api` and `/api/*` with a 404. So no route file may produce a URL starting with `/api`.
-- **Screens that load data** use a route `loader` that calls the `src/api/` function, and show something for while it's on the way: a `pendingComponent`, or, when a screen has answers that arrive separately, a loader that returns the promises unawaited and an `<Await>` with a `fallback` for each, so one slow answer never holds up another (see `src/routes/health.tsx`, where a slow api must not hide the core's answer). Turn every answer, including "couldn't reach the api", into data the component shows; don't let the loader throw for an answer the api can give.
+- **Screens that load data** use a route `loader` that calls the `src/api/` function, and show something for while it's on the way: a `pendingComponent`, or, when a screen has answers that arrive separately, a loader that returns the promises unawaited and an `<Await>` with a `fallback` for each in the screen component, so one slow answer never holds up another (see `src/routes/health.tsx` and `src/components/HealthScreen.tsx`, where a slow api must not hide the core's answer). Turn every answer, including "couldn't reach the api", into data the component shows; don't let the loader throw for an answer the api can give.
 
 ## The shared core
 
@@ -49,7 +64,7 @@ core.username(playerId, 4) // synchronous once loaded
 - **Where it comes from.** `core:wasm` builds the module and publishes it with the wrapper (`fortymm-core.mjs`) and its types (`fortymm-core.d.mts`) to `/opt/core/wasm` in the `core-cache` volume. The `web-client` service mounts the volume read-only at `/opt/core`, and the app imports it as `fortymm-core/...`: an alias in `vite.config.ts` (with `server.fs.allow`, so the dev server serves it) and a path in `tsconfig.app.json`, so the types are the core's own. `web-client:up`, `:typecheck`, `:test` and `:build` run `core:wasm` first; nothing else needs setting up.
 - **Loading.** `src/core/load.ts` fetches the module and instantiates it once per page, and every caller gets the same `Core`. A load that fails is forgotten, so the next caller tries again. The build emits the module as `dist/assets/fortymm-core-<hash>.wasm` (about 139 kB, 62 kB gzipped), so the service worker keeps it with every other file and the core loads with no connection, and the hosting serves it like any file under `/assets/` (`application/wasm`, cached for a year).
 - **Tests.** `src/test/setup.ts` replaces `load.ts` in component tests with one that reads the same real module from disk, since jsdom can't fetch it. A test makes loading fail with `vi.mocked(loadCore).mockRejectedValue(...)`; it goes back to the real core after each test. `src/core/load.test.ts` tests the real `load.ts`, with MSW serving the module, and `src/core/load.test-d.ts` proves the wrapper is typed from `fortymm-core.d.mts`.
-- **Where it shows.** `/health` says whether the core loaded, with the username it gives a fixed player id, one of the core's golden vectors (`../core/vectors/vectors.json`, "usernames"). If it can't load, the page says so and still gives the api's answer.
+- **Where it shows.** `/health` says whether the core loaded, with the username it gives a fixed player id, one of the core's golden vectors (`../core/vectors/vectors.json`, "usernames"). If it can't load, the page says so and still gives the api's answer. The check is `checkCore()` (`src/core/check.ts`, tested against the real core in `src/core/check.test.ts`); the route's loader calls it, and `HealthScreen` shows its answer.
 
 ## This device's signing key
 
@@ -106,7 +121,7 @@ await loadMe()               // this device's user: the same answer as loadUser
 
 ### The account settings page
 
-`/settings` (`src/routes/settings.tsx`, linked from the start page) shows this device's username. Its loader reads this device's user with `loadMe()`: one read, with no key and no core, so it doesn't wait for the core's WebAssembly. When there is no user yet (a first visit straight to `/settings`, while the launch at startup is still running), it waits for that launch with `startupLaunchSettled()`, up to 5 seconds (`startupLaunchBound`, in `src/first-launch.ts`: a launch takes well under a second; the bound covers a slow connection fetching the core, and a launch held back by another tab keeping the append lock), then reads again. Still no user (the launch failed, or is held back past the bound), the page says there is no account yet, until the next visit; it makes nothing: opening a page never mints an identity; the first launch at app startup does. When storage can't be read it says so; the loader never throws. Its rendering is tested in `src/routes/settings.test.tsx`, with `loadMe` replaced; the page over real storage in `e2e/tests/settings.spec.ts`: after the app's own first launch (the username shown, then after a reload and with no connection, from the same key and the one hello), on a first visit straight to it (shown once the launch finishes; "no account yet" after the bound when another tab holds the lock), and with the core's module held back.
+`/settings` (`src/routes/settings.tsx`, the screen `src/components/SettingsScreen.tsx`) shows this device's username. Its loader calls `ownAccount()` (`src/account.ts`), which reads this device's user with `loadMe()`: one read, with no key and no core, so it doesn't wait for the core's WebAssembly. When there is no user yet (a first visit straight to `/settings`, while the launch at startup is still running), it waits for that launch with `startupLaunchSettled()`, up to 5 seconds (`startupLaunchBound`, in `src/first-launch.ts`: a launch takes well under a second; the bound covers a slow connection fetching the core, and a launch held back by another tab keeping the append lock), then reads again. Still no user (the launch failed, or is held back past the bound), the page says there is no account yet, until the next visit; it makes nothing: opening a page never mints an identity; the first launch at app startup does. When storage can't be read it says so; the loader never throws. What the screen shows for each account, and while it reads, is tested in `src/components/SettingsScreen.test.tsx`; how the account is read (reading again after the launch, making nothing) in `src/account.test.ts`, with `loadMe` replaced; the route's wiring (its loader's account reaches the screen, the pending view shows while it reads) in `src/routes/settings.test.tsx`; the page over real storage in `e2e/tests/settings.spec.ts`: after the app's own first launch (the username shown, then after a reload and with no connection, from the same key and the one hello), on a first visit straight to it (shown once the launch finishes; "no account yet" after the bound when another tab holds the lock), and with the core's module held back.
 
 ### The first launch
 
@@ -156,8 +171,8 @@ Every screen wears the [FortyMM design system](https://claude.ai/artifact/JRzfvU
 - **Fonts are files of the build.** `theme.css` points at them, so Vite emits them into `dist/assets/` and the service worker keeps them with everything else: the app never asks a font service, and its fonts load with no connection.
 - **Components use the tokens**, never hex values or font names of their own.
 - **Re-syncing from the artifact.** `tokens.css` is the artifact's `project/tokens.css` (generated there from `project/tokens.json`) without its `@font-face` rules, which point at the artifact's own font files. To take a new version: read the artifact's `project/tokens.css` (Claude's Artifact tool, `action: "read"`, `paths: ["project/tokens.css"]`), replace everything below the comment at the top of `src/theme/tokens.css` with it, and drop its `@font-face` lines. If bg-app changed, change `index.html` (its inline style and `theme-color`) and the manifest's `theme_color` and `background_color` too: they repeat the colour by hand, and no test checks that they agree. If the artifact adds a font file, convert it to woff2 (fontTools, `TTFont(path).flavor = 'woff2'`), put it in `src/theme/fonts/` with its licence, and add its `@font-face` to `theme.css`. Space Grotesk isn't in the artifact (it loads it from Google Fonts); ours is `SpaceGrotesk[wght].ttf` from [google/fonts](https://github.com/google/fonts/tree/main/ofl/spacegrotesk), converted the same way.
-- **`/design-system`** (`src/routes/design-system.tsx`) is where each component of the design system will be shown as the app builds it, to check against the artifact. Today it has only its header: the wordmark, "FortyMM" in Bebas Neue (the `scoreboard-display` style), and its title in Space Grotesk.
-- **Tests.** No test reads styles: how the app looks (colours, fonts, backgrounds, the theme colour) is left to screenshot tests, which are still to come. Until then the theme is checked by eye. What the screens show is tested: `/` is blank (`src/routes/index.test.tsx`); `/design-system` has its header (`src/routes/design-system.test.tsx`) and opens with no connection after a visit to `/` (`e2e/tests/offline.spec.ts`).
+- **`/design-system`** (`src/routes/design-system.tsx`, the screen `src/components/DesignSystemScreen.tsx`) is where each component of the design system will be shown as the app builds it, to check against the artifact. Today it has only its header: the wordmark, "FortyMM" in Bebas Neue (the `scoreboard-display` style), and its title in Space Grotesk.
+- **Tests.** No test reads styles: how the app looks (colours, fonts, backgrounds, the theme colour) is left to screenshot tests, which are still to come. Until then the theme is checked by eye. What the screens show is tested: `/` is blank (`src/components/StartScreen.test.tsx`); `/design-system` has its header (`src/components/DesignSystemScreen.test.tsx`) and opens with no connection after a visit to `/` (`e2e/tests/offline.spec.ts`).
 
 ## Hosting
 
@@ -225,8 +240,10 @@ The second argument is the api the Worker forwards `/api/*` to: here the api's t
 
 | What | Where | Run by |
 | --- | --- | --- |
-| A screen's behavior | `src/routes/<route>.test.tsx`, next to the route | `web-client:test` (Vitest, Testing Library, jsdom) |
-| Its page object | `src/routes/<route>.page.ts` | used by the test above |
+| A screen's behavior: every state it shows, the component rendered alone with the props each state takes | `src/components/<Name>Screen.test.tsx`, next to the component | `web-client:test` (Vitest, Testing Library, jsdom) |
+| Its page object | `src/components/<Name>Screen.page.tsx` | used by the test above and by the route's test |
+| A loading function or an api call: what each answer becomes (`ownAccount`, `checkCore`, `fetchHealth`) | beside it, `src/<module>.test.ts` | `web-client:test` |
+| A route's wiring: its path shows its screen with its loader's data, its pending, error and not-found components, its params, search and redirects | `src/routes/<route>.test.tsx`, next to the route | `web-client:test` |
 | Type-level claims (the router's paths; the client's requests, the zod schemas' input and the mocks typed from the document) | `src/**/*.test-d.ts(x)` | `web-client:typecheck` |
 | The build step that writes the service worker (`offline/plugin.ts`: every emitted file is kept) | `offline/*.test.ts` | `web-client:test` |
 | What only a real browser shows about the production build by itself: opening with no connection, a new deployment reaching the device, installability, the shipped app loading the shared core (online and offline), this device's signing key and the records and users kept in IndexedDB (through the test-only pages in `e2e/harness/`), the first launch at app startup, and `/settings` after it | `e2e/tests/*.spec.ts`, page objects in `e2e/pages/` | `web-client:e2e` (Playwright, the last step of `web-client:validate`) |
@@ -238,36 +255,43 @@ The browser suite (`e2e/`) drives the production build served by `vite preview` 
 
 The cross-app suite drives the Worker in the local Workers runtime (`web-client-worker`), forwarding `/api/*` to `api-release` (the api's production image, with its database), for the hosting's rules and the api wiring.
 
-A screen's page object has two kinds of method:
+A component test renders the screen alone; a route test mounts the app at a URL. Both use the screen's page object, `src/components/<Name>Screen.page.tsx`, which has two kinds of method:
 
-- `render()` mounts the whole app at the screen's URL, through `renderRoute(path)` in `src/test/render-route.tsx`: the real route tree and router configuration, with an in-memory history. (`NotFoundPage.render(path)` takes any URL with no route, defaulting to `/no/such/page`.)
-- The rest only find elements, by role and accessible name (`heading()`, `linkToStart()`).
+- `render(props)` renders the screen component alone, with the props the test gives it, through `renderScreen(...)` in `src/test/render-screen.tsx`: a bare router of its own, because `<Link>` and `<Await>` need one, and none of the app's routes, loaders or URLs. A screen whose data arrives later takes promises, and the test settles them when it wants the answer to arrive:
 
-The test does the interactions itself, with user-event, so they read in its body:
+  ```tsx
+  const page = new HealthScreenPage()
+  page.render({ health: health.promise, core: Promise.resolve(coreLoaded) })
+  expect(await page.checking()).toBeVisible()
+  health.settle({ status: 'healthy' })
+  expect(await page.healthy()).toBeVisible()
+  ```
+
+- The rest only find elements, by role and accessible name (`heading()`, `linkToStart()`). They work wherever the screen is mounted, so a route test uses them too.
+
+A route test mounts the whole app at the route's URL with `renderRoute(path)` (`src/test/render-route.tsx`: the real route tree and router configuration, with an in-memory history), replacing only what the loader reads at a contract (MSW for the api, `vi.mock` for storage), and checks the wiring with the screen's finders:
 
 ```tsx
-const user = userEvent.setup()
-const notFound = new NotFoundPage()
-await notFound.render()
-await user.click(await notFound.linkToStart())
-expect(await new StartPage().heading()).toBeInTheDocument()
+server.use(healthy())
+renderRoute('/health')
+expect(await new HealthScreenPage().healthy()).toBeVisible()
 ```
 
-### A screen that calls the api
+The test does any interactions itself, with user-event, so they read in its body: `const user = userEvent.setup()`, then `await user.click(await page.linkToStart())`.
 
-[MSW](https://mswjs.io/) stands in for the api, at the network level, so the client and everything above it run for real. `src/test/setup.ts` starts the server (`src/test/api/server.ts`) once per file, resets its handlers after each test, and fails any test that sent a request no handler answered. There are no default handlers: each test says how the api answers, before `render()`:
+### A call to the api, in tests
+
+[MSW](https://mswjs.io/) stands in for the api, at the network level, so the client and everything above it run for real. `src/test/setup.ts` starts the server (`src/test/api/server.ts`) once per file, resets its handlers after each test, and fails any test that sent a request no handler answered. There are no default handlers: each test says how the api answers first. A call's own test proves what each answer becomes (`src/api/health.test.ts`); a route test uses one answer to prove its loader's wiring:
 
 ```tsx
 server.use(databaseUnavailable())
-const page = new HealthPage()
-await page.render()
-expect(await page.databaseUnavailable()).toBeVisible()
+expect(await fetchHealth()).toEqual({ status: 'database-unavailable' })
 ```
 
 Handlers live in `src/test/api/<resource>.ts`, one function per way the api can answer. Write them with the `http` from `src/test/api/server.ts` ([openapi-msw](https://github.com/christoph-fricke/openapi-msw)) and `response(status).json(body)`. Path, status and body are then checked against the document, so a mock can't return what the api doesn't send. It matches the URL the browser really requests (`/api/v1/health`), while you write the api's own path (`/v1/health`). For an answer the document doesn't declare on purpose (a network error, an HTML page from a misrouted host), use `response.untyped(...)`.
 
-`renderRoute()` doesn't wait for the route's loader, so a test can see the pending state. Every finder is a `findBy*`, which waits.
+`renderRoute()` doesn't wait for the route's loader, so a test can see the pending state (the router shows a `pendingComponent` only after the loader has run for its `pendingMs`, a second by default, so that test waits longer than a finder: `src/routes/settings.test.tsx`). Every finder is a `findBy*`, which waits.
 
 Don't add action methods (`clickCounter()`) to a page object. The route generator ignores `*.test.*` and `*.page.*` files in `src/routes/` (`tsr.config.json`).
 
-Lint's fast-refresh rule (`react/only-export-components`) is off in `src/routes/`: a route file exports `Route` next to its components by design, and the router plugin handles hot reload for it.
+Lint's fast-refresh rule (`react/only-export-components`) is off in `src/routes/`: a route file exports `Route` next to its tiny wrapper component by design, and the router plugin handles hot reload for it.
