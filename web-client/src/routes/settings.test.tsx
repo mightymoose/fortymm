@@ -1,24 +1,15 @@
-import { afterEach, expect, test, vi } from 'vitest'
-import { withDeviceKey } from '../device-key.ts'
-import { loadMe, storeRecord, type User } from '../storage.ts'
-import { SettingsPage } from './settings.page.ts'
+import { expect, test, vi } from 'vitest'
+import { SettingsScreenPage } from '../components/SettingsScreen.page.tsx'
+import { loadMe, type User } from '../storage.ts'
+import { renderRoute } from '../test/render-route.tsx'
 
-// The page's rendering, with the one read it makes replaced: this device's
-// user (loadMe, storage.ts). jsdom has no IndexedDB; the real storage under
-// this page, the first launch filling it and the page waiting for that
-// launch are proven in the browser suite (e2e/tests/settings.spec.ts,
-// e2e/tests/storage.spec.ts).
+// The route's wiring: its loader's account reaches the screen, and its pending
+// view shows while the loader runs. Only the storage it reads is replaced
+// (loadMe; jsdom has no IndexedDB). What each account shows is the screen's
+// test (src/components/SettingsScreen.test.tsx); how the account is read is
+// ownAccount's (src/account.test.ts); the page over real storage is the
+// browser suite's (e2e/tests/settings.spec.ts).
 vi.mock('../storage.ts', () => ({ loadMe: vi.fn(), storeRecord: vi.fn() }))
-vi.mock('../device-key.ts', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../device-key.ts')>()),
-  withDeviceKey: vi.fn(),
-}))
-
-afterEach(() => {
-  for (const replaced of [withDeviceKey, loadMe, storeRecord]) {
-    vi.mocked(replaced).mockReset()
-  }
-})
 
 const user: User = {
   playerId: 'ab'.repeat(32),
@@ -28,29 +19,19 @@ const user: User = {
   unconfirmed: true,
 }
 
-test('/settings shows the username of this device’s user', async () => {
+test('/settings shows the settings screen with this device’s account from its loader', async () => {
   vi.mocked(loadMe).mockResolvedValue({ ok: true, user })
-  const page = new SettingsPage()
-  await page.render()
+  renderRoute('/settings')
 
-  expect(await page.heading()).toBeVisible()
-  expect(await page.username()).toHaveTextContent(user.username)
+  expect(await new SettingsScreenPage().username()).toHaveTextContent(user.username)
 })
 
-test('/settings says there is no account yet when this device has no user, and makes no key and no user', async () => {
-  vi.mocked(loadMe).mockResolvedValue({ ok: true, user: null })
-  const page = new SettingsPage()
-  await page.render()
+// The router shows a pending view only once the loader has run for a while
+// (its pendingMs, a second by default), so this waits longer than a finder.
+test('/settings shows the settings screen’s pending view while its loader is still reading', async () => {
+  vi.mocked(loadMe).mockReturnValue(new Promise(() => {}))
+  renderRoute('/settings')
+  const page = new SettingsScreenPage()
 
-  expect(await page.noAccount()).toBeVisible()
-  expect(withDeviceKey).not.toHaveBeenCalled()
-  expect(storeRecord).not.toHaveBeenCalled()
-})
-
-test('/settings says it can’t read this device’s storage when the user can’t be read', async () => {
-  vi.mocked(loadMe).mockResolvedValue({ ok: false, reason: 'storage-unavailable' })
-  const page = new SettingsPage()
-  await page.render()
-
-  expect(await page.storageUnavailable()).toBeVisible()
+  await vi.waitFor(() => page.reading(), { timeout: 3_000 })
 })

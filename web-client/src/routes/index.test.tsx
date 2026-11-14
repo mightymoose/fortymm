@@ -1,11 +1,11 @@
 import { expect, test } from 'vitest'
-import { StartPage } from './index.page.ts'
+import { StartScreenPage } from '../components/StartScreen.page.tsx'
+import { renderRoute } from '../test/render-route.tsx'
 
-test('/ is blank: no starter content, only its heading for screen readers', async () => {
-  const start = new StartPage()
-  await start.render()
+// The route's wiring. What the start screen shows is its own test
+// (src/components/StartScreen.test.tsx).
+test('/ shows the start screen', async () => {
+  renderRoute('/')
 
-  expect(await start.heading()).toBeInTheDocument()
-  expect(document.body).toHaveTextContent(/^FortyMM$/)
-  expect(start.images()).toEqual([])
+  expect(await new StartScreenPage().heading()).toBeInTheDocument()
 })

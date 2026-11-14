@@ -1,10 +1,11 @@
 import { expect, test } from 'vitest'
-import { DesignSystemPage } from './design-system.page.ts'
+import { DesignSystemScreenPage } from '../components/DesignSystemScreen.page.tsx'
+import { renderRoute } from '../test/render-route.tsx'
 
-test('/design-system shows a header with the FortyMM wordmark and the page’s level-1 heading', async () => {
-  const page = new DesignSystemPage()
-  await page.render()
+// The route's wiring. What the design system screen shows is its own test
+// (src/components/DesignSystemScreen.test.tsx).
+test('/design-system shows the design system screen', async () => {
+  renderRoute('/design-system')
 
-  expect(await page.wordmark()).toBeVisible()
-  expect(await page.heading()).toBeVisible()
+  expect(await new DesignSystemScreenPage().heading()).toBeVisible()
 })
