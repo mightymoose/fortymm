@@ -46,8 +46,10 @@ The controls in `src/components/` (`Button`, `Field`, `Checkbox`, `Tabs`...; REA
 - A component is the real element (`<button>`, `<input>` inside its `<label>`, `role="tab"`, `role="switch"`), named the way the design system says, one per file with its CSS beside it. Every colour is a token (mix a token with `color-mix()` rather than copy a value); only sizes the tokens lack are px.
 - Its CSS follows the kit's `fm-*` rule for it in `reference.css`. A change to how one looks changes its screenshots: write them again (`./bin/mise run web-client:e2e -- --update-snapshots`) and look at each beside the same `data-testid` on the board before committing.
 - A state the design system page draws without causing it (hover, focus, pressed) is the `forcedState` prop, rendered as `data-forced-state`, beside the real pseudo-class in the same CSS rule. Nothing else sets it.
-- What a component does is its own test, `src/components/<Name>.test.tsx`, rendered alone, by role and accessible name; how it looks is only ever a screenshot (`e2e/tests/design-system.spec.ts`), never a style read in a test.
-- A new target on the board gets the board's `data-testid` in `ControlsSection` and a line in `design-system.spec.ts`.
+- What a component does is its own test, `src/components/<Name>.test.tsx`, rendered alone, by role and accessible name; how it looks is only ever a screenshot (`e2e/tests/design-system-<tab>.spec.ts`), never a style read in a test.
+- The design system page (`/design-system`, README "The design system page") has a tab per board of the reference sheet, each a subroute whose route file names one `<Name>Tab` component; `/design-system` redirects to the first. A new target on a board gets the board's `data-testid` in its tab (`ColourTab`, `TypeTab`, `FoundationsTab`, `ControlsTab`, `FeedbackTab`), laid out with `Board.tsx`, and a line in that tab's spec.
+- The page shows a token's value by reading it from the stylesheet (`tokenValue()`, `colourValue()` in `src/theme/token-value.ts`), never by writing it down: the page names tokens, the theme gives values.
+- Navigation that looks like tabs is `TabNav` (router links, `aria-current="page"`), not `Tabs` (a tablist on one page); both wear `Tabs.css`.
 
 ## Answers from the api are parsed with zod, at the boundary
 
@@ -98,4 +100,4 @@ The service worker (`offline/`, README "Opening with no connection") keeps every
 
 - Never answer a request under `/api/` from the service worker, and never keep an api answer in it. Data on the device belongs in its own store, with the tasks that add it.
 - Don't list files to keep by hand: the build keeps whatever it emitted.
-- Never take over or reload a page that is open: no `skipWaiting()`, no reload on `controllerchange`. A new version shows at the next opening.
+- Never take over or reload a page that is open without its user's say: the worker calls `skipWaiting()` only on a page's take-over message, and a page reloads on `controllerchange` only after its own Reload asked (`src/new-version.ts`). Otherwise a new version shows at the next opening, and meanwhile the layout says it is ready (`UpdateNotice`), only once every file of it is kept.

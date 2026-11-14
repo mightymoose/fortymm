@@ -1,0 +1,24 @@
+/* The details list (kit.css, .fm-dl): label over value, in as many columns
+   of at least 128px as fit. */
+.description-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 128px), 1fr));
+  gap: 14px var(--s-6);
+  margin: 0;
+}
+.description-list div {
+  min-width: 0;
+}
+.description-list dt {
+  font: 400 var(--text-sm) / var(--lh-snug) var(--font-ui);
+  color: var(--fg-3);
+}
+.description-list dd {
+  margin: 3px 0 0;
+  font: 500 16px / 1.35 var(--font-ui);
+  color: var(--fg-1);
+  overflow-wrap: anywhere;
+}
+.description-list dd.num {
+  font-family: var(--font-num);
+}

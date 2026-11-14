@@ -1,0 +1,16 @@
+/* The meter (kit.css, .fm-meter): a 6px track in --ink-700, filled in
+   --chalk-100, or --rest. */
+.meter {
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--r-pill);
+  background: var(--ink-700);
+}
+.meter i {
+  display: block;
+  height: 100%;
+  background: var(--chalk-100);
+}
+.meter--rest i {
+  background: var(--rest);
+}

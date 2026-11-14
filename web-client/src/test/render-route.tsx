@@ -9,9 +9,12 @@ import { createAppRouter } from '../router.ts'
 //
 // It doesn't wait for the route's loader: what the screen shows while its data
 // is on the way is part of the screen too. Finders wait (findBy*).
+//
+// It gives the router too, for a test of where a redirect ends:
+// router.state.location.pathname.
 export function renderRoute(path: string) {
   const router = createAppRouter({
     history: createMemoryHistory({ initialEntries: [path] }),
   })
-  return render(<RouterProvider router={router} />)
+  return { ...render(<RouterProvider router={router} />), router }
 }

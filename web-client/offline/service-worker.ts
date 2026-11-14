@@ -10,12 +10,16 @@
 //   gets the cached index.html and the router decides what it shows, as the
 //   hosting does online. Requests under /api/ are never answered here: they
 //   always go to the network.
+// - Message: a page asks a waiting worker to take over (Reload, in the
+//   notice that a new version is ready, src/new-version.ts).
 //
-// Updates: the browser fetches /sw.js again on each visit with a connection.
-// When a new build has been deployed, its worker installs and waits; it takes
-// over only once every page of the app has been closed. So a page that is
-// open is never reloaded or changed underneath its user, and the next opening
-// shows the new build, with or without a connection. There is no skipWaiting.
+// Updates: the browser fetches /sw.js again on each page load with a
+// connection, and an open page asks it to look now and then. When a new build
+// has been deployed, its worker installs (keeps every file of its build) and
+// waits. It takes over when every page of the app has been closed, or sooner
+// only when the page asks (skipWaiting on that message, never otherwise); the
+// page then reloads itself into the new build, from the cache. So a page that
+// is open is never reloaded or changed underneath its user without their say.
 
 // Written in front of this file by the build: the build's version (a hash of
 // its files and of this worker) and the path of every file to keep.
@@ -50,8 +54,9 @@ worker.addEventListener('activate', (event) => {
           await caches.delete(name)
         }
       }
-      // Only the first worker ever has a page to take: a later one activates
-      // when no page of the app is open.
+      // Only the first worker has a page to take this way. A later one
+      // activates when no page of the app is open, or when a page asked it
+      // to take over, and then controls every open page by itself.
       await worker.clients.claim()
     })(),
   )
@@ -77,3 +82,18 @@ async function fromCache(path: string, request: Request): Promise<Response> {
   const cache = await caches.open(cacheName)
   return (await cache.match(path)) ?? fetch(request)
 }
+
+// A page asks the waiting worker to take over, when its user pressed Reload
+// (src/new-version.ts, takeOverMessage). Never without being asked. The page
+// posts it only to the waiting worker; for one already active it changes
+// nothing.
+worker.addEventListener('message', (event) => {
+  const data: unknown = event.data
+  if (
+    typeof data === 'object' &&
+    data !== null &&
+    (data as { type?: unknown }).type === 'take-over'
+  ) {
+    event.waitUntil(worker.skipWaiting())
+  }
+})

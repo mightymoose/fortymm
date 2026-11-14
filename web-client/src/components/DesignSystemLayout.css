@@ -1,0 +1,5 @@
+/* The design system page's tabs sit between its header and the current
+   tab, a page section's spacing below them. */
+.design-system__tabs {
+  margin: var(--s-8) 0 var(--s-12);
+}

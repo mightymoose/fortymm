@@ -1,0 +1,21 @@
+/* The breadcrumbs (kit.css, .fm-crumbs): --fg-3 steps, this page in
+   --fg-1. */
+.breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+  font: 400 14px var(--font-ui);
+  color: var(--fg-3);
+}
+.breadcrumbs a {
+  color: var(--fg-3);
+  text-decoration: none;
+}
+.breadcrumbs a:hover {
+  color: var(--fg-1);
+}
+.breadcrumbs [aria-current] {
+  font-weight: 500;
+  color: var(--fg-1);
+}

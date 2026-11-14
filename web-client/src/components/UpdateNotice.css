@@ -1,0 +1,63 @@
+/* The notice that a new version is ready: the toast's shape (kit.css,
+   .fm-toast, as Toast.css ports it), with a grey icon, since it is no
+   success. An overlay, so it has the overlay shadow. Where it sits is the
+   layout's (AppLayout.css); here it sits where it is put. Its Reload and
+   dismiss buttons are the toast's, the kit's bare .fm-btn at 36px: Reload is
+   the one orange thing. */
+.update-notice__box {
+  display: inline-flex;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  max-width: min(460px, calc(100vw - 32px));
+  padding: var(--s-1) var(--s-1) var(--s-1) 14px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-md);
+  background: var(--bg-group);
+  box-shadow: var(--shadow-overlay);
+  font: 500 14px / 1.35 var(--font-ui);
+  color: var(--fg-1);
+}
+.update-notice__box > .icon {
+  width: 18px;
+  height: 18px;
+  color: var(--fg-3);
+}
+.update-notice__message {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0;
+}
+.update-notice__action,
+.update-notice__dismiss {
+  display: inline-flex;
+  box-sizing: border-box;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  min-height: 36px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  background: transparent;
+  font: 600 var(--text-base) / 1.2 var(--font-ui);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-out);
+}
+.update-notice__action {
+  padding: 0 10px;
+  color: var(--ball-400);
+}
+.update-notice__dismiss {
+  width: 36px;
+  padding: 0;
+  color: var(--fg-3);
+}
+:is(.update-notice__action, .update-notice__dismiss):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+:is(.update-notice__action, .update-notice__dismiss):active {
+  transform: scale(0.98);
+}

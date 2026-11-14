@@ -2,7 +2,7 @@ import { within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { expect, test } from 'vitest'
 import { AppLayoutPage } from '../components/AppLayout.page.tsx'
-import { DesignSystemScreenPage } from '../components/DesignSystemScreen.page.tsx'
+import { DesignSystemPage } from '../components/DesignSystemLayout.page.tsx'
 import { NotFoundScreenPage } from '../components/NotFoundScreen.page.tsx'
 import { StartScreenPage } from '../components/StartScreen.page.tsx'
 import { renderRoute } from '../test/render-route.tsx'
@@ -32,7 +32,7 @@ test('the sidebar stays collapsed when a link in it opens another page', async (
   await user.click(await layout.sidebarToggle())
   await user.click(await layout.link('Design system'))
 
-  expect(await new DesignSystemScreenPage().heading()).toBeVisible()
+  expect(await new DesignSystemPage().heading()).toBeVisible()
   expect(await layout.link('Design system')).toHaveAttribute(
     'aria-current',
     'page',

@@ -1,0 +1,16 @@
+/* The live marker (colors_and_type.css, .live-marker): a --live dot before
+   the word. */
+.live-marker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 600 var(--text-sm) / 1 var(--font-ui);
+  color: var(--live);
+}
+.live-marker::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--live);
+}

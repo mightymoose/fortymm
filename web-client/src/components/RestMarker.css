@@ -1,0 +1,16 @@
+/* The rest marker (kit.css, .fm-rest): a 16px clock and the time, in
+   --rest. */
+.rest-marker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 500 14px / var(--lh-snug) var(--font-ui);
+  color: var(--rest);
+}
+.rest-marker .icon {
+  width: 16px;
+  height: 16px;
+}
+.rest-marker__time {
+  font-family: var(--font-num);
+}

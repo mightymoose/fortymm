@@ -90,6 +90,53 @@ export class App {
   }
 }
 
+// The notice that a new version of the app is ready
+// (src/components/UpdateNotice.tsx), which the layout shows over every
+// screen, and what an open page does to learn of a new version.
+export class NewVersion {
+  readonly notice: Locator
+  readonly reload: Locator
+  readonly dismiss: Locator
+  private readonly page: Page
+
+  constructor(page: Page) {
+    this.page = page
+    this.notice = page
+      .getByRole('status')
+      .filter({ hasText: 'A new version is ready.' })
+    this.reload = this.notice.getByRole('button', { name: 'Reload' })
+    this.dismiss = this.notice.getByRole('button', { name: 'Dismiss' })
+  }
+
+  // The connection drops and comes back: the open page asks the browser to
+  // look for a new deployment, as it does whenever its connection returns
+  // (src/new-version.ts).
+  async connectionComesBack() {
+    const context = this.page.context()
+    await context.setOffline(true)
+    await context.setOffline(false)
+  }
+
+  // Asks the browser to look for a new deployment now, and waits until it
+  // has looked.
+  async lookNow() {
+    await this.page.evaluate(async () => {
+      const registration = await navigator.serviceWorker.getRegistration()
+      await registration?.update()
+    })
+  }
+
+  // Where the new deployment's worker is: 'installing' (downloading its
+  // build), 'installed' (every file kept, waiting), or null (none).
+  async newWorker(): Promise<string | null> {
+    return this.page.evaluate(async () => {
+      const registration = await navigator.serviceWorker.getRegistration()
+      const worker = registration?.installing ?? registration?.waiting
+      return worker?.state ?? null
+    })
+  }
+}
+
 // The layout around every screen (src/components/AppLayout.tsx): the top bar
 // with the FortyMM brand and, at non-phone widths, the sidebar's toggle; and
 // at non-phone widths, the sidebar with its links. No goto(): every screen's
@@ -134,15 +181,30 @@ export class StartPage {
   }
 }
 
+// The design system page's tabs, each a page of its own: its address and
+// its board's title. Each tab's path is written only here.
+const designSystemTabs = {
+  colour: { path: '/design-system/colour', title: 'Colour' },
+  type: { path: '/design-system/type', title: 'Type' },
+  foundations: { path: '/design-system/foundations', title: 'Foundations' },
+  controls: { path: '/design-system/controls', title: 'Controls' },
+  feedback: { path: '/design-system/feedback', title: 'Feedback' },
+}
+
+export type DesignSystemTab = keyof typeof designSystemTabs
+
 // Where each design system component is checked against the design system's
 // reference sheet (references/design-system/): its header (the wordmark and
-// the page's title), then a section per board, so far the controls. It is
-// all in the layout's main landmark; the layout's top bar is the banner.
+// the page's title), its tabs, a page per board of the sheet, and the
+// current tab's board. It is all in the layout's main landmark; the
+// layout's top bar is the banner.
 export class DesignSystemPage {
   readonly wordmark: Locator
   readonly heading: Locator
-  readonly controls: Locator
+  readonly tabs: Locator
   private readonly page: Page
+  // The tab goto() opened (/design-system opens Colour).
+  private shown: DesignSystemTab = 'colour'
 
   constructor(page: Page) {
     this.page = page
@@ -152,22 +214,33 @@ export class DesignSystemPage {
       level: 1,
       name: 'Design system',
     })
-    this.controls = page.getByRole('region', { name: 'Controls' })
+    this.tabs = main.getByRole('navigation', { name: 'Design system' })
   }
 
-  async goto() {
-    await this.page.goto('/design-system')
+  // Opens a tab's page, or /design-system itself, which shows Colour.
+  async goto(tab?: DesignSystemTab) {
+    this.shown = tab ?? 'colour'
+    await this.page.goto(tab ? designSystemTabs[tab].path : '/design-system')
   }
 
-  // Waits until the page shows its sections and every font it uses has
-  // loaded, so a screenshot is never taken in a fallback font.
+  // A tab's board, by its tab ('controls'): the region named by its title.
+  board(tab: DesignSystemTab): Locator {
+    return this.page.getByRole('region', {
+      name: designSystemTabs[tab].title,
+      exact: true,
+    })
+  }
+
+  // Waits until the page shows the tab it opened and every font it uses
+  // has loaded, so a screenshot is never taken in a fallback font.
   async waitUntilDrawn() {
-    await expect(this.controls).toBeVisible()
+    await expect(this.board(this.shown)).toBeVisible()
     await this.page.evaluate(() => document.fonts.ready.then(() => undefined))
   }
 
   // A target of the reference sheet's boards, by the data-testid the board
-  // gives it (state-primary-button--hover, field-anatomy, section-buttons).
+  // gives it (state-primary-button--hover, color-ink-950, section-buttons),
+  // or the tabs themselves (design-system-tabs).
   target(testId: string): Locator {
     return this.page.getByTestId(testId)
   }

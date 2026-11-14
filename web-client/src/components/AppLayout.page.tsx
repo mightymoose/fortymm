@@ -63,6 +63,16 @@ export class AppLayoutPage {
     return screen.findByRole('button', { name: 'Sidebar' })
   }
 
+  // The notice that a new version of the app is ready, over the screen.
+  newVersionNotice() {
+    return screen.findByText('A new version is ready.')
+  }
+
+  // Its Reload button.
+  reload() {
+    return screen.findByRole('button', { name: 'Reload' })
+  }
+
   // Where the screen goes: the page's one <main>.
   main() {
     return screen.findByRole('main')

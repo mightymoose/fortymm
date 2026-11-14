@@ -1,0 +1,65 @@
+/* The Controls tab's own layout, after the reference sheet's ref-mx state
+   matrix (references/design-system/reference.css); its sections, stages and
+   captions are Board.css's. Nothing here styles a control, except where the
+   board does for its layout (a matrix's fields are 132px wide; a lone tab
+   has no rule under it). */
+
+/* A target inside a stage, sized to what it holds. */
+.controls__target {
+  display: inline-flex;
+}
+
+/* Examples below a matrix. */
+.board__section > .state-matrix + .board__grid {
+  margin-top: var(--s-4);
+}
+
+/* A state matrix: a column per state, a row per control, rows divided by
+   --border-subtle. */
+.state-matrix {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.state-matrix th {
+  padding: 0 var(--s-2) 10px 0;
+  font: 500 var(--text-sm) var(--font-ui);
+  color: var(--fg-3);
+  text-align: left;
+  white-space: nowrap;
+}
+.state-matrix tbody th {
+  box-sizing: border-box;
+  width: 140px;
+  padding: 0 var(--s-4) 0 0;
+  font: 600 14px / var(--lh-snug) var(--font-ui);
+  color: var(--fg-1);
+}
+.state-matrix td {
+  padding: 0;
+  vertical-align: middle;
+}
+.state-matrix tbody tr + tr > * {
+  border-top: 1px solid var(--border-subtle);
+}
+.state-matrix .board__stage {
+  padding: var(--s-4) var(--s-3);
+}
+/* A state the control doesn't have. */
+.state-matrix .state-matrix__none {
+  padding-left: var(--s-3);
+  font: 400 14px var(--font-ui);
+  color: var(--ink-500);
+}
+/* The board's layout: fields in the matrix are 132px wide, and an error
+   under one is set a size smaller. */
+.state-matrix :is(.text-input, .select) {
+  width: 132px;
+}
+.state-matrix .field__error {
+  font-size: var(--text-xs);
+}
+/* A tab shown alone has no tab row, so no rule under it. */
+.controls__lone-tab .tabs {
+  box-shadow: none;
+}

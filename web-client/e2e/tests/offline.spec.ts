@@ -3,6 +3,7 @@ import {
   App,
   DesignSystemPage,
   HealthPage,
+  NewVersion,
   NotFoundPage,
   StartPage,
   waitUntilNewVersionTakesOver,
@@ -112,8 +113,9 @@ test('with no connection, an unknown path opens the app’s not-found page', asy
 // The update policy: a new deployment is kept on a visit with a connection
 // and shown at the next opening, with or without a connection. A page that
 // is open meanwhile (someone scoring a match) is never reloaded: its state,
-// here a value the test leaves in the page's window, is still there.
-test('a new deployment is kept on a visit and shown at the next opening with no connection, and the open page is not reloaded', async ({
+// here a value the test leaves in the page's window, is still there, and it
+// says a new version is ready (new-version.spec.ts has the Reload).
+test('a new deployment is kept on a visit and shown at the next opening with no connection, and the open page is not reloaded but says a new version is ready', async ({
   context,
   page,
 }) => {
@@ -138,6 +140,7 @@ test('a new deployment is kept on a visit and shown at the next opening with no 
     ),
   ).toBe(true)
   await expect(page).toHaveTitle('fortymm')
+  await expect(new NewVersion(page).notice).toBeVisible()
 
   await page.close()
   await visit.close()

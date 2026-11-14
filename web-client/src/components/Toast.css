@@ -1,0 +1,59 @@
+/* The toast (kit.css, .fm-toast): an overlay, so one of the two things with
+   a shadow. Its action and dismiss buttons are the kit's bare .fm-btn
+   (Button.css's base: no variant) at 36px. */
+.toast {
+  display: inline-flex;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  max-width: min(460px, calc(100vw - 32px));
+  padding: var(--s-1) var(--s-1) var(--s-1) 14px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-md);
+  background: var(--bg-group);
+  box-shadow: var(--shadow-overlay);
+  font: 500 14px / 1.35 var(--font-ui);
+  color: var(--fg-1);
+}
+.toast > .icon {
+  width: 18px;
+  height: 18px;
+  color: var(--success);
+}
+.toast__message {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0;
+}
+.toast__action,
+.toast__dismiss {
+  display: inline-flex;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  min-height: 36px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  background: transparent;
+  font: 600 var(--text-base) / 1.2 var(--font-ui);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-out);
+}
+.toast__action {
+  padding: 0 10px;
+  color: var(--ball-400);
+}
+.toast__dismiss {
+  width: 36px;
+  padding: 0;
+  color: var(--fg-3);
+}
+:is(.toast__action, .toast__dismiss):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+:is(.toast__action, .toast__dismiss):active {
+  transform: scale(0.98);
+}
