@@ -90,6 +90,53 @@ export class App {
   }
 }
 
+// The notice that a new version of the app is ready
+// (src/components/UpdateNotice.tsx), which the layout shows over every
+// screen, and what an open page does to learn of a new version.
+export class NewVersion {
+  readonly notice: Locator
+  readonly reload: Locator
+  readonly dismiss: Locator
+  private readonly page: Page
+
+  constructor(page: Page) {
+    this.page = page
+    this.notice = page
+      .getByRole('status')
+      .filter({ hasText: 'A new version is ready.' })
+    this.reload = this.notice.getByRole('button', { name: 'Reload' })
+    this.dismiss = this.notice.getByRole('button', { name: 'Dismiss' })
+  }
+
+  // The connection drops and comes back: the open page asks the browser to
+  // look for a new deployment, as it does whenever its connection returns
+  // (src/new-version.ts).
+  async connectionComesBack() {
+    const context = this.page.context()
+    await context.setOffline(true)
+    await context.setOffline(false)
+  }
+
+  // Asks the browser to look for a new deployment now, and waits until it
+  // has looked.
+  async lookNow() {
+    await this.page.evaluate(async () => {
+      const registration = await navigator.serviceWorker.getRegistration()
+      await registration?.update()
+    })
+  }
+
+  // Where the new deployment's worker is: 'installing' (downloading its
+  // build), 'installed' (every file kept, waiting), or null (none).
+  async newWorker(): Promise<string | null> {
+    return this.page.evaluate(async () => {
+      const registration = await navigator.serviceWorker.getRegistration()
+      const worker = registration?.installing ?? registration?.waiting
+      return worker?.state ?? null
+    })
+  }
+}
+
 // The layout around every screen (src/components/AppLayout.tsx): the top bar
 // with the FortyMM brand and, at non-phone widths, the sidebar's toggle; and
 // at non-phone widths, the sidebar with its links. No goto(): every screen's

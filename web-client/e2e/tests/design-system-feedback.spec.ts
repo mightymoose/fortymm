@@ -28,6 +28,8 @@ const sections: Record<string, string[]> = {
     'ex-accordion',
   ],
   'section-navigation': ['ex-navigation', 'ex-crumbs-pages', 'ex-empty'],
+  // Not on the board: compared by eye with the board's toast, its sibling.
+  'section-update-notice': ['role-update-notice'],
 }
 
 for (const [section, targets] of Object.entries(sections)) {
