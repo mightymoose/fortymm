@@ -111,11 +111,13 @@ export class StartPage {
   }
 }
 
-// Where each design system component will be checked against the design
-// system. For now only its header: the wordmark and the page's title.
+// Where each design system component is checked against the design system's
+// reference sheet (references/design-system/): its header (the wordmark and
+// the page's title), then a section per board, so far the controls.
 export class DesignSystemPage {
   readonly wordmark: Locator
   readonly heading: Locator
+  readonly controls: Locator
   private readonly page: Page
 
   constructor(page: Page) {
@@ -126,10 +128,24 @@ export class DesignSystemPage {
       level: 1,
       name: 'Design system',
     })
+    this.controls = page.getByRole('region', { name: 'Controls' })
   }
 
   async goto() {
     await this.page.goto('/design-system')
+  }
+
+  // Waits until the page shows its sections and every font it uses has
+  // loaded, so a screenshot is never taken in a fallback font.
+  async waitUntilDrawn() {
+    await expect(this.controls).toBeVisible()
+    await this.page.evaluate(() => document.fonts.ready.then(() => undefined))
+  }
+
+  // A target of the reference sheet's boards, by the data-testid the board
+  // gives it (state-primary-button--hover, field-anatomy, section-buttons).
+  target(testId: string): Locator {
+    return this.page.getByTestId(testId)
   }
 }
 

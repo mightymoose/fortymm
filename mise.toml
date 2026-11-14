@@ -164,16 +164,18 @@ run = "docker compose run --rm web-client npm run build"
 # with no connection. Builds, makes the builds the suite deploys
 # (scripts/e2e-deployments.ts), serves them with vite preview
 # (web-client-preview), typechecks and runs the suite, then stops what it
-# started. Needs no other app.
+# started. Needs no other app. Arguments go to `playwright test`: a spec
+# (`-- design-system`), or `-- --update-snapshots` to write the screenshot
+# baselines again from this container, to look at and commit.
 [tasks."web-client:e2e"]
-description = "Run web-client's browser suite (Playwright) against its production build, served by vite preview"
+description = "Run web-client's browser suite (Playwright) against its production build, served by vite preview; arguments go to playwright test (-- --update-snapshots)"
 depends = ["web-client:build"]
 run = """
 trap 'docker compose --profile e2e rm --stop --force web-client-preview' EXIT
 docker compose run --rm web-client node scripts/e2e-deployments.ts
 docker compose --profile e2e build web-client-e2e web-client-preview
 docker compose --profile e2e run --rm web-client-e2e npm run typecheck
-docker compose --profile e2e run --rm web-client-e2e
+docker compose --profile e2e run --rm web-client-e2e npx playwright test
 """
 
 # Renders the install icons in public/icons/ from public/favicon.svg, with

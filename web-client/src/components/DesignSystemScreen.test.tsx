@@ -8,3 +8,18 @@ test('the design system screen shows a header with the FortyMM wordmark and the 
   expect(await page.wordmark()).toBeVisible()
   expect(await page.heading()).toBeVisible()
 })
+
+test('the design system screen shows the controls, in the reference board’s sections', async () => {
+  const page = new DesignSystemScreenPage()
+  page.render()
+
+  for (const part of [
+    'Buttons',
+    'Button sizes',
+    'Fields',
+    'Choices and selection',
+    'Selection groups',
+  ]) {
+    expect(await page.controlsPart(part)).toBeVisible()
+  }
+})

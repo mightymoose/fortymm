@@ -28,5 +28,36 @@ export default defineConfig({
     baseURL,
     trace: 'retain-on-failure',
   },
+  // Screenshot baselines (design-system.spec.ts), committed beside the tests:
+  // tests/__screenshots__/<spec file>/<data-testid>.png. No platform or
+  // project in the name: the suite only runs in its own container (dev/e2e,
+  // the pinned Playwright image: one Linux, one Chromium, one set of system
+  // fonts, and the app's own font files), so there is one baseline per
+  // picture, the same in CI and on a laptop. A missing baseline fails in CI;
+  // elsewhere the run writes it and passes, so look at it before committing
+  // it. Write them again with ./bin/mise run web-client:e2e -- --update-snapshots.
+  snapshotPathTemplate: '{testDir}/__screenshots__/{testFilePath}/{arg}{ext}',
+  updateSnapshots: process.env.CI ? 'none' : 'missing',
+  expect: {
+    toHaveScreenshot: {
+      // Transitions finished, no caret: the picture never depends on when
+      // it was taken.
+      animations: 'disabled',
+      caret: 'hide',
+      // Up to 0.01% of a picture's pixels may differ. Measured: none differ
+      // between two runs, nor between the container on an arm64 laptop and
+      // on CI's amd64 (with the select's chevron drawn off the pixel grid's
+      // ties, Select.css). So this is headroom of about one pixel in a
+      // matrix cell and a dozen in a matrix row, well under the smallest
+      // change seen to fail: a field's corners 2px rounder, 12 pixels in a
+      // cell. A larger allowance would let a large picture hide a change:
+      // at 0.1%, a field label set bold passed in its 384x126 example.
+      // What no allowance changes: Playwright's comparator (pixelmatch)
+      // never counts pixels it takes for anti-aliasing, so a change of
+      // about a pixel at a curved edge (a radio's dot 10px to 8px, a
+      // checkbox's corner 4px to 2px) passes; 10px to 6px fails.
+      maxDiffPixelRatio: 0.0001,
+    },
+  },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 })
