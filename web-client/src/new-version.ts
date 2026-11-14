@@ -25,11 +25,11 @@ import { useSyncExternalStore } from 'react'
 // already controls it.
 
 // How often an open page asks whether a new version was deployed. The
-// browser looks by itself only when a page of the app loads (and, at most
-// once a day, for events the worker handles, which this app's worker has
-// none of but fetch), so a page left open, as a scorer's is all day, would
-// never learn of one. Each look is one conditional request for /sw.js
-// (Cache-Control: no-cache) that is a few kilobytes when it has changed.
+// browser looks by itself only when a page of the app loads (and after push
+// or background sync events, which this app's worker doesn't handle), so a
+// page left open, as a scorer's is all day, would never learn of one. Each
+// look is one request for /sw.js, past the HTTP cache, of a few kilobytes,
+// which the browser compares with the worker it has.
 // Fifteen minutes: deployments are rare, and nobody waits for one, so a
 // shorter wait buys nothing; when the page comes back into view or the
 // connection returns it looks at once, which covers a phone, whose page is

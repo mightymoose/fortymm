@@ -100,4 +100,4 @@ The service worker (`offline/`, README "Opening with no connection") keeps every
 
 - Never answer a request under `/api/` from the service worker, and never keep an api answer in it. Data on the device belongs in its own store, with the tasks that add it.
 - Don't list files to keep by hand: the build keeps whatever it emitted.
-- Never take over or reload a page that is open: no `skipWaiting()`, no reload on `controllerchange`. A new version shows at the next opening.
+- Never take over or reload a page that is open without its user's say: the worker calls `skipWaiting()` only on a page's take-over message, and a page reloads on `controllerchange` only after its own Reload asked (`src/new-version.ts`). Otherwise a new version shows at the next opening, and meanwhile the layout says it is ready (`UpdateNotice`), only once every file of it is kept.
