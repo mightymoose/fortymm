@@ -1,5 +1,5 @@
 import { screen, within } from '@testing-library/react'
-import type { Account } from '../account.ts'
+import type { Account } from '../stores/user.ts'
 import { renderScreen } from '../test/render-screen.tsx'
 import { SettingsScreen, SettingsScreenPending } from './SettingsScreen.tsx'
 

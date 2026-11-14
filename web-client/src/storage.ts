@@ -1,4 +1,5 @@
 import type { Core } from 'fortymm-core/fortymm-core.mjs'
+import { announce } from './changes.ts'
 import { loadCore } from './core/load.ts'
 
 // The web client's storage of records, and of the users minted from them
@@ -126,12 +127,17 @@ async function store(
   }
   try {
     await underLock(() => write(database, minted, me))
-    return { ok: true }
   } catch {
     return failure('storage-unavailable')
   } finally {
     database.close()
   }
+  // The transaction has completed: every hello stores a user (and, with me,
+  // the pointer), so this device's account may have changed. Announced to
+  // this tab and the others (src/changes.ts), which read again what their
+  // pages show. announce never throws.
+  announce({ account: true, matches: [], revision: 0 })
+  return { ok: true }
 }
 
 // The user with this player id (hex), or null when none is stored.
