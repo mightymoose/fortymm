@@ -16,6 +16,15 @@
   "workers_dev": true,
   "preview_urls": false,
   "send_metrics": false,
+  "vars": {
+    // Where /api/* goes, with /api stripped: the api's origin (https://host,
+    // no path). Empty here, so a deployment without one, the production
+    // Worker's until the api has a production address, answers /api/* with a
+    // 404. web-client:deploy sets it per deployment (scripts/deploy.sh, with
+    // --var): CI gives each pull request's preview its own api's address.
+    // The local Workers runtime gets it from compose.dev.yaml.
+    "API_ORIGIN": ""
+  },
   "assets": {
     "directory": "../dist",
     "binding": "ASSETS",
