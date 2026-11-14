@@ -18,8 +18,9 @@ export default defineConfig({
   testDir: './tests',
   forbidOnly: !!process.env.CI,
   retries: 0,
-  // One build is served at a time, and some tests deploy another
-  // (pages/deployment.ts), so the tests run one after another.
+  // One build is served at a time: each test deploys its own before it
+  // starts (pages/test.ts), and some deploy another mid-test, so the tests
+  // run one after another.
   workers: 1,
   fullyParallel: false,
   reporter: [['list'], ['html', { open: 'never' }]],
