@@ -7,6 +7,7 @@ import './Sidebar.css'
 // /design-system), and the dashboard's, at /, only at / itself.
 const links = [
   { to: '/', label: 'Dashboard', icon: 'layout-dashboard' },
+  { to: '/matches', label: 'Matches', icon: 'list' },
   { to: '/health', label: 'Health', icon: 'heart-pulse' },
   { to: '/settings', label: 'Settings', icon: 'settings' },
   { to: '/design-system', label: 'Design system', icon: 'palette' },
