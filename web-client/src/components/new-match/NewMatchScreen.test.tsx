@@ -42,6 +42,21 @@ test('a name of only spaces is no name: submitting shows the error and calls not
   expect(onSubmit).not.toHaveBeenCalled()
 })
 
+test('before any submit, a name typed and cleared shows no error', async () => {
+  const user = userEvent.setup()
+  const page = new NewMatchScreenPage()
+  page.render({ onSubmit: vi.fn() })
+
+  await user.type(await page.opponent(), 'Ana')
+  await user.clear(await page.opponent())
+  await user.tab()
+
+  expect(page.opponentError()).toBeNull()
+  expect(await page.opponent()).toHaveAccessibleDescription(
+    'Their name, as you’d call them.',
+  )
+})
+
 test('after a failed submit, typing a name clears the error', async () => {
   const user = userEvent.setup()
   const page = new NewMatchScreenPage()
@@ -54,7 +69,7 @@ test('after a failed submit, typing a name clears the error', async () => {
   expect(await page.opponent()).toBeValid()
 })
 
-test('left as it opens but for the name, the match is best of 5, to 11, unrated', async () => {
+test('left as it opens but for the name, the match is best of 5, unrated', async () => {
   const user = userEvent.setup()
   const onSubmit = vi.fn()
   const page = new NewMatchScreenPage()
@@ -68,7 +83,7 @@ test('left as it opens but for the name, the match is best of 5, to 11, unrated'
   expect(onSubmit).toHaveBeenCalledTimes(1)
   expect(onSubmit).toHaveBeenCalledWith({
     opponentName: 'Ana',
-    format: { bestOf: 5, points: 11 },
+    format: { bestOf: 5 },
     rated: false,
   })
 })
@@ -87,7 +102,7 @@ test('a complete form calls the handler once with the name, trimmed, the length 
   expect(onSubmit).toHaveBeenCalledTimes(1)
   expect(onSubmit).toHaveBeenCalledWith({
     opponentName: 'Ana Silva',
-    format: { bestOf: 3, points: 11 },
+    format: { bestOf: 3 },
     rated: true,
   })
 })
@@ -164,19 +179,37 @@ test('Cancel on a form left as it opened leaves with no question', async () => {
   expect(page.queryDiscardDialog()).toBeNull()
 })
 
-for (const [change, make] of [
-  [
-    'a name typed',
-    async (user: ReturnType<typeof userEvent.setup>, page: NewMatchScreenPage) =>
+test('Cancel on a form changed and changed back to how it opened leaves with no question', async () => {
+  const user = userEvent.setup()
+  const page = new NewMatchScreenPage()
+  page.render({ onSubmit: vi.fn() })
+  await user.type(await page.opponent(), 'Ana')
+  await user.click(await page.rated())
+  await user.click(await page.bestOf(7))
+
+  await user.clear(await page.opponent())
+  await user.click(await page.bestOf(5))
+  await user.click(await page.cancel())
+
+  expect(page.queryDiscardDialog()).toBeNull()
+})
+
+type User = ReturnType<typeof userEvent.setup>
+
+test.each([
+  {
+    change: 'a name typed',
+    make: async (user: User, page: NewMatchScreenPage) =>
       user.type(await page.opponent(), 'Ana'),
-  ],
-  [
-    'the length changed',
-    async (user: ReturnType<typeof userEvent.setup>, page: NewMatchScreenPage) =>
+  },
+  {
+    change: 'the length changed',
+    make: async (user: User, page: NewMatchScreenPage) =>
       user.click(await page.bestOf(7)),
-  ],
-] as const) {
-  test(`Cancel with ${change} asks “Discard changes?”, its focus on Keep editing`, async () => {
+  },
+])(
+  'Cancel with $change asks “Discard changes?”, its focus on Keep editing',
+  async ({ make }) => {
     const user = userEvent.setup()
     const page = new NewMatchScreenPage()
     page.render({ onSubmit: vi.fn() })
@@ -186,8 +219,8 @@ for (const [change, make] of [
 
     expect(await page.discardDialog()).toBeVisible()
     expect(await page.keepEditing()).toHaveFocus()
-  })
-}
+  },
+)
 
 test('Keep editing, or Escape, closes the question and keeps what was entered', async () => {
   const user = userEvent.setup()
