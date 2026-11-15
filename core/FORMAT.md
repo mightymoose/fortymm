@@ -80,10 +80,10 @@ An unknown environment number still decodes. Refusing a record from the wrong en
 |---|---|---|---|
 | `hello`, `player` | | none | |
 | `match` | 8 | sides | array of exactly 2 arrays, each of 1 or more player ids |
-| | 9 | terms | bytes, opaque |
+| | 9 | terms | bytes, opaque (section 15) |
 | `score` | 8 | match | id |
 | | 9 | slot | uint: 0 for the whole match, n for game n |
-| | 10 | value | bytes, opaque |
+| | 10 | value | bytes, opaque (section 15) |
 | | 11 | replaces | array of record ids, possibly empty |
 | `result` | 8 | subject | the subject (below) |
 | | 9 | player it is given for | id |
@@ -109,7 +109,7 @@ A decoded kind must have exactly these keys. Any other key is an error, so a kno
 
 **Grant subject** (design section 8.3): a map with key 0 the player, 1 the receiving account, 2 the account that leaves (optional), 3 the receiver's player that this one becomes the same as (optional), and 4 a random value, bytes(8). A record never holds an account id (sections 4.3 and 8.3, "Email proof"), so keys 1 and 2 name an account by one of its players. This implementation reads the grant table that way. See question 4 in `README.md`.
 
-**Opaque fields.** Terms, result content and score values are product schemas with their own versions. The core carries them as bytes and does not read them.
+**Opaque fields.** Terms, result content and score values are product schemas with their own versions. A record carries them as bytes, and decoding a record does not read them: any bytes are a valid terms or value field. Section 15 gives the layout of terms and of score values, which the core writes and reads through separate functions. Result content has no layout yet.
 
 ## 6. Kinds the library does not interpret
 
@@ -236,3 +236,32 @@ Because every record must travel with every earlier request, a parcel that start
 - **Lists:** 1,007 adjectives and 452 animals, in `src/layout.rs` (`layout::username`), in alphabetical order, which is their value order. Each word is 3 to 10 lower-case ASCII letters, no word is in both lists, and each list holds a word once; the core's tests refuse a list that breaks any of these. The words were chosen to be inoffensive alone and in any pairing: positive or neutral adjectives, with nothing about bodies, appearance, age, health or belief; animals people recognise, by one common name. 1,007 × 452 × 29⁴ is about 322 billion four-character names (about 9.3 trillion five-character ones).
 
 The id is a SHA-256 output (section 7), so it is already uniform and is not hashed again.
+
+## 15. Terms and score values
+
+**Provisional**, and the user's to confirm: a layout is permanent once released. These are the two product layouts the core writes and reads: the bytes of a `match` record's terms field and of a `score` record's value field (section 5). The design fixes neither. Both are in `src/product.rs`, with their numbers in `layout::terms` and `layout::score_value`.
+
+Each is one CBOR map in the profile of section 1, so a value has exactly one encoding. Key 0 is the layout's own version, as key 0 of a body is the format version. The two versions are separate from each other and from the format version: a new terms layout changes neither the score value's version nor the record's.
+
+**Terms**, layout version **1**:
+
+| Key | Field | Type |
+|---|---|---|
+| 0 | Layout version | uint, **1** |
+| 1 | Best of | uint: how many games at most. Odd, from 1 to 2³² − 1 |
+| 2 | Rated | uint: 0 not rated, 1 rated |
+
+Nothing else: no points per game. Best of 5, rated, is the 7 bytes `a3 00 01 01 05 02 01`. Not rated, it ends `02 00`. So rated and unrated terms are different bytes, and two `match` records that differ only in that are two matches.
+
+**Score value**, layout version **1**:
+
+| Key | Field | Type |
+|---|---|---|
+| 0 | Layout version | uint, **1** |
+| 1 | Points | array of exactly 2 uints, each at most 2³² − 1: the first side's points in the game, then the second side's. Left out when the score is cleared |
+
+A game won 11 to 9 by the first side is the 7 bytes `a2 00 01 01 82 0b 09`. A cleared score is the 3 bytes `a1 00 01`: the version and nothing else, as an optional field is left out and never written empty (section 5).
+
+**What the layouts do not check.** Best of must be odd, since no side can win most of an even number of games. Nothing else is judged: that a match is best of 1, 3, 5 or 7, that a game is to 11, and that a score can end a game are the app's rules, not the layout's. The limit of 2³² − 1 is this implementation's.
+
+**Reading.** Reading gives the value, or nothing. It gives nothing for a layout version other than 1, whatever the rest holds, and for any bytes that are not exactly what writing a value produces: bytes outside the profile, a missing or extra key, a value of the wrong type or out of range, trailing bytes. So whatever reads, writes back to the same bytes. Reading never fails any other way, and a record whose terms or value do not read is still a valid record. Neither layout has a checksum: the record's signature covers these bytes.

@@ -335,6 +335,95 @@ fn username(player_id: &[u8], suffix_length: i64) -> PyResult<String> {
         .map_err(malformed)
 }
 
+// ---- The product layouts (FORMAT.md section 15) ----------------------------
+// The terms of a match and the value of a score: the bytes a record carries
+// in its terms and value fields.
+
+/// The terms of a match, as read from its bytes.
+#[pyclass(frozen, eq, name = "Terms", module = "fortymm_core")]
+#[derive(Clone, PartialEq)]
+struct PyTerms {
+    /// Best of how many games.
+    #[pyo3(get)]
+    best_of: u32,
+    /// Whether the match is rated.
+    #[pyo3(get)]
+    rated: bool,
+}
+
+#[pymethods]
+impl PyTerms {
+    fn __repr__(&self) -> String {
+        let rated = if self.rated { "True" } else { "False" };
+        format!("Terms(best_of={}, rated={rated})", self.best_of)
+    }
+}
+
+/// The value of a score, as read from its bytes.
+#[pyclass(frozen, eq, name = "ScoreValue", module = "fortymm_core")]
+#[derive(Clone, PartialEq)]
+struct PyScoreValue {
+    /// The two sides' points, first side first. None for a cleared game.
+    #[pyo3(get)]
+    score: Option<(u32, u32)>,
+}
+
+#[pymethods]
+impl PyScoreValue {
+    fn __repr__(&self) -> String {
+        match self.score {
+            Some((first, second)) => format!("ScoreValue(score=({first}, {second}))"),
+            None => "ScoreValue(score=None)".to_string(),
+        }
+    }
+}
+
+/// The bytes of the terms of a match that is best of best_of games (an odd
+/// number, 1 or more), rated or not. Raises Malformed for any other best of.
+#[pyfunction]
+fn terms_bytes<'py>(py: Python<'py>, best_of: i64, rated: bool) -> PyResult<Bound<'py, PyBytes>> {
+    let best_of = u32::try_from(best_of).map_err(|_| malformed(fmm::BadBestOf))?;
+    fmm::Terms::new(best_of, rated)
+        .map(|terms| bytes(py, &terms.to_bytes()))
+        .map_err(malformed)
+}
+
+/// Read terms. None for bytes of another layout version, and for damaged
+/// bytes.
+#[pyfunction]
+fn read_terms(data: &[u8]) -> Option<PyTerms> {
+    fmm::Terms::read(data).map(|terms| PyTerms {
+        best_of: terms.best_of(),
+        rated: terms.rated(),
+    })
+}
+
+/// The bytes of a score value: the two sides' points in the game, first side
+/// first, or None for a cleared game. Raises Malformed for points that are
+/// not whole numbers from 0 to 4294967295.
+#[pyfunction]
+fn score_value<'py>(py: Python<'py>, score: Option<(i64, i64)>) -> PyResult<Bound<'py, PyBytes>> {
+    let points =
+        |side: i64| u32::try_from(side).map_err(|_| malformed("points are 0 to 4294967295"));
+    let value = match score {
+        Some((first, second)) => fmm::ScoreValue::Points([points(first)?, points(second)?]),
+        None => fmm::ScoreValue::Cleared,
+    };
+    Ok(bytes(py, &value.to_bytes()))
+}
+
+/// Read a score value. None for bytes of another layout version, and for
+/// damaged bytes.
+#[pyfunction]
+fn read_score_value(data: &[u8]) -> Option<PyScoreValue> {
+    fmm::ScoreValue::read(data).map(|value| PyScoreValue {
+        score: match value {
+            fmm::ScoreValue::Points([first, second]) => Some((first, second)),
+            fmm::ScoreValue::Cleared => None,
+        },
+    })
+}
+
 #[pymodule]
 fn fortymm_core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyRecord>()?;
@@ -349,5 +438,12 @@ fn fortymm_core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(hello_body, module)?)?;
     module.add_function(wrap_pyfunction!(username, module)?)?;
     module.add("FORMAT_VERSION", fmm::layout::FORMAT_VERSION)?;
+    // The product layouts.
+    module.add_class::<PyTerms>()?;
+    module.add_class::<PyScoreValue>()?;
+    module.add_function(wrap_pyfunction!(terms_bytes, module)?)?;
+    module.add_function(wrap_pyfunction!(read_terms, module)?)?;
+    module.add_function(wrap_pyfunction!(score_value, module)?)?;
+    module.add_function(wrap_pyfunction!(read_score_value, module)?)?;
     Ok(())
 }

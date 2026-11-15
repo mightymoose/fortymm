@@ -186,6 +186,42 @@ Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: tr
     check(refused, `invalid der ${v.name}`);
     checks += 1;
   }
+  // The product layouts: each value gives the vector's bytes and reads back
+  // from them; bytes of another version or damaged read as null.
+  for (const v of vectors.terms) {
+    const what = `terms best of ${v.best_of} rated ${v.rated}`;
+    check(hex(core.termsBytes(v.best_of, v.rated)) === v.bytes, `${what}: bytes`);
+    const read = core.readTerms(unhex(v.bytes));
+    check(JSON.stringify(read) === JSON.stringify({ bestOf: v.best_of, rated: v.rated }), `${what}: read ${JSON.stringify(read)}`);
+    checks += 2;
+  }
+  for (const v of vectors.unreadable_terms) {
+    check(core.readTerms(unhex(v.bytes)) === null, `unreadable terms ${v.name}: null`);
+    checks += 1;
+  }
+  for (const [bestOf, rated] of [...vectors.invalid_best_ofs.map((n) => [n, false]), [-1, false], [2.5, true], [2 ** 32 + 1, true], ["5", true], [5, 1], [5, undefined]]) {
+    let refused = false;
+    try { core.termsBytes(bestOf, rated); } catch (error) { refused = !(error instanceof Damaged); }
+    check(refused, `termsBytes ${bestOf} ${rated}: refused`);
+    checks += 1;
+  }
+  for (const v of vectors.score_values) {
+    const what = `score value ${JSON.stringify(v.score)}`;
+    check(hex(core.scoreValue(v.score)) === v.bytes, `${what}: bytes`);
+    const read = core.readScoreValue(unhex(v.bytes));
+    check(JSON.stringify(read) === JSON.stringify({ score: v.score }), `${what}: read ${JSON.stringify(read)}`);
+    checks += 2;
+  }
+  for (const v of vectors.unreadable_score_values) {
+    check(core.readScoreValue(unhex(v.bytes)) === null, `unreadable score value ${v.name}: null`);
+    checks += 1;
+  }
+  for (const score of [undefined, [11], [11, 9, 7], [-1, 0], [11, 2.5], [2 ** 32, 0], ["11", 9], 11]) {
+    let refused = false;
+    try { core.scoreValue(score); } catch (error) { refused = !(error instanceof Damaged); }
+    check(refused, `scoreValue ${JSON.stringify(score)}: refused`);
+    checks += 1;
+  }
   console.log(`  ${checks} checks`);
 }
 

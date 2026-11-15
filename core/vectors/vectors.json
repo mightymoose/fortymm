@@ -70,6 +70,13 @@
       "text": "https://fortymm.example/p/061g51ar441045z62zrbch1s50krz5msksmt4ejf5gajqqvddkfpdsdr0a1d9var43h2gvvwtbe65gat02yv6fvef0b724n9kafgeb86ds79vmzwkme2ap10kk05d5tw4bf8ahj50yhc7c9ev61qedkkfsy4rwqysr2pdpa93emng87tcje3nd1f0k4qn8v55c9tb8vhfsyp353dhsq3weps8r7mz7kffn5020000c5gj1rb1c2r70n7000g20r2081j01280ega38n3mjjg6242g4gr28g98g0g218bb104xwa4sa5sa6hgd88rea4g2xgxjnc75sfvgd7f4hvwg7rwp4ckv2tngga68qzypzqx78bzvk4y2mx46pkgb60kqh2rckz43y8vfby3gt1ag001042g40g34024g1x0m6ha79550w4868w04g4j22m0b10bf7jpabb9yy5z0e2xb2ks6ge8mq7me5myzh3q66vsc3y3nenf5d9vm4x29mwa6a050tfn6wmhts4tywbv793vn8md75kgekj5bmekha1ag001042g40g3b0gg7njtjebqsahx3c41gmqzaykswhjz2sg5ewr4qbnda1ex7945h77k0h40h851maht9988121j701414h0n02r83gc8tt2sgpqwrwf43c69ktr9dwv67y9y2b0tc60qnehds1vxff9a3r5wr428eyt8gv5te42s7qba07a7gwx24czc20rgrrg22173hsenqenz3r"
     }
   ],
+  "invalid_best_ofs": [
+    0,
+    2,
+    4,
+    6,
+    4294967294
+  ],
   "invalid_der": [
     {
       "der": "300602010102010200",
@@ -833,6 +840,47 @@
       "signer_own_player_id": "a3e679c4cba0f858584306bb3fc4455b78308708d672c36e8c6cf44b46204c8e"
     }
   ],
+  "score_values": [
+    {
+      "bytes": "a10001",
+      "score": null
+    },
+    {
+      "bytes": "a2000101820b09",
+      "score": [
+        11,
+        9
+      ]
+    },
+    {
+      "bytes": "a200010182090b",
+      "score": [
+        9,
+        11
+      ]
+    },
+    {
+      "bytes": "a200010182000b",
+      "score": [
+        0,
+        11
+      ]
+    },
+    {
+      "bytes": "a2000101821818181a",
+      "score": [
+        24,
+        26
+      ]
+    },
+    {
+      "bytes": "a2000101821affffffff00",
+      "score": [
+        4294967295,
+        0
+      ]
+    }
+  ],
   "signatures": [
     {
       "der": "3046022100ea17ea71b4f1388861306fe158f32522ea20b08e6340988f29b702158705d57b0221009dbdae43a7dcdb2e1dbb7d71a38e0ec5227d9d7a6ba5cc66a9a5266936a6e88a",
@@ -949,6 +997,206 @@
       "public_key": "025b36890dacbd7c9a96bb74a1ee28b3d2d75b72e09a20ef25cf8e6fd8a9f0350d",
       "raw": "e91302c996935e21062c21b8d06be557ab93b1291f2c87e7c826b789c6392f737d2d81f14fc61621383f0475e84fb5a302fd8b5fbd448bd827849c8104cee82b",
       "stored": "e91302c996935e21062c21b8d06be557ab93b1291f2c87e7c826b789c6392f737d2d81f14fc61621383f0475e84fb5a302fd8b5fbd448bd827849c8104cee82b"
+    }
+  ],
+  "terms": [
+    {
+      "best_of": 1,
+      "bytes": "a3000101010200",
+      "rated": false
+    },
+    {
+      "best_of": 1,
+      "bytes": "a3000101010201",
+      "rated": true
+    },
+    {
+      "best_of": 3,
+      "bytes": "a3000101030200",
+      "rated": false
+    },
+    {
+      "best_of": 3,
+      "bytes": "a3000101030201",
+      "rated": true
+    },
+    {
+      "best_of": 5,
+      "bytes": "a3000101050200",
+      "rated": false
+    },
+    {
+      "best_of": 5,
+      "bytes": "a3000101050201",
+      "rated": true
+    },
+    {
+      "best_of": 7,
+      "bytes": "a3000101070200",
+      "rated": false
+    },
+    {
+      "best_of": 7,
+      "bytes": "a3000101070201",
+      "rated": true
+    },
+    {
+      "best_of": 4294967295,
+      "bytes": "a30001011affffffff0200",
+      "rated": false
+    },
+    {
+      "best_of": 4294967295,
+      "bytes": "a30001011affffffff0201",
+      "rated": true
+    }
+  ],
+  "unreadable_score_values": [
+    {
+      "bytes": "a2000201820b09",
+      "name": "version-2"
+    },
+    {
+      "bytes": "a10002",
+      "name": "version-2-cleared"
+    },
+    {
+      "bytes": "a2000001820b09",
+      "name": "version-0"
+    },
+    {
+      "bytes": "",
+      "name": "empty"
+    },
+    {
+      "bytes": "a0",
+      "name": "empty-map"
+    },
+    {
+      "bytes": "a2000101820b",
+      "name": "truncated"
+    },
+    {
+      "bytes": "a2000101820b0900",
+      "name": "trailing-byte"
+    },
+    {
+      "bytes": "a2000101810b",
+      "name": "one-side"
+    },
+    {
+      "bytes": "a2000101830b0907",
+      "name": "three-sides"
+    },
+    {
+      "bytes": "a200010180",
+      "name": "no-sides"
+    },
+    {
+      "bytes": "a2000101821b000000010000000000",
+      "name": "points-too-large"
+    },
+    {
+      "bytes": "a20001010b",
+      "name": "points-not-an-array"
+    },
+    {
+      "bytes": "a200010182410b4109",
+      "name": "points-as-bytes"
+    },
+    {
+      "bytes": "a3000101820b090200",
+      "name": "extra-entry"
+    },
+    {
+      "bytes": "a101820b09",
+      "name": "version-missing"
+    },
+    {
+      "bytes": "a200010182180b09",
+      "name": "integer-not-shortest"
+    },
+    {
+      "bytes": "a2000101f6",
+      "name": "cleared-as-cbor-null"
+    },
+    {
+      "bytes": "a3000101050201",
+      "name": "terms"
+    }
+  ],
+  "unreadable_terms": [
+    {
+      "bytes": "a3000201050201",
+      "name": "version-2"
+    },
+    {
+      "bytes": "a3000001050201",
+      "name": "version-0"
+    },
+    {
+      "bytes": "",
+      "name": "empty"
+    },
+    {
+      "bytes": "a30001010502",
+      "name": "truncated"
+    },
+    {
+      "bytes": "a300010105020100",
+      "name": "trailing-byte"
+    },
+    {
+      "bytes": "a3000101000201",
+      "name": "best-of-zero"
+    },
+    {
+      "bytes": "a3000101040201",
+      "name": "best-of-even"
+    },
+    {
+      "bytes": "a30001011b00000001000000010201",
+      "name": "best-of-too-large"
+    },
+    {
+      "bytes": "a300010141050201",
+      "name": "best-of-not-a-number"
+    },
+    {
+      "bytes": "a3000101050202",
+      "name": "rated-2"
+    },
+    {
+      "bytes": "a200010105",
+      "name": "rated-missing"
+    },
+    {
+      "bytes": "a4000101050201030b",
+      "name": "extra-entry"
+    },
+    {
+      "bytes": "a201050201",
+      "name": "version-missing"
+    },
+    {
+      "bytes": "83010501",
+      "name": "an-array"
+    },
+    {
+      "bytes": "a300010118050201",
+      "name": "integer-not-shortest"
+    },
+    {
+      "bytes": "a30001010502f5",
+      "name": "rated-as-cbor-true"
+    },
+    {
+      "bytes": "a2000101820b09",
+      "name": "a-score-value"
+    },
+    {
+      "bytes": "0101050b",
+      "name": "the-fixtures-stand-in"
     }
   ],
   "unverifiable_records": [

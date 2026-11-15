@@ -55,4 +55,14 @@ export class Core {
   records(binary: Uint8Array): Uint8Array[]
   build(environment: number, records: Uint8Array[]): Uint8Array
   split(binary: Uint8Array, maxChars: number): Uint8Array[]
+
+  // The product layouts: the bytes a `match` record carries as its terms and
+  // a `score` record as its value. `bestOf` is an odd number, 1 or more;
+  // termsBytes throws for any other. A score is the two sides' points, first
+  // side first, or null for a cleared game. Reading gives null for bytes of
+  // another layout version and for damaged bytes.
+  termsBytes(bestOf: number, rated: boolean): Uint8Array
+  readTerms(terms: Uint8Array): { bestOf: number; rated: boolean } | null
+  scoreValue(score: [number, number] | null): Uint8Array
+  readScoreValue(value: Uint8Array): { score: [number, number] | null } | null
 }
