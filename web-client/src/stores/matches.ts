@@ -1,5 +1,4 @@
 import { createStore, useStore } from 'zustand'
-import type { NewMatch } from '../components/new-match/NewMatchScreen.schema.ts'
 import type { BestOf } from '../scoring/scoring.ts'
 import type { Failure } from './match.ts'
 import { matchMemory, type MatchMemory } from './match-memory.ts'
@@ -18,8 +17,20 @@ import { createQueue } from './queue.ts'
 // A match as the list shows it.
 export type MatchSummary = {
   matchId: string
-  opponentName: string
+  // null: no opponent's name was given.
+  opponentName: string | null
   bestOf: BestOf
+  rated: boolean
+}
+
+// A match to create: the opponent's name (null for none), its format, as
+// the plan's match descriptor names it, and whether it is rated. The store's
+// own type, not the form's: the new match form's output (NewMatch) fits it,
+// and other callers may create a match with no name. The store checks
+// nothing (match-memory.ts): rated needing a name is the form's rule.
+export type MatchToCreate = {
+  opponentName: string | null
+  format: { bestOf: BestOf }
   rated: boolean
 }
 
@@ -41,7 +52,7 @@ export type MatchesStore = {
   // the function that stops watching.
   watchMatches(): () => void
   // Keeps a new match with no games, under a fresh id, and gives the id.
-  createMatch(match: NewMatch): Promise<CreateMatchResult>
+  createMatch(match: MatchToCreate): Promise<CreateMatchResult>
 }
 
 // A store of its own over `memory`. The app has one, matchesStore, over the

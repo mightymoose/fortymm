@@ -53,6 +53,21 @@ test('two matches get different ids, and the list has both, newest first', async
   })
 })
 
+test('a match created with no opponent’s name is listed with opponentName null', async () => {
+  const { matches } = fresh()
+
+  const created = await matches
+    .getState()
+    .createMatch({ opponentName: null, format: { bestOf: 3 }, rated: false })
+  await matches.getState().load()
+
+  if (!created.ok) throw new Error('not created')
+  expect(matches.getState().matches).toEqual({
+    status: 'ready',
+    matches: [{ matchId: created.matchId, opponentName: null, bestOf: 3, rated: false }],
+  })
+})
+
 test('the list is unread until its first load', () => {
   const { matches } = fresh()
 

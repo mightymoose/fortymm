@@ -24,7 +24,9 @@ import { createQueue } from './queue.ts'
 
 // What a screen shows of a match.
 export type MatchState = {
-  opponentName: string
+  // null: no opponent's name was given (a screen names it with
+  // components/opponent.ts).
+  opponentName: string | null
   bestOf: BestOf
   rated: boolean
   // The games, one slot per game number: games[0] is game 1 (scoring.ts).
