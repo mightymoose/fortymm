@@ -170,6 +170,11 @@ export class AppLayout {
     return this.banner.page().getByRole('navigation', { name: 'Bottom bar' })
   }
 
+  // The bottom bar's New match (phones only).
+  get bottomBarNewMatch(): Locator {
+    return this.bottomBar.getByRole('link', { name: 'New match' })
+  }
+
   // The username written out in the user's mark.
   userMarkName(username: string): Locator {
     return this.userMark(username).getByText(username, { exact: true })
@@ -182,18 +187,47 @@ export class AppLayout {
 // in a page that is already open. goto() only navigates; a test waits for what
 // it expects to see.
 
-// The dashboard, at /: its heading and, so far, nothing else.
+// The dashboard, at /: its heading and, at non-phone widths, the New match
+// button beside it.
 export class DashboardPage {
   readonly heading: Locator
+  // The dashboard's own New match, in main (the bottom bar has its own).
+  readonly newMatch: Locator
   private readonly page: Page
 
   constructor(page: Page) {
     this.page = page
     this.heading = page.getByRole('heading', { level: 1, name: 'Dashboard' })
+    this.newMatch = page
+      .getByRole('main')
+      .getByRole('link', { name: 'New match' })
   }
 
   async goto() {
     await this.page.goto('/')
+  }
+}
+
+// The new match screen, at /matches/new: the form for a match's opponent
+// and format.
+export class NewMatchPage {
+  readonly heading: Locator
+  readonly form: Locator
+  readonly opponent: Locator
+  readonly startMatch: Locator
+  private readonly page: Page
+
+  constructor(page: Page) {
+    this.page = page
+    const main = page.getByRole('main')
+    this.heading = main.getByRole('heading', { level: 1, name: 'New match' })
+    this.form = main.getByRole('form', { name: 'New match' })
+    this.opponent = this.form.getByRole('textbox', { name: 'Opponent' })
+    this.startMatch = this.form.getByRole('button', { name: 'Start match' })
+  }
+
+  async goto() {
+    await this.page.goto('/matches/new')
   }
 }
 

@@ -1,7 +1,9 @@
 import { within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { expect, test } from 'vitest'
 import { AppLayoutPage } from '../components/AppLayout.page.tsx'
 import { DashboardScreenPage } from '../components/DashboardScreen.page.tsx'
+import { NewMatchScreenPage } from '../components/NewMatchScreen.page.tsx'
 import { renderRoute } from '../test/render-route.tsx'
 
 // The route's wiring. What the dashboard shows is its own test
@@ -15,4 +17,14 @@ test('/ shows the dashboard in the layout’s one main landmark', async () => {
       level: 1,
     }),
   ).toBe(heading)
+})
+
+test('the dashboard’s New match opens the new match screen, at /matches/new', async () => {
+  const user = userEvent.setup()
+  const { router } = renderRoute('/')
+
+  await user.click(await new DashboardScreenPage().newMatch())
+
+  expect(await new NewMatchScreenPage().heading()).toBeVisible()
+  expect(router.state.location.pathname).toBe('/matches/new')
 })
