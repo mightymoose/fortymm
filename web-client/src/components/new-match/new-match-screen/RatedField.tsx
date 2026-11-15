@@ -1,5 +1,5 @@
 import { useId } from 'react'
-import { Switch } from './Switch.tsx'
+import { Switch } from '../../Switch.tsx'
 import './RatedField.css'
 
 // Whether the match counts toward both players' ratings (fortymm-real's

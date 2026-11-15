@@ -1,4 +1,4 @@
-import { useSingleSelection } from './single-selection.ts'
+import { useSingleSelection } from '../../single-selection.ts'
 import './BestOfField.css'
 
 // How long a match is: the most games it can take, each with fortymm-real's

@@ -3,7 +3,7 @@ import { screen, within } from '@testing-library/react'
 import { expect, test } from 'vitest'
 import { AppLayoutPage } from '../../components/AppLayout.page.tsx'
 import { DashboardScreenPage } from '../../components/DashboardScreen.page.tsx'
-import { NewMatchScreenPage } from '../../components/NewMatchScreen.page.tsx'
+import { NewMatchScreenPage } from '../../components/new-match/NewMatchScreen.page.tsx'
 import { renderRoute } from '../../test/render-route.tsx'
 
 // The route's wiring. What the screen shows and does is its own test

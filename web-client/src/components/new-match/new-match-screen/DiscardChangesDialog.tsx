@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
-import { Button } from './Button.tsx'
-import { Dialog } from './Dialog.tsx'
+import { Button } from '../../Button.tsx'
+import { Dialog } from '../../Dialog.tsx'
 import './DiscardChangesDialog.css'
 
 // "Discard changes?" (fortymm-real's DiscardMatchSetupDialog), over the

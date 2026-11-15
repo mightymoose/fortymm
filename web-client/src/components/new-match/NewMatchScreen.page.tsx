@@ -1,5 +1,5 @@
 import { screen, within } from '@testing-library/react'
-import { renderScreen } from '../test/render-screen.tsx'
+import { renderScreen } from '../../test/render-screen.tsx'
 import { NewMatchScreen } from './NewMatchScreen.tsx'
 
 // The new match screen (NewMatchScreen.tsx): how to render it alone, and

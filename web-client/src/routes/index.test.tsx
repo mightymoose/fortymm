@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { expect, test } from 'vitest'
 import { AppLayoutPage } from '../components/AppLayout.page.tsx'
 import { DashboardScreenPage } from '../components/DashboardScreen.page.tsx'
-import { NewMatchScreenPage } from '../components/NewMatchScreen.page.tsx'
+import { NewMatchScreenPage } from '../components/new-match/NewMatchScreen.page.tsx'
 import { renderRoute } from '../test/render-route.tsx'
 
 // The route's wiring. What the dashboard shows is its own test
