@@ -4,9 +4,13 @@
 // side effects. The shared core's rules replace these later.
 //
 // A score is a pair [a, b] in the order of the match's two sides. A match's
-// saved games are a list in game order: games[0] is game 1. Saving through
-// `saveRefusal` keeps that list contiguous and every game in it legal, and the
-// match functions take it to be so.
+// games are slots, one per game number from 1 to best of: games[0] is game 1,
+// and a slot holds that game's score or null. A slot past the end of the list
+// is empty too, so a match with nothing saved is [] and one with only game 3
+// saved is [null, null, score]; `withGame` keeps the list without empty slots
+// at its end. Games may be saved in any order, so a match can have gaps.
+// Saving through `saveRefusal` keeps every saved game legal, and the match
+// functions take it to be so.
 
 // Every length a match can be, shortest first: the most games it can take.
 // The new match form's schema and its BestOfField take them from here.
@@ -14,6 +18,10 @@ export const bestOfs = [1, 3, 5, 7] as const
 export type BestOf = (typeof bestOfs)[number]
 
 export type Score = readonly [number, number]
+
+// A match's games, one slot per game number: a score, or null (or nothing,
+// past the end of the list) for a game not saved.
+export type Games = readonly (Score | null)[]
 
 // The games a side must win to take the match: more than half of best of.
 export function gamesToWin(bestOf: BestOf): number {
@@ -41,50 +49,55 @@ export function illegalGameReason([a, b]: Score): string | null {
   return null
 }
 
-// The games each side has won, in the order of the sides.
-export function gamesWon(games: readonly Score[]): [number, number] {
+// Game `game`'s saved score (1 is the first), or null when it isn't saved.
+export function savedScore(games: Games, game: number): Score | null {
+  return games[game - 1] ?? null
+}
+
+// The games with game `game` set to `score`, or emptied by null; the list
+// ends at its last saved game.
+export function withGame(games: Games, game: number, score: Score | null): Games {
+  const slots = Array.from(
+    { length: Math.max(games.length, game) },
+    (_, index) => (index === game - 1 ? score : (games[index] ?? null)),
+  )
+  while (slots.length > 0 && slots[slots.length - 1] === null) slots.pop()
+  return slots
+}
+
+// The games each side has won, in the order of the sides, wherever they sit.
+export function gamesWon(games: Games): [number, number] {
   const won: [number, number] = [0, 0]
-  for (const [a, b] of games) won[a > b ? 0 : 1] += 1
+  for (const score of games) if (score !== null) won[score[0] > score[1] ? 0 : 1] += 1
   return won
 }
 
-// The number of the game that decided the match: the first game after which
-// a side has won `gamesToWin` games. Null while the games saved decide nothing.
-export function decidingGame(games: readonly Score[], bestOf: BestOf): number | null {
-  const target = gamesToWin(bestOf)
-  const won: [number, number] = [0, 0]
-  for (const [index, [a, b]] of games.entries()) {
-    const side = a > b ? 0 : 1
-    won[side] += 1
-    if (won[side] === target) return index + 1
-  }
+// Whether the match is decided: one side has won `gamesToWin` games, in
+// whichever slots they sit.
+export function isDecided(games: Games, bestOf: BestOf): boolean {
+  return Math.max(...gamesWon(games)) >= gamesToWin(bestOf)
+}
+
+// The number of the next game to score: the lowest empty game while the
+// match is undecided; null once it is decided.
+export function nextGame(games: Games, bestOf: BestOf): number | null {
+  if (isDecided(games, bestOf)) return null
+  for (let game = 1; game <= bestOf; game += 1)
+    if (savedScore(games, game) === null) return game
   return null
 }
 
-// Whether the games saved decide the match. The match is over when its
-// deciding game is saved.
-export function isDecided(games: readonly Score[], bestOf: BestOf): boolean {
-  return decidingGame(games, bestOf) !== null
-}
-
-// The number of the next game to score, or null once the match is decided.
-export function nextGame(games: readonly Score[], bestOf: BestOf): number | null {
-  return isDecided(games, bestOf) ? null : games.length + 1
-}
-
 export type SaveRefusal = {
-  reason: 'past-best-of' | 'non-contiguous' | 'past-decider' | 'illegal'
+  reason: 'past-best-of' | 'past-decider' | 'illegal'
   message: string
 }
 
 // Why saving `score` as game `game` would be refused, or null when it may be
-// saved. A new game is saved only right after the games saved (game N after
-// 1..N-1), and never once the match is decided. A saved game may be corrected
-// at any time, unless the correction would decide the match before a later
-// saved game: that game would then be past the decider, so the edit is refused
-// (as fortymm-real's is) rather than dropping any game silently.
+// saved. A saved game may be corrected at any time, whatever the correction
+// does to the match. An empty game may be scored, in any order, only while
+// the match is undecided: nothing is played past the decider.
 export function saveRefusal(
-  games: readonly Score[],
+  games: Games,
   bestOf: BestOf,
   game: number,
   score: Score,
@@ -94,32 +107,17 @@ export function saveRefusal(
       reason: 'past-best-of',
       message: `This match is best of ${bestOf}; game ${game} can't exist.`,
     }
-  const firstUnsaved = games.length + 1
-  if (game > firstUnsaved)
-    return {
-      reason: 'non-contiguous',
-      message: `Save game ${firstUnsaved} before game ${game}.`,
-    }
-  const decidedAt = decidingGame(games, bestOf)
-  if (game === firstUnsaved && decidedAt !== null)
+  if (savedScore(games, game) === null && isDecided(games, bestOf))
     return {
       reason: 'past-decider',
-      message: `The match was already decided at game ${decidedAt}; game ${game} can't be played.`,
+      message: `The match is already decided; game ${game} can't be played.`,
     }
   const illegal = illegalGameReason(score)
   if (illegal !== null) return { reason: 'illegal', message: illegal }
-  if (game === firstUnsaved) return null
-  const decidedAfter = decidingGame(games.with(game - 1, score), bestOf)
-  if (decidedAfter !== null && decidedAfter < games.length)
-    return {
-      reason: 'past-decider',
-      message: `The match is already decided at game ${decidedAfter} — clear the games after it before saving this score.`,
-    }
   return null
 }
 
-// Whether game `game` may be cleared: only the highest saved game may, so
-// the games saved stay contiguous.
-export function mayClear(games: readonly Score[], game: number): boolean {
-  return games.length > 0 && game === games.length
+// Whether game `game` may be cleared: any saved game may.
+export function mayClear(games: Games, game: number): boolean {
+  return savedScore(games, game) !== null
 }
