@@ -1,0 +1,124 @@
+/* The scoring screen, after fortymm-real's score entry (.entry-wrap,
+   .single-entry, .single-actions) on the theme's tokens: the title in the
+   display font, uppercase; one card (bg-group, a border-subtle edge, the
+   overlay shadow) holding the pad, the error line and the action row; the
+   scoreline under it. At most 720px wide, centred.
+
+   The pad is three columns: you, VS and the tally, the opponent. Each side
+   is its name over a big field in the number font. */
+.scoring {
+  max-width: 720px;
+  margin: 0 auto;
+}
+.scoring__title {
+  margin: 0 0 var(--s-6);
+  font: 400 32px / 1 var(--font-display);
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  color: var(--fg-1);
+}
+
+.scoring__card {
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  background: var(--bg-group);
+  box-shadow: var(--shadow-overlay);
+}
+
+.scoring__pad {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-areas: 'yours mid theirs';
+  gap: var(--s-4);
+  align-items: end;
+  padding: var(--s-5);
+}
+.scoring__side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  min-width: 0;
+}
+.scoring__side--yours {
+  grid-area: yours;
+}
+.scoring__side--theirs {
+  grid-area: theirs;
+  text-align: right;
+}
+.scoring__name {
+  overflow: hidden;
+  font: 600 var(--text-base) / var(--lh-snug) var(--font-ui);
+  color: var(--fg-1);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scoring__side .text-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: auto;
+  padding: var(--s-3);
+  font-size: var(--text-score);
+  line-height: 1;
+  text-align: center;
+}
+.scoring__mid {
+  grid-area: mid;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-1);
+  padding-bottom: var(--s-4);
+}
+.scoring__vs {
+  font: 600 var(--text-xs) / 1 var(--font-ui);
+  letter-spacing: 0.08em;
+  color: var(--fg-3);
+}
+.scoring__tally {
+  margin: 0;
+  font: 600 var(--text-md) / 1 var(--font-num);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-1);
+  white-space: nowrap;
+}
+
+.scoring__error {
+  display: flex;
+  gap: var(--s-2);
+  align-items: center;
+  margin: 0;
+  padding: 0 var(--s-5) var(--s-4);
+  font: 500 var(--text-sm) / var(--lh-snug) var(--font-ui);
+  color: var(--danger);
+}
+
+/* The action row on bg-panel: what saving does, then Clear and the submit;
+   on a narrow card, the buttons under the line, the submit taking the
+   rest of the width. */
+.scoring__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-4);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--s-4) var(--s-5);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+}
+.scoring__sub {
+  flex: 1 1 200px;
+  margin: 0;
+  font: 500 var(--text-sm) / 1.45 var(--font-ui);
+  color: var(--fg-3);
+}
+.scoring__buttons {
+  display: flex;
+  flex: 1 1 auto;
+  gap: var(--s-2);
+  justify-content: flex-end;
+}
+.scoring__buttons > * {
+  white-space: nowrap;
+}
