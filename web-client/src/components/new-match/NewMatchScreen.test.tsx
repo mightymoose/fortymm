@@ -42,6 +42,21 @@ test('a name of only spaces is no name: submitting shows the error and calls not
   expect(onSubmit).not.toHaveBeenCalled()
 })
 
+test('before any submit, a name typed and cleared shows no error', async () => {
+  const user = userEvent.setup()
+  const page = new NewMatchScreenPage()
+  page.render({ onSubmit: vi.fn() })
+
+  await user.type(await page.opponent(), 'Ana')
+  await user.clear(await page.opponent())
+  await user.tab()
+
+  expect(page.opponentError()).toBeNull()
+  expect(await page.opponent()).toHaveAccessibleDescription(
+    'Their name, as you’d call them.',
+  )
+})
+
 test('after a failed submit, typing a name clears the error', async () => {
   const user = userEvent.setup()
   const page = new NewMatchScreenPage()
