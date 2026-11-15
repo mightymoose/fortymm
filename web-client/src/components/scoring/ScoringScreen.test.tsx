@@ -65,29 +65,56 @@ test('a valid score calls onSave once with the game and the score, inside the su
   expect(onSave).toHaveBeenCalledWith(3, [11, 8])
 })
 
-for (const [yours, theirs, reason] of [
-  ['11', '10', 'At 10–10 the game enters deuce — the winner must lead by 2.'],
-  ['12', '9', 'A game can only go past 11 once both sides reach 10.'],
-  ['10', '10', 'The winning side must reach at least 11 points.'],
-  ['', '', 'Enter both scores to save this game.'],
-  ['11', '', 'Enter both scores to save this game.'],
-] as const) {
-  test(`${yours || '(empty)'}–${theirs || '(empty)'} saves nothing and shows “${reason}”, only once submitted`, async () => {
-    const user = userEvent.setup()
-    const onSave = vi.fn()
-    const page = new ScoringScreenPage()
-    page.render(props({ onSave }))
-    if (yours) await user.type(await page.yours(), yours)
-    if (theirs) await user.type(await page.theirs('Ana'), theirs)
-    expect(page.error()).toBeNull()
+test.each([
+  {
+    score: '11–10',
+    yours: '11',
+    theirs: '10',
+    reason: 'At 10–10 the game enters deuce — the winner must lead by 2.',
+  },
+  {
+    score: '12–9',
+    yours: '12',
+    theirs: '9',
+    reason: 'A game can only go past 11 once both sides reach 10.',
+  },
+  {
+    score: '10–10',
+    yours: '10',
+    theirs: '10',
+    reason: 'The winning side must reach at least 11 points.',
+  },
+  {
+    score: '(empty)–(empty)',
+    yours: '',
+    theirs: '',
+    reason: 'Enter both scores to save this game.',
+  },
+  {
+    score: '11–(empty)',
+    yours: '11',
+    theirs: '',
+    reason: 'Enter both scores to save this game.',
+  },
+])('$score saves nothing and shows its reason, only once submitted', async ({
+  yours,
+  theirs,
+  reason,
+}) => {
+  const user = userEvent.setup()
+  const onSave = vi.fn()
+  const page = new ScoringScreenPage()
+  page.render(props({ onSave }))
+  if (yours) await user.type(await page.yours(), yours)
+  if (theirs) await user.type(await page.theirs('Ana'), theirs)
+  expect(page.error()).toBeNull()
 
-    await user.click(await page.submit())
+  await user.click(await page.submit())
 
-    expect(page.error()).toHaveTextContent(reason)
-    expect(await page.yours()).toHaveAccessibleDescription(reason)
-    expect(onSave).not.toHaveBeenCalled()
-  })
-}
+  expect(page.error()).toHaveTextContent(reason)
+  expect(await page.yours()).toHaveAccessibleDescription(reason)
+  expect(onSave).not.toHaveBeenCalled()
+})
 
 test('the submit is never disabled, and after a refused submit the error follows what is typed', async () => {
   const user = userEvent.setup()
@@ -103,11 +130,12 @@ test('the submit is never disabled, and after a refused submit the error follows
   expect(page.error()).toBeNull()
 })
 
-for (const [side, fixed] of [
-  ['yours', '12'],
-  ['theirs', '9'],
-] as const) {
-  test(`a refused score is one error on the pair: fixing ${side} alone clears it from both fields`, async () => {
+test.each([
+  { side: 'yours', fixed: '12' },
+  { side: 'theirs', fixed: '9' },
+] as const)(
+  'a refused score is one error on the pair: fixing $side alone clears it from both fields',
+  async ({ side, fixed }) => {
     const user = userEvent.setup()
     const page = new ScoringScreenPage()
     page.render(props())
@@ -129,8 +157,8 @@ for (const [side, fixed] of [
     expect(await page.theirs('Ana')).toBeValid()
     expect(await page.yours()).not.toHaveAccessibleDescription()
     expect(await page.theirs('Ana')).not.toHaveAccessibleDescription()
-  })
-}
+  },
+)
 
 test('a refused score that is changed and still refused keeps its error, now with the new reason', async () => {
   const user = userEvent.setup()
@@ -213,7 +241,7 @@ test('the heading says Enter for a game not saved, Edit for a saved one, with it
   expect(await page.theirs('Ana')).toHaveValue('11')
 })
 
-for (const { state, overrides, typed, label, subtitle } of [
+test.each([
   {
     state: 'game 1 of a best of 5',
     overrides: {},
@@ -272,8 +300,9 @@ for (const { state, overrides, typed, label, subtitle } of [
   typed: [string, string] | null
   label: string
   subtitle: string
-}[]) {
-  test(`for ${state}, the submit says “${label}” and the line beside it “${subtitle}”`, async () => {
+}[])(
+  'for $state, the submit says “$label” and the line beside it “$subtitle”',
+  async ({ overrides, typed, label, subtitle }) => {
     const user = userEvent.setup()
     const page = new ScoringScreenPage()
     page.render(props(overrides))
@@ -284,8 +313,8 @@ for (const { state, overrides, typed, label, subtitle } of [
 
     expect(await page.submit()).toHaveAccessibleName(label)
     expect(await page.subtitle(subtitle)).toBeVisible()
-  })
-}
+  },
+)
 
 test('the scoreline: a cell per game, saved ones linking with their score, the next one linking, the rest inert, the current one marked', async () => {
   const page = new ScoringScreenPage()

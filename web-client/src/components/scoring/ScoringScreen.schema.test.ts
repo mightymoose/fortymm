@@ -18,20 +18,18 @@ test('a legal score is handed on as numbers, yours first', () => {
   expect(game1.parse({ yours: '9', theirs: '11' })).toEqual([9, 11])
 })
 
-for (const [yours, theirs, reason] of [
+test.each([
   ['11', '10', 'At 10–10 the game enters deuce — the winner must lead by 2.'],
   ['12', '9', 'A game can only go past 11 once both sides reach 10.'],
   ['10', '10', 'The winning side must reach at least 11 points.'],
   ['11', '11', 'A game cannot end in a tie.'],
   ['111', '9', 'Each side can score at most 99 points.'],
-] as const) {
-  test(`${yours}–${theirs} is refused with the rules’ reason, once, on the form`, () => {
-    expect(issues(game1.safeParse({ yours, theirs }))).toEqual([
-      { path: ['root'], message: reason },
-    ])
-    expect(refusalOf(game1, { yours, theirs })).toBe(reason)
-  })
-}
+])('%s–%s is refused with the rules’ reason, once, on the form', (yours, theirs, reason) => {
+  expect(issues(game1.safeParse({ yours, theirs }))).toEqual([
+    { path: ['root'], message: reason },
+  ])
+  expect(refusalOf(game1, { yours, theirs })).toBe(reason)
+})
 
 test('both fields empty: “Enter both scores”, on each', () => {
   expect(issues(game1.safeParse({ yours: '', theirs: '' }))).toEqual([
