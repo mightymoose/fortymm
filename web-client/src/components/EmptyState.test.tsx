@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import { expect, test } from 'vitest'
-import { Button } from '../Button.tsx'
+import { Button } from './Button.tsx'
 import { EmptyState } from './EmptyState.tsx'
 
 test('an empty state says what is missing, what to do, and offers the action', () => {
