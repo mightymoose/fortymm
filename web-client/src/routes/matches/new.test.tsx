@@ -57,6 +57,35 @@ test('Back from the scoring page Start match opened goes where the person was be
   expect(router.state.location.pathname).toBe('/')
 })
 
+// Only the device's storage can refuse a create, and the matches are in
+// memory until it exists: the store's action is replaced for this one test.
+test('a create the store refuses stays on the form, as filled, asking nothing', async () => {
+  const user = userEvent.setup()
+  const { createMatch } = myMatchesStore.getState()
+  let refused = false
+  myMatchesStore.setState({
+    createMatch: async () => {
+      refused = true
+      return { ok: false, reason: 'storage-unavailable' }
+    },
+  })
+  try {
+    const { router } = renderRoute('/matches/new')
+    const page = new NewMatchScreenPage()
+    await user.type(await page.opponent(), 'Cy')
+    await user.click(await page.startMatch())
+
+    await expect.poll(() => refused).toBe(true)
+    // Past the answer, and past any navigation it would have started.
+    await new Promise((settled) => setTimeout(settled, 50))
+    expect(router.state.location.pathname).toBe('/matches/new')
+    expect(await page.opponent()).toHaveValue('Cy')
+    expect(page.queryDiscardDialog()).toBeNull()
+  } finally {
+    myMatchesStore.setState({ createMatch })
+  }
+})
+
 test('Cancel on a form left as it opened goes back to the dashboard', async () => {
   const user = userEvent.setup()
   const { router } = renderRoute('/matches/new')
