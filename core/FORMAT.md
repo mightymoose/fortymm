@@ -82,7 +82,7 @@ An unknown environment number still decodes. Refusing a record from the wrong en
 | `match` | 8 | sides | array of exactly 2 arrays, each of 1 or more player ids |
 | | 9 | terms | bytes, opaque (section 15) |
 | `score` | 8 | match | id |
-| | 9 | slot | uint: 0 for the whole match, n for game n |
+| | 9 | slot | uint: n for game n, 1 and up. Any uint is accepted in a record; 0 has no value layout and is no game, and a match's state ignores it (section 16) |
 | | 10 | value | bytes, opaque (section 15) |
 | | 11 | replaces | array of record ids, possibly empty |
 | `result` | 8 | subject | the subject (below) |
@@ -265,3 +265,37 @@ A game won 11 to 9 by the first side is the 7 bytes `a2 00 01 01 82 0b 09`. A cl
 **What the layouts do not check.** Best of must be odd, since no side can win most of an even number of games. Nothing else is judged: that a match is best of 1, 3, 5 or 7, that a game is to 11, and that a score can end a game are the app's rules, not the layout's. The limit of 2³² − 1 is this implementation's.
 
 **Reading.** Reading gives the value, or nothing. It gives nothing for a layout version other than 1, whatever the rest holds, and for any bytes that are not exactly what writing a value produces: bytes outside the profile, a missing or extra key, a value of the wrong type or out of range, trailing bytes. So whatever reads, writes back to the same bytes. Reading never fails any other way, and a record whose terms or value do not read is still a valid record. Neither layout has a checksum: the record's signature covers these bytes.
+
+## 16. A match's state
+
+What a device shows of a match is derived from the set of records it holds about that match (design section 5, "a view computed from the journal by the shared core"; section 7, "Scoreboard"; section 7.4, "the same derivation runs over the journal"). The server computes its `scores` table by the same rule. It is in `src/state.rs`; the one number it uses is `layout::match_state::MAX_GAME`.
+
+**Input.** A set of records: any order, any repeats. Records are identified by their record id (section 7), so a repeat is the same record, even with other bytes: the same body signed again (another signature, the same record id) is the same record. `score` records of other matches, and records of other kinds, may be in it and are ignored. A `match` record of another match is not ignored: with it there is no state (below), so a caller passes only this match's records. Signatures are not checked again: a held record was verified when it was taken in (design R1).
+
+**The match.** The set's `match` record. With none there is no state. With `match` records of two or more matches there is no state either: the input is about one match, and nothing says which to choose.
+
+- **Match id**: the `match` record's id. **Creator**: the key that signed it (design section 7.4, `matches`: "the key that created it"), its 33 bytes. **Sides**: as the record names them.
+- **Terms**: read by section 15. Terms that do not read (another layout version, or damaged) give no terms, and the rest of the state is derived as usual.
+
+**The scoreboard** is every `score` record in the set whose match field is this match's id.
+
+1. **Replaced.** A score replaces only earlier scores of its own game: a record with slot n replaces the ids its replaces list names, for game n only. A game-2 score that lists a game-1 entry changes nothing for game 1. A record of another match replaces nothing here, even if it names one of this match's records. An id in a list that is not in the set changes nothing.
+2. **Current.** A scoreboard record with slot n is current when no record of the scoreboard with slot n replaces it (design section 7, "Scoreboard": "An entry is current if no held `score` record lists it as replaced", narrowed to its own game by decision of 2026-11-15). So an entry replaces only what it names, and a stale one arriving late cannot displace a newer one (design 7.2, last row).
+3. **Games.** A current record with slot n, 1 ≤ n ≤ the last game, is an entry for game n. The last game is the terms' best of. This is a rule of the derivation, not of records: a score for a game past best of is a valid record and is kept (records can come from other devices, which may let one through), and the derivation does not show it. So a best of 3 with a game-5 score shows games 1 to 3 only. With no terms (they do not read) it is 255 (`MAX_GAME`), which also caps a best of above 255, so one record cannot make a state of millions of empty games; 255 is a limit of this implementation. Slot 0 is accepted in a record but has no value layout and is no game, so it is ignored. A slot past the last game is ignored, in games and in current.
+4. **Chosen entry.** For a game with several current entries, the one with the highest record id, comparing the 32 bytes as an unsigned big-endian number. **This is a placeholder.** The design leaves the choice to a policy function of the set (sections 7, 12 and 16, "Function that picks which temporary scores to show"), not decided yet. The stand-in is deterministic and plainly arbitrary, has no golden vector, and is replaced before sync is built. On one device it does not arise: each new entry for a game names every entry current for it.
+5. **Score.** The chosen entry's value, read by section 15. Points are the game's final score, first side first. Cleared gives no score. A value that does not read (another layout version, or damaged) also gives no score, as cleared does, and the entry is still current.
+
+**Output.**
+
+| Field | What |
+|---|---|
+| match id | 32 bytes |
+| creator | the 33-byte key |
+| sides | two lists of player ids |
+| terms | best of and rated, or none |
+| games | for n from 1, game n's score or none, up to the last game that has a score, so it never ends with none, and never past the last game (best of, or 255). A gap stays: a game with no score before one with a score is none |
+| current | for n from 1, the ids of game n's current entries, lowest first, up to the last game that has a current entry, and never past the last game. It can be longer than games: a game cleared at the end has no score but still has its clearing entry, which the next score for that game names as replaced |
+
+The state is a function of the set alone: the same records give the same state in any order and with any repeats (design L4). Nothing else is read: no clock, no random value, no arrival order. It does not judge a score: whether a game can end that way, or whether the match is already decided, is the app's rule (`web-client/src/scoring/scoring.ts`).
+
+The golden vectors `match_states` hold sets of records (in a shuffled order; every set but the one of terms that don't read holds a repeat) and the state each gives: a corrected game, a game cleared between two scored games, and a game cleared at the end; an unrated match with a chain of three corrections, a game with two current entries of the same points (so the vector pins `current`, not the placeholder's choice) and points past 2^31; two games cleared at the end, with a slot-0 score that replaces nothing; terms that don't read, with scores for games 255 and 256; and a doubles match of best of 301 (games still stop at 255, so a game-260 score is ignored), where a score by another key has the highest record id, and the match record and a score are each listed again signed a second time; and a rated best of 4294967295 (u32::MAX, past 2^31), with a gap, game 255, and a game-256 score that is ignored.

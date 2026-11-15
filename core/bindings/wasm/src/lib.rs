@@ -688,3 +688,68 @@ pub unsafe extern "C" fn fmm_record_replaces(pointer: *const u8, length: usize) 
             .map(|ids| ids.iter().flat_map(|id| *id.as_bytes()).collect())
     })
 }
+
+// ---- A match's state (FORMAT.md section 16) ----
+
+/// Lay items out as `fmm_parcel_records` writes them.
+fn framed<I: AsRef<[u8]>>(items: impl IntoIterator<Item = I>) -> Vec<u8> {
+    let mut out = Vec::new();
+    for item in items {
+        let item = item.as_ref();
+        out.extend((item.len() as u32).to_be_bytes());
+        out.extend(item);
+    }
+    out
+}
+
+/// The state of the match a set of records is about. Input: the records,
+/// laid out as `fmm_parcel_records` writes them; bytes that are not a record
+/// fail. Output, laid out the same way, seven items: the match id; the
+/// creator's 33-byte key; each side as a list of player ids (two items); the
+/// terms, empty when they do not read, or else best of (4 bytes, big-endian)
+/// and rated (1 byte, 1 or 0); the games, a list with one item per game,
+/// empty for none or else the two sides' points (4 bytes each, big-endian);
+/// and the current entries, a list with one item per game, itself a list of
+/// record ids. Status 2 when the set gives no state.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_match_state(pointer: *const u8, length: usize) -> i32 {
+    let Some(items) = unframe(unsafe { input(pointer, length) }) else {
+        return fail(INVALID, "truncated record list");
+    };
+    let mut records = Vec::new();
+    for item in items {
+        match Record::decode(item) {
+            Ok(record) => records.push(record),
+            Err(error) => return fail(INVALID, error),
+        }
+    }
+    let Some(state) = fortymm_core::match_state(&records, &Software) else {
+        return fail(NOT_APPLICABLE, "no state: the records hold no single match");
+    };
+    let side = |side: &[PlayerId]| framed(side.iter().map(PlayerId::as_bytes));
+    let terms = state.terms.map_or_else(Vec::new, |terms| {
+        let mut out = terms.best_of().to_be_bytes().to_vec();
+        out.push(u8::from(terms.rated()));
+        out
+    });
+    let games = framed(state.games.iter().map(|game| {
+        game.map_or_else(Vec::new, |[first, second]| {
+            [first.to_be_bytes(), second.to_be_bytes()].concat()
+        })
+    }));
+    let current = framed(
+        state
+            .current
+            .iter()
+            .map(|ids| framed(ids.iter().map(fortymm_core::RecordId::as_bytes))),
+    );
+    done(framed([
+        state.match_id.as_bytes().to_vec(),
+        state.creator.as_bytes().to_vec(),
+        side(&state.sides[0]),
+        side(&state.sides[1]),
+        terms,
+        games,
+        current,
+    ]))
+}

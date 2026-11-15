@@ -11,7 +11,7 @@
 
 mod common;
 
-use common::{CRYPTO, ENV, TERMS, TestKey, fixtures, hex, high_s, random, raw_body};
+use common::{CRYPTO, ENV, TERMS, TestKey, fixtures, hex, high_s, keys, random, raw_body};
 use fortymm_core::cbor::Value;
 use fortymm_core::ids::label;
 use fortymm_core::layout::username::MAX_SUFFIX_LENGTH;
@@ -20,7 +20,7 @@ use fortymm_core::{
     ClockReading, Content, Draft, Environment, Kind, MatchId, Parcel, PlayerId, PublicKey, Record,
     RecordId, Signature,
 };
-use fortymm_core::{ScoreValue, Terms};
+use fortymm_core::{MatchState, ScoreValue, Terms, match_state};
 use serde_json::{Value as Json, json};
 
 const PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/vectors/vectors.json");
@@ -636,14 +636,14 @@ fn made_records() -> Vec<Json> {
         random(54),
         clock,
     );
-    // The whole match's slot, an empty value, and two replaced ids.
+    // Game 1 again, with an empty value and two replaced ids.
     make(
         "score-empty-value-replacing-two",
         alice,
         ENV,
         Draft::score(
             match_id,
-            0,
+            1,
             vec![],
             vec![score.id(&CRYPTO), corrected.id(&CRYPTO)],
         ),
@@ -685,6 +685,313 @@ fn draft_of(entry: &Json) -> Draft {
         ),
         other => panic!("no made record of kind {other}"),
     }
+}
+
+/// A match's state as the vectors write it (FORMAT.md section 16).
+fn state_json(state: &MatchState) -> Json {
+    let ids = |ids: &[RecordId]| ids.iter().map(|id| hex(id.as_bytes())).collect::<Vec<_>>();
+    json!({
+        "match_id": hex(state.match_id.as_bytes()),
+        "creator": hex(state.creator.as_bytes()),
+        "sides": state.sides.iter().map(|side| {
+            side.iter().map(|p| hex(p.as_bytes())).collect::<Vec<_>>()
+        }).collect::<Vec<_>>(),
+        "terms": state.terms.map(|t| json!({"best_of": t.best_of(), "rated": t.rated()})),
+        "games": state.games,
+        "current": state.current.iter().map(|game| ids(game)).collect::<Vec<_>>(),
+    })
+}
+
+/// Sets of records about one match and the state each gives (FORMAT.md
+/// section 16): a corrected game (C2), a game cleared between two scored
+/// games and one cleared at the end (C3), and in each the entries current
+/// for every game (C4). Each set is listed shuffled, and every set but
+/// "no-terms-255-games" holds a repeat. The state
+/// is written out here by hand and checked against `match_state`, so the
+/// file holds what the rule should give, not merely what the code gave. The
+/// one game with two current entries gives both the same points, since which
+/// entry is shown is a placeholder: the vector pins `current`, not the
+/// choice.
+fn match_states() -> Vec<Json> {
+    let [alice, bob, ..] = &keys();
+    let ids = |records: &[&Record]| records.iter().map(|r| r.id(&CRYPTO)).collect::<Vec<_>>();
+    let terms = Terms::new(5, true).unwrap();
+    let sides = [vec![alice.own_player()], vec![bob.own_player()]];
+    let match_ = alice.commit(
+        &Draft::match_(sides.clone(), terms.to_bytes()).unwrap(),
+        random(60),
+        None,
+    );
+    let m = match_.match_id(&CRYPTO).unwrap();
+    let mut seed = 60;
+    let mut score = |key: &TestKey, slot, value: ScoreValue, replaces: &[&Record]| {
+        seed += 1;
+        key.commit(
+            &Draft::score(m, slot, value.to_bytes(), ids(replaces)),
+            random(seed),
+            None,
+        )
+    };
+    let points = |first, second| ScoreValue::Points([first, second]);
+    let cleared = ScoreValue::Cleared;
+    let expect = |games: Vec<Option<[u32; 2]>>, current: Vec<Vec<RecordId>>| MatchState {
+        match_id: m,
+        creator: alice.public(),
+        sides: sides.clone(),
+        terms: Some(terms),
+        games,
+        current,
+    };
+    let one = |record: &Record| vec![record.id(&CRYPTO)];
+
+    let mut vectors = Vec::new();
+    let mut add = |name: &str, records: &[&Record], expected: MatchState| {
+        let owned: Vec<Record> = records.iter().map(|r| (*r).clone()).collect();
+        assert_eq!(
+            match_state(&owned, &CRYPTO),
+            Some(expected.clone()),
+            "{name}"
+        );
+        vectors.push(json!({
+            "name": name,
+            "records": records.iter().map(|r| hex(&r.to_bytes())).collect::<Vec<_>>(),
+            "state": state_json(&expected),
+        }));
+    };
+
+    // Game 1 entered as 11-9, then corrected to 11-7.
+    let game_1 = score(bob, 1, points(11, 9), &[]);
+    let corrected = score(alice, 1, points(11, 7), &[&game_1]);
+    let game_2 = score(bob, 2, points(9, 11), &[]);
+    add(
+        "corrected-game",
+        &[&corrected, &game_2, &match_, &game_1, &corrected],
+        expect(
+            vec![Some([11, 7]), Some([9, 11])],
+            vec![one(&corrected), one(&game_2)],
+        ),
+    );
+
+    // Game 2 cleared between games 1 and 3: the gap stays.
+    let game_1 = score(alice, 1, points(11, 5), &[]);
+    let game_2 = score(alice, 2, points(11, 8), &[]);
+    let cleared_2 = score(alice, 2, cleared, &[&game_2]);
+    let game_3 = score(bob, 3, points(7, 11), &[]);
+    add(
+        "game-cleared-between",
+        &[&game_3, &cleared_2, &match_, &game_2, &game_1, &cleared_2],
+        expect(
+            vec![Some([11, 5]), None, Some([7, 11])],
+            vec![one(&game_1), one(&cleared_2), one(&game_3)],
+        ),
+    );
+
+    // Game 3 cleared at the end: no empty game trails, but its clearing
+    // entry is still current.
+    let game_2 = score(bob, 2, points(8, 11), &[]);
+    let game_3 = score(alice, 3, points(11, 9), &[]);
+    let cleared_3 = score(alice, 3, cleared, &[&game_3]);
+    add(
+        "game-cleared-at-end",
+        &[&cleared_3, &game_1, &match_, &game_3, &game_2, &game_1],
+        expect(
+            vec![Some([11, 5]), Some([8, 11])],
+            vec![one(&game_1), one(&game_2), one(&cleared_3)],
+        ),
+    );
+
+    // The vectors below were added after the first three, each in a match of
+    // its own, so the bindings see more shapes of state than one: unrated
+    // terms, terms that don't read, points past 2^31, several current ids for
+    // a game, a long chain of corrections, several games cleared at the end,
+    // the 255-game cap, a doubles match, a best of past 255 and one of
+    // u32::MAX, a creator who didn't sign the highest-id record, and records
+    // signed again.
+    let mut seed = 100;
+    let mut made = |key: &TestKey, draft: Draft| {
+        seed += 1;
+        key.commit(&draft, random(seed), None)
+    };
+    let a_match = |made: &mut dyn FnMut(&TestKey, Draft) -> Record, terms: Vec<u8>| {
+        made(alice, Draft::match_(sides.clone(), terms).unwrap())
+    };
+    let a_score = |made: &mut dyn FnMut(&TestKey, Draft) -> Record,
+                   key: &TestKey,
+                   match_: &Record,
+                   slot: u64,
+                   value: ScoreValue,
+                   replaces: &[&Record]| {
+        let m = match_.match_id(&CRYPTO).unwrap();
+        made(key, Draft::score(m, slot, value.to_bytes(), ids(replaces)))
+    };
+    let state_of = |match_: &Record,
+                    terms: Option<Terms>,
+                    games: Vec<Option<[u32; 2]>>,
+                    current: Vec<Vec<RecordId>>| MatchState {
+        match_id: match_.match_id(&CRYPTO).unwrap(),
+        creator: alice.public(),
+        sides: sides.clone(),
+        terms,
+        games,
+        current,
+    };
+    let sorted = |records: &[&Record]| {
+        let mut ids = ids(records);
+        ids.sort();
+        ids
+    };
+
+    // An unrated best of 5. Game 1 is entered and corrected three times, a
+    // chain a <- b <- c <- d: only d is current. Game 2 has two current
+    // entries, entered on two devices, with the same points, so the score
+    // shown doesn't depend on which entry is chosen (a placeholder); both ids
+    // are current, lowest first. The points are past 2^31, up to 2^32 - 1.
+    // Game 3 is not played; game 4 is.
+    let unrated = Terms::new(5, false).unwrap();
+    let match_ = a_match(&mut made, unrated.to_bytes());
+    let a = a_score(&mut made, alice, &match_, 1, points(11, 9), &[]);
+    let b = a_score(&mut made, alice, &match_, 1, points(11, 8), &[&a]);
+    let c = a_score(&mut made, bob, &match_, 1, points(11, 7), &[&b]);
+    let d = a_score(&mut made, alice, &match_, 1, points(11, 6), &[&c]);
+    let big = points(2_147_483_648, u32::MAX);
+    let on_alice = a_score(&mut made, alice, &match_, 2, big, &[]);
+    let on_bob = a_score(&mut made, bob, &match_, 2, big, &[]);
+    let game_4 = a_score(&mut made, bob, &match_, 4, points(u32::MAX, 0), &[]);
+    add(
+        "unrated-chain-and-two-current",
+        &[&on_bob, &c, &game_4, &a, &match_, &d, &on_alice, &b, &c],
+        state_of(
+            &match_,
+            Some(unrated),
+            vec![
+                Some([11, 6]),
+                Some([2_147_483_648, u32::MAX]),
+                None,
+                Some([u32::MAX, 0]),
+            ],
+            vec![one(&d), sorted(&[&on_alice, &on_bob]), vec![], one(&game_4)],
+        ),
+    );
+
+    // Games 2 and 3 cleared at the end: no empty game trails at all, and
+    // both clearing entries stay current. A slot-0 score naming the game-1
+    // entry replaces nothing: slot 0 is no game.
+    let match_ = a_match(&mut made, terms.to_bytes());
+    let game_1 = a_score(&mut made, alice, &match_, 1, points(11, 3), &[]);
+    let game_2 = a_score(&mut made, alice, &match_, 2, points(11, 4), &[]);
+    let game_3 = a_score(&mut made, bob, &match_, 3, points(5, 11), &[]);
+    let cleared_2 = a_score(&mut made, alice, &match_, 2, cleared, &[&game_2]);
+    let cleared_3 = a_score(&mut made, bob, &match_, 3, cleared, &[&game_3]);
+    let slot_0 = a_score(&mut made, bob, &match_, 0, cleared, &[&game_1]);
+    add(
+        "two-games-cleared-at-end",
+        &[
+            &cleared_3, &slot_0, &game_2, &match_, &game_1, &cleared_2, &game_3, &slot_0,
+        ],
+        state_of(
+            &match_,
+            Some(terms),
+            vec![Some([11, 3])],
+            vec![one(&game_1), one(&cleared_2), one(&cleared_3)],
+        ),
+    );
+
+    // Terms of layout version 2, which this build doesn't read: no terms,
+    // and games stop at 255. A score for game 255 shows; one for game 256 is
+    // ignored. 255 is written as a number here, not as MAX_GAME.
+    let version_2 = vec![0xa3, 0x00, 0x02, 0x01, 0x05, 0x02, 0x01];
+    let match_ = a_match(&mut made, version_2);
+    let game_1 = a_score(&mut made, bob, &match_, 1, points(11, 2), &[]);
+    let game_255 = a_score(&mut made, alice, &match_, 255, points(12, 10), &[]);
+    let game_256 = a_score(&mut made, alice, &match_, 256, points(11, 0), &[]);
+    let mut games = vec![None; 255];
+    games[0] = Some([11, 2]);
+    games[254] = Some([12, 10]);
+    let mut current = vec![vec![]; 255];
+    current[0] = one(&game_1);
+    current[254] = one(&game_255);
+    add(
+        "no-terms-255-games",
+        &[&game_256, &game_255, &match_, &game_1],
+        state_of(&match_, None, games, current),
+    );
+
+    // A doubles match, alice and carol against bob and dave, unrated best of
+    // 301: a best of past one byte, which still stops games at 255, so the
+    // score for game 260 is ignored. A score signed by a key other than the
+    // creator's has the highest record id in the set, so the creator can
+    // only come from the match record. The match record and the game-1 score are also listed signed
+    // again (the same body, another signature): the same records, so the
+    // state is unchanged.
+    let [_, _, carol, dave] = &keys();
+    let doubles = [
+        vec![alice.own_player(), carol.own_player()],
+        vec![bob.own_player(), dave.own_player()],
+    ];
+    let best_of_301 = Terms::new(301, false).unwrap();
+    let match_ = made(
+        alice,
+        Draft::match_(doubles.clone(), best_of_301.to_bytes()).unwrap(),
+    );
+    let game_1 = a_score(&mut made, bob, &match_, 1, points(11, 9), &[]);
+    let game_7 = a_score(&mut made, carol, &match_, 7, points(9, 11), &[]);
+    let game_260 = a_score(&mut made, dave, &match_, 260, points(11, 0), &[]);
+    let match_again = alice.re_sign(&match_, 1);
+    let game_1_again = bob.re_sign(&game_1, 2);
+    let set = [
+        &game_7,
+        &match_again,
+        &game_1,
+        &game_260,
+        &match_,
+        &game_1_again,
+        &game_7,
+    ];
+    let highest = set.iter().max_by_key(|r| r.id(&CRYPTO)).unwrap();
+    assert_ne!(
+        highest.signer(),
+        alice.public(),
+        "a score by another key has the highest id"
+    );
+    let mut games = vec![None; 7];
+    games[0] = Some([11, 9]);
+    games[6] = Some([9, 11]);
+    let mut current = vec![vec![]; 7];
+    current[0] = one(&game_1);
+    current[6] = one(&game_7);
+    add(
+        "doubles-best-of-301-re-signed",
+        &set,
+        MatchState {
+            sides: doubles.clone(),
+            ..state_of(&match_, Some(best_of_301), games, current)
+        },
+    );
+
+    // A rated best of 4294967295 (u32::MAX): a best of past 2^31 and past
+    // two bytes, so a binding that reads it signed or short shows another
+    // length. Games still stop at 255. Game 2 is a gap, then game 3, then
+    // game 255; the game-256 score is ignored. Game 1 is listed twice.
+    let best_of_max = Terms::new(u32::MAX, true).unwrap();
+    let match_ = a_match(&mut made, best_of_max.to_bytes());
+    let game_1 = a_score(&mut made, bob, &match_, 1, points(11, 4), &[]);
+    let game_3 = a_score(&mut made, alice, &match_, 3, points(6, 11), &[]);
+    let game_255 = a_score(&mut made, bob, &match_, 255, points(11, 13), &[]);
+    let game_256 = a_score(&mut made, alice, &match_, 256, points(11, 1), &[]);
+    let mut games = vec![None; 255];
+    games[0] = Some([11, 4]);
+    games[2] = Some([6, 11]);
+    games[254] = Some([11, 13]);
+    let mut current = vec![vec![]; 255];
+    current[0] = one(&game_1);
+    current[2] = one(&game_3);
+    current[254] = one(&game_255);
+    add(
+        "best-of-4294967295",
+        &[&game_3, &game_256, &game_1, &match_, &game_255, &game_1],
+        state_of(&match_, Some(best_of_max), games, current),
+    );
+    vectors
 }
 
 fn parcel_json(name: &str, parcel: &Parcel) -> Json {
@@ -852,6 +1159,7 @@ fn build() -> Json {
         "made_hellos": made_hellos(),
         "invalid_hello_inputs": invalid_hello_inputs(),
         "made_records": made_records(),
+        "match_states": match_states(),
         "parcels": parcels,
         "damaged_parcel_texts": damaged,
         "harmless_parcel_texts": harmless,
@@ -1104,5 +1412,16 @@ fn vectors_check_from_the_file_alone() {
     for entry in file["unreadable_score_values"].as_array().unwrap() {
         let bytes = unhex(entry["bytes"].as_str().unwrap());
         assert_eq!(ScoreValue::read(&bytes), None, "{}", entry["name"]);
+    }
+    // A match's state from each set of records, in the order listed.
+    for entry in file["match_states"].as_array().unwrap() {
+        let records: Vec<Record> = entry["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| Record::decode(&unhex(r.as_str().unwrap())).unwrap())
+            .collect();
+        let state = match_state(&records, &CRYPTO).unwrap();
+        assert_eq!(state_json(&state), entry["state"], "{}", entry["name"]);
     }
 }

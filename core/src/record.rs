@@ -365,7 +365,8 @@ pub enum Content {
     Score {
         /// The match.
         match_id: MatchId,
-        /// 0 for the whole match, n for game n.
+        /// n for game n. Any number is accepted; slot 0 has no value layout
+        /// and the match's state ignores it.
         slot: u64,
         /// The score. Opaque here.
         value: Vec<u8>,
@@ -1307,7 +1308,8 @@ impl Record {
         }
     }
 
-    /// A `score` record's slot: 0 for the whole match, n for game n.
+    /// A `score` record's slot: n for game n. Slot 0 is accepted but means
+    /// no game.
     pub fn slot(&self) -> Option<u64> {
         match &self.content {
             Content::Score { slot, .. } => Some(*slot),

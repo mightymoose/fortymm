@@ -128,3 +128,27 @@ def score_body(
     replaces: list[bytes],
     clock: int | None = None,
 ) -> bytes: ...
+
+# A match's state, derived from the set of records about it (core/FORMAT.md,
+# section 16): any order, repeats allowed. Score records of other matches, and
+# records of other kinds, are ignored. None when there is no match record, or a
+# match record of another match too.
+class MatchState:
+    @property
+    def match_id(self) -> bytes: ...
+    @property
+    def creator(self) -> bytes: ...
+    @property
+    def sides(self) -> list[list[bytes]]: ...
+    @property
+    def terms(self) -> Terms | None: ...
+    @property
+    def games(self) -> list[tuple[int, int] | None]: ...
+    @property
+    def current(self) -> list[list[bytes]]: ...
+
+# A match's state (core/FORMAT.md, section 16): any order, repeats allowed.
+# Score records of other matches, and records of other kinds, are ignored.
+# None when there is no match record, or a match record of another match too:
+# pass only this match's records.
+def match_state(records: list[Record]) -> MatchState | None: ...

@@ -5,7 +5,7 @@
 // fortymm-core.d.mts, written beside the wrapper by core:wasm. Each marked line
 // must be a type error; if the types were lost (the wrapper typed as `any`),
 // the expect-error directive would be unused and tsc would fail.
-import type { Kind } from 'fortymm-core/fortymm-core.mjs'
+import type { Kind, MatchState } from 'fortymm-core/fortymm-core.mjs'
 import { expectTypeOf } from 'vitest'
 import { loadCore } from './load.ts'
 
@@ -82,4 +82,20 @@ export async function callsTheCoreWithWrongArguments() {
   core.assemble(new Uint8Array(), 'signature')
   // @ts-expect-error: assemble needs the signature
   core.assemble(new Uint8Array())
+}
+
+// A match's state from its records (core/FORMAT.md, section 16).
+export async function derivesAMatchsStateAsTheCoresTypesSay() {
+  const core = await loadCore()
+  const state = core.matchState([new Uint8Array()])
+  expectTypeOf(state).toEqualTypeOf<MatchState | null>()
+  if (state === null) return
+  expectTypeOf(state.matchId).toEqualTypeOf<Uint8Array>()
+  expectTypeOf(state.creator).toEqualTypeOf<Uint8Array>()
+  expectTypeOf(state.sides).toEqualTypeOf<[Uint8Array[], Uint8Array[]]>()
+  expectTypeOf(state.terms).toEqualTypeOf<{ bestOf: number; rated: boolean } | null>()
+  expectTypeOf(state.games).toEqualTypeOf<([number, number] | null)[]>()
+  expectTypeOf(state.current).toEqualTypeOf<Uint8Array[][]>()
+  // @ts-expect-error: the records are a list of byte strings, not one record
+  core.matchState(new Uint8Array())
 }
