@@ -144,8 +144,8 @@ describe('a decided match', () => {
     expect(gamesWon(sevenGames)).toEqual([4, 3])
   })
 
-  test('each of its saved games may still be corrected, with any legal score', () => {
-    for (const game of [1, 2, 3]) expect(saveRefusal(games, 5, game, [4, 11])).toBeNull()
+  test.each([1, 2, 3])('its saved game %i may still be corrected, with any legal score', (game) => {
+    expect(saveRefusal(games, 5, game, [4, 11])).toBeNull()
   })
 })
 
@@ -206,8 +206,8 @@ describe('clearing a game', () => {
     [11, 5],
   ]
 
-  test('any saved game may be cleared, the highest or not', () => {
-    for (const game of [1, 2, 3]) expect(mayClear(games, game)).toBe(true)
+  test.each([1, 2, 3])('saved game %i may be cleared, the highest or not', (game) => {
+    expect(mayClear(games, game)).toBe(true)
   })
 
   test('a game not saved may not be cleared', () => {

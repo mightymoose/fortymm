@@ -363,16 +363,16 @@ test('in a decided match, saved games link and empty games are inert', async () 
   expect(await page.cell(2)).toHaveTextContent('Game 2, not yet played')
 })
 
-test('Clear is in the action row of a saved game, any saved game, and of no empty game; the scoreline has no ✕', async () => {
+test.each([1, 2])('Clear is in the action row of saved game %i, the highest or not; the scoreline has no ✕', async (game) => {
   const page = new ScoringScreenPage()
-  for (const game of [1, 2]) {
-    const { unmount } = page.render(props({ games: twoGames, game }))
-    await page.heading()
-    expect(page.clear()).not.toBeNull()
-    expect(screen.queryByRole('button', { name: /^Clear game/ })).toBeNull()
-    unmount()
-  }
+  page.render(props({ games: twoGames, game }))
+  await page.heading()
+  expect(page.clear()).not.toBeNull()
+  expect(screen.queryByRole('button', { name: /^Clear game/ })).toBeNull()
+})
 
+test('an empty game has no Clear, and the scoreline no ✕', async () => {
+  const page = new ScoringScreenPage()
   page.render(props({ games: twoGames, game: 3 }))
   await page.heading()
   expect(page.clear()).toBeNull()
