@@ -31,6 +31,11 @@ export class ScoringScreenPage {
     return screen.findByRole('textbox', { name: `${opponentName}’s score` })
   }
 
+  // The opponent's field when the match has no opponent's name.
+  theirsAnonymous() {
+    return screen.findByRole('textbox', { name: 'Opponent’s score' })
+  }
+
   // The games won so far, under VS ("Games won: 1 – 0"), or null.
   tally() {
     return screen.queryByText('Games won:')?.closest('p') ?? null
