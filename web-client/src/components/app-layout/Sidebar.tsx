@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router'
-import { Icon, type IconName } from './Icon.tsx'
+import { Icon, type IconName } from '../Icon.tsx'
 import './Sidebar.css'
 
 // The pages the sidebar links to, in order. The router marks a link current

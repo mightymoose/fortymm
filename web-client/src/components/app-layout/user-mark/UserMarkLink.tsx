@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router'
-import { initials } from '../initials.ts'
-import { Avatar } from './Avatar.tsx'
+import { initials } from '../../../initials.ts'
+import { Avatar } from '../../Avatar.tsx'
 import './UserMarkLink.css'
 
 // This device's user in the top bar: their initials in the design system's

@@ -1,8 +1,8 @@
 import { expect, test, vi } from 'vitest'
-import { announce } from '../changes.ts'
-import { loadMe, type LoadUserResult, type User } from '../storage.ts'
-import { userStore } from '../stores/user.ts'
-import { AppLayoutPage } from './AppLayout.page.tsx'
+import { announce } from '../../changes.ts'
+import { loadMe, type LoadUserResult, type User } from '../../storage.ts'
+import { userStore } from '../../stores/user.ts'
+import { AppLayoutPage } from '../AppLayout.page.tsx'
 
 // The top bar's user mark connected to the real user store
 // (src/stores/user.ts), in the layout that is always mounted. Only the
@@ -10,7 +10,7 @@ import { AppLayoutPage } from './AppLayout.page.tsx'
 // changes are announced with the real announce. What the mark shows for a
 // username is UserMarkLink.test.tsx; the store's reads, its own test. The
 // tests share the app's one store, so they run in order: unread first.
-vi.mock('../storage.ts', () => ({ loadMe: vi.fn(), storeRecord: vi.fn() }))
+vi.mock('../../storage.ts', () => ({ loadMe: vi.fn(), storeRecord: vi.fn() }))
 
 const user: User = {
   playerId: 'ab'.repeat(32),

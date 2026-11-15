@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router'
-import { Icon } from './Icon.tsx'
+import { Icon } from '../Icon.tsx'
 import './BottomBar.css'
 
 // The bottom bar, on phones only (AppLayout.css's breakpoint), where there is

@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { AppLayoutPage } from './AppLayout.page.tsx'
+import { AppLayoutPage } from '../AppLayout.page.tsx'
 
 test('the sidebar links to the dashboard, health, settings and design system pages, in that order', async () => {
   const page = new AppLayoutPage()

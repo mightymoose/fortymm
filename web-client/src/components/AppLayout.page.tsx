@@ -2,9 +2,9 @@ import { screen, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { renderScreen } from '../test/render-screen.tsx'
 import { AppLayout } from './AppLayout.tsx'
-import { BottomBar } from './BottomBar.tsx'
-import { Sidebar } from './Sidebar.tsx'
-import { TopBar } from './TopBar.tsx'
+import { BottomBar } from './app-layout/BottomBar.tsx'
+import { Sidebar } from './app-layout/Sidebar.tsx'
+import { TopBar } from './app-layout/TopBar.tsx'
 
 // The layout every screen shares (AppLayout.tsx) and its parts, the top bar
 // (TopBar.tsx) and the sidebar (Sidebar.tsx): how to render each alone, and

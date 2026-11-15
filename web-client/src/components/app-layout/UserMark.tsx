@@ -1,5 +1,5 @@
-import { useUser } from '../stores/user.ts'
-import { UserMarkLink } from './UserMarkLink.tsx'
+import { useUser } from '../../stores/user.ts'
+import { UserMarkLink } from './user-mark/UserMarkLink.tsx'
 
 // The top bar's user mark, connected to the user store (src/stores/user.ts):
 // this device's username once the store has read one, else none. The layout

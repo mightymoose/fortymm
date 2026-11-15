@@ -1,7 +1,7 @@
 import { screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { expect, test, vi } from 'vitest'
-import { AppLayoutPage } from './AppLayout.page.tsx'
+import { AppLayoutPage } from '../AppLayout.page.tsx'
 
 const sidebar = {
   sidebarExpanded: true,

@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
-import { Icon } from './Icon.tsx'
+import { Icon } from '../Icon.tsx'
 import './TopBar.css'
 
 // The top bar across every screen. At non-phone widths: the sidebar's toggle,

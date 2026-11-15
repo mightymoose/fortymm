@@ -1,10 +1,10 @@
 import { useId, useState, type ReactNode } from 'react'
 import { useNewVersion } from '../new-version.ts'
-import { BottomBar } from './BottomBar.tsx'
-import { Sidebar } from './Sidebar.tsx'
-import { TopBar } from './TopBar.tsx'
+import { BottomBar } from './app-layout/BottomBar.tsx'
+import { Sidebar } from './app-layout/Sidebar.tsx'
+import { TopBar } from './app-layout/TopBar.tsx'
 import { UpdateNotice } from './UpdateNotice.tsx'
-import { UserMark } from './UserMark.tsx'
+import { UserMark } from './app-layout/UserMark.tsx'
 import './AppLayout.css'
 
 // The layout every screen shares (the root route renders each screen in it):

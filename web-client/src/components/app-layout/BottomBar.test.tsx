@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { AppLayoutPage } from './AppLayout.page.tsx'
+import { AppLayoutPage } from '../AppLayout.page.tsx'
 
 // The bottom bar alone. That it shows on phones only, at the bottom of the
 // screen, is the browser suite's (e2e/tests/app-layout.spec.ts).

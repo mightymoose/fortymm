@@ -1,6 +1,6 @@
 import { within } from '@testing-library/react'
 import { expect, test } from 'vitest'
-import { AppLayoutPage } from './AppLayout.page.tsx'
+import { AppLayoutPage } from '../../AppLayout.page.tsx'
 import { UserMarkLink } from './UserMarkLink.tsx'
 
 // The user's mark in the top bar, given a username. Which username it gets
