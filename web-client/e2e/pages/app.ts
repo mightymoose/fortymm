@@ -231,6 +231,35 @@ export class NewMatchPage {
   }
 }
 
+// The matches list, at /matches: its heading, its table of matches (each
+// row a card on phones), and at non-phone widths New match beside the
+// heading.
+export class MatchesPage {
+  readonly heading: Locator
+  readonly table: Locator
+  // The table's matches, the header row left out.
+  readonly rows: Locator
+  // The table's header row: its column names.
+  readonly columnHeaders: Locator
+  // The list's own New match, in main (the bottom bar has its own).
+  readonly newMatch: Locator
+  private readonly page: Page
+
+  constructor(page: Page) {
+    this.page = page
+    const main = page.getByRole('main')
+    this.heading = main.getByRole('heading', { level: 1, name: 'Matches' })
+    this.table = main.getByRole('table', { name: 'Matches' })
+    this.rows = this.table.locator('tbody tr')
+    this.columnHeaders = this.table.getByRole('columnheader')
+    this.newMatch = main.getByRole('link', { name: 'New match' })
+  }
+
+  async goto() {
+    await this.page.goto('/matches')
+  }
+}
+
 // The design system page's tabs, each a page of its own: its address and
 // its board's title. Each tab's path is written only here.
 const designSystemTabs = {

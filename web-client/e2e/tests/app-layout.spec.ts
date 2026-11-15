@@ -1,6 +1,12 @@
 import { expect, test } from '../pages/test.ts'
 import type { Page } from '@playwright/test'
-import { App, AppLayout, DashboardPage, NewMatchPage } from '../pages/app.ts'
+import {
+  App,
+  AppLayout,
+  DashboardPage,
+  MatchesPage,
+  NewMatchPage,
+} from '../pages/app.ts'
 import { StorageHarness } from '../pages/storage.ts'
 
 // What only a real browser can show about the layout around every screen
@@ -31,7 +37,13 @@ test.describe('at a desktop width', () => {
     await expect(layout.brand).toBeVisible()
     await expect(layout.sidebarToggle).toBeVisible()
     await expect(layout.navigation).toBeVisible()
-    for (const name of ['Dashboard', 'Health', 'Settings', 'Design system']) {
+    for (const name of [
+      'Dashboard',
+      'Matches',
+      'Health',
+      'Settings',
+      'Design system',
+    ]) {
       await expect(layout.link(name)).toBeVisible()
     }
   })
@@ -58,6 +70,27 @@ test.describe('at a desktop width', () => {
     await expect(new NewMatchPage(page).heading).toBeVisible()
     expect(new URL(page.url()).pathname).toBe('/matches/new')
   })
+
+  test('the sidebar’s Matches opens the matches list: a table with its column headers, New match beside its heading', async ({
+    page,
+  }) => {
+    const layout = new AppLayout(page)
+    const matches = new MatchesPage(page)
+    await new DashboardPage(page).goto()
+
+    await layout.link('Matches').click()
+
+    await expect(matches.heading).toBeVisible()
+    expect(new URL(page.url()).pathname).toBe('/matches')
+    await expect(matches.columnHeaders).toHaveText([
+      'Opponent',
+      'Format',
+      'State',
+      'Games',
+    ])
+    await expect(matches.rows).toHaveCount(3)
+    await expect(matches.newMatch).toBeInViewport({ ratio: 1 })
+  })
 })
 
 // From the narrowest phone to a desktop, neither the dashboard nor the new
@@ -70,6 +103,7 @@ for (const width of [320, 768, 1280]) {
     for (const [name, open] of [
       ['the dashboard', (page: Page) => new DashboardPage(page).goto()],
       ['the new match screen', (page: Page) => new NewMatchPage(page).goto()],
+      ['the matches list', (page: Page) => new MatchesPage(page).goto()],
     ] as const) {
       test(`${name} has no horizontal scroll`, async ({ page }) => {
         await open(page)
@@ -100,7 +134,7 @@ test.describe('at a phone width', () => {
     await expect(layout.sidebarToggle).toBeHidden()
   })
 
-  test('the bottom bar holds two links, the dashboard then New match at its right end, wholly on screen at the bottom, each at least 44px to tap', async ({
+  test('the bottom bar holds three links, the dashboard, then Matches, then New match at its right end, wholly on screen at the bottom, each at least 44px to tap', async ({
     page,
   }) => {
     const layout = new AppLayout(page)
@@ -108,7 +142,7 @@ test.describe('at a phone width', () => {
 
     await expect(layout.bottomBar).toBeInViewport({ ratio: 1 })
     const links = layout.bottomBar.getByRole('link')
-    await expect(links).toHaveCount(2)
+    await expect(links).toHaveText(['Dashboard', 'Matches', 'New match'])
     const dashboard = layout.bottomBar.getByRole('link', { name: 'Dashboard' })
     await expect(dashboard).toHaveAttribute('href', '/')
     await expect(layout.bottomBarNewMatch).toHaveAttribute(
@@ -117,7 +151,9 @@ test.describe('at a phone width', () => {
     )
     const bar = (await layout.bottomBar.boundingBox())!
     expect(bar.y + bar.height).toBeCloseTo(phone.height, 0)
-    for (const link of [dashboard, layout.bottomBarNewMatch]) {
+    const matches = layout.bottomBar.getByRole('link', { name: 'Matches' })
+    await expect(matches).toHaveAttribute('href', '/matches')
+    for (const link of [dashboard, matches, layout.bottomBarNewMatch]) {
       await expect(link).toBeInViewport({ ratio: 1 })
       const box = (await link.boundingBox())!
       expect(box.width).toBeGreaterThanOrEqual(44)
@@ -145,6 +181,36 @@ test.describe('at a phone width', () => {
 
     await expect(new NewMatchPage(page).heading).toBeVisible()
     expect(new URL(page.url()).pathname).toBe('/matches/new')
+  })
+
+  test('the bottom bar’s Matches opens the matches list, each match a card with no column headers, at least 44px to tap anywhere on it, the last above the bottom bar, and the list’s own New match not displayed', async ({
+    page,
+  }) => {
+    const layout = new AppLayout(page)
+    const matches = new MatchesPage(page)
+    await new DashboardPage(page).goto()
+
+    await layout.bottomBar.getByRole('link', { name: 'Matches' }).click()
+
+    await expect(matches.heading).toBeVisible()
+    await expect(matches.rows).toHaveCount(3)
+    await expect(matches.columnHeaders).toHaveCount(0)
+    await expect(matches.newMatch).toHaveCount(0)
+    for (const row of await matches.rows.all()) {
+      const box = (await row.boundingBox())!
+      expect(box.height).toBeGreaterThanOrEqual(44)
+    }
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+    const last = (await matches.rows.last().boundingBox())!
+    const bar = (await layout.bottomBar.boundingBox())!
+    expect(last.y + last.height).toBeLessThanOrEqual(bar.y)
+
+    // A tap near the card's bottom right corner, away from its link's text,
+    // opens the match's page.
+    const ana = matches.rows.filter({ hasText: 'You vs Ana' })
+    const card = (await ana.boundingBox())!
+    await ana.click({ position: { x: card.width - 8, y: card.height - 8 } })
+    await expect(page).toHaveURL(/\/matches\/sample-1$/)
   })
 
   test('on the new match screen, scrolled to its end, the form’s last part is above the bottom bar, and Start match is at least 44px to tap', async ({
