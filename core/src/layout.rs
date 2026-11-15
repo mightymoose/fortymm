@@ -139,6 +139,45 @@ pub mod grant_subject {
     pub const RANDOM: u64 = 4;
 }
 
+/// The terms of a match: the bytes of a `match` record's terms field
+/// (FORMAT.md section 15). One CBOR map.
+pub mod terms {
+    /// The value of the layout version entry.
+    pub const VERSION: u64 = 1;
+    /// The largest best of.
+    pub const MAX_BEST_OF: u64 = u32::MAX as u64;
+    /// The value of the rated entry for a match that is not rated.
+    pub const NOT_RATED: u64 = 0;
+    /// The value of the rated entry for a rated match.
+    pub const RATED: u64 = 1;
+    /// Map keys.
+    pub mod key {
+        /// The layout version.
+        pub const VERSION: u64 = 0;
+        /// Best of how many games: an odd number, 1 or more.
+        pub const BEST_OF: u64 = 1;
+        /// Whether the match is rated.
+        pub const RATED: u64 = 2;
+    }
+}
+
+/// A score value: the bytes of a `score` record's value field (FORMAT.md
+/// section 15). One CBOR map.
+pub mod score_value {
+    /// The value of the layout version entry.
+    pub const VERSION: u64 = 1;
+    /// The most points one side can have.
+    pub const MAX_POINTS: u64 = u32::MAX as u64;
+    /// Map keys.
+    pub mod key {
+        /// The layout version.
+        pub const VERSION: u64 = 0;
+        /// The two sides' points, first side first. Left out when the score
+        /// is cleared.
+        pub const POINTS: u64 = 1;
+    }
+}
+
 /// The parcel container.
 pub mod parcel {
     /// The first byte of the binary form.

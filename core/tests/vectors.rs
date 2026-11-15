@@ -19,6 +19,7 @@ use fortymm_core::parcel::checksum;
 use fortymm_core::{
     ClockReading, Content, Draft, Environment, Kind, Parcel, PlayerId, PublicKey, Record, Signature,
 };
+use fortymm_core::{ScoreValue, Terms};
 use serde_json::{Value as Json, json};
 
 const PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/vectors/vectors.json");
@@ -320,6 +321,177 @@ fn invalid_hello_inputs() -> Vec<Json> {
         .collect()
 }
 
+// ---- The product layouts (FORMAT.md section 15) ----------------------------
+
+/// The profile's bytes of a map.
+fn map_bytes(entries: Vec<(u64, Value)>) -> Vec<u8> {
+    fortymm_core::cbor::encode(&Value::Map(entries))
+}
+
+/// Terms and their exact bytes: each best of the app offers, rated and not,
+/// and the largest best of.
+fn terms_vectors() -> Vec<Json> {
+    [1, 3, 5, 7, u32::MAX]
+        .into_iter()
+        .flat_map(|best_of| [false, true].map(|rated| Terms::new(best_of, rated).unwrap()))
+        .map(|terms| {
+            json!({
+                "best_of": terms.best_of(),
+                "rated": terms.rated(),
+                "bytes": hex(&terms.to_bytes()),
+            })
+        })
+        .collect()
+}
+
+/// Score values and their exact bytes. A cleared one has `score` null.
+fn score_value_vectors() -> Vec<Json> {
+    [
+        ScoreValue::Cleared,
+        ScoreValue::Points([11, 9]),
+        ScoreValue::Points([9, 11]),
+        ScoreValue::Points([0, 11]),
+        ScoreValue::Points([24, 26]),
+        ScoreValue::Points([u32::MAX, 0]),
+    ]
+    .into_iter()
+    .map(|value| {
+        let score = match value {
+            ScoreValue::Points(points) => json!(points),
+            ScoreValue::Cleared => Json::Null,
+        };
+        json!({"score": score, "bytes": hex(&value.to_bytes())})
+    })
+    .collect()
+}
+
+/// Bytes that are not terms: another layout version, and damage.
+fn unreadable_terms() -> Vec<(&'static str, Vec<u8>)> {
+    let terms = |version: u64, best_of: Value, rated: Value| {
+        map_bytes(vec![(0, Value::Uint(version)), (1, best_of), (2, rated)])
+    };
+    let good = Terms::new(5, true).unwrap().to_bytes();
+    vec![
+        ("version-2", terms(2, Value::Uint(5), Value::Uint(1))),
+        ("version-0", terms(0, Value::Uint(5), Value::Uint(1))),
+        ("empty", vec![]),
+        ("truncated", good[..good.len() - 1].to_vec()),
+        ("trailing-byte", [good.as_slice(), &[0]].concat()),
+        ("best-of-zero", terms(1, Value::Uint(0), Value::Uint(1))),
+        ("best-of-even", terms(1, Value::Uint(4), Value::Uint(1))),
+        (
+            "best-of-too-large",
+            terms(1, Value::Uint(u64::from(u32::MAX) + 2), Value::Uint(1)),
+        ),
+        (
+            "best-of-not-a-number",
+            terms(1, Value::Bytes(vec![5]), Value::Uint(1)),
+        ),
+        ("rated-2", terms(1, Value::Uint(5), Value::Uint(2))),
+        (
+            "rated-missing",
+            map_bytes(vec![(0, Value::Uint(1)), (1, Value::Uint(5))]),
+        ),
+        (
+            "extra-entry",
+            map_bytes(vec![
+                (0, Value::Uint(1)),
+                (1, Value::Uint(5)),
+                (2, Value::Uint(1)),
+                (3, Value::Uint(11)),
+            ]),
+        ),
+        (
+            "version-missing",
+            map_bytes(vec![(1, Value::Uint(5)), (2, Value::Uint(1))]),
+        ),
+        (
+            "an-array",
+            fortymm_core::cbor::encode(&Value::Array(vec![
+                Value::Uint(1),
+                Value::Uint(5),
+                Value::Uint(1),
+            ])),
+        ),
+        (
+            "integer-not-shortest",
+            vec![0xa3, 0x00, 0x01, 0x01, 0x18, 0x05, 0x02, 0x01],
+        ),
+        (
+            "rated-as-cbor-true",
+            vec![0xa3, 0x00, 0x01, 0x01, 0x05, 0x02, 0xf5],
+        ),
+        ("a-score-value", ScoreValue::Points([11, 9]).to_bytes()),
+        ("the-fixtures-stand-in", common::TERMS.to_vec()),
+    ]
+}
+
+/// Bytes that are not a score value: another layout version, and damage.
+fn unreadable_score_values() -> Vec<(&'static str, Vec<u8>)> {
+    let points = |items: Vec<u64>| Value::Array(items.into_iter().map(Value::Uint).collect());
+    let value =
+        |version: u64, points: Value| map_bytes(vec![(0, Value::Uint(version)), (1, points)]);
+    let good = ScoreValue::Points([11, 9]).to_bytes();
+    vec![
+        ("version-2", value(2, points(vec![11, 9]))),
+        ("version-2-cleared", map_bytes(vec![(0, Value::Uint(2))])),
+        ("version-0", value(0, points(vec![11, 9]))),
+        ("empty", vec![]),
+        ("empty-map", map_bytes(vec![])),
+        ("truncated", good[..good.len() - 1].to_vec()),
+        ("trailing-byte", [good.as_slice(), &[0]].concat()),
+        ("one-side", value(1, points(vec![11]))),
+        ("three-sides", value(1, points(vec![11, 9, 7]))),
+        ("no-sides", value(1, points(vec![]))),
+        (
+            "points-too-large",
+            value(1, points(vec![u64::from(u32::MAX) + 1, 0])),
+        ),
+        ("points-not-an-array", value(1, Value::Uint(11))),
+        (
+            "points-as-bytes",
+            value(
+                1,
+                Value::Array(vec![Value::Bytes(vec![11]), Value::Bytes(vec![9])]),
+            ),
+        ),
+        (
+            "extra-entry",
+            map_bytes(vec![
+                (0, Value::Uint(1)),
+                (1, points(vec![11, 9])),
+                (2, Value::Uint(0)),
+            ]),
+        ),
+        ("version-missing", map_bytes(vec![(1, points(vec![11, 9]))])),
+        (
+            "integer-not-shortest",
+            vec![0xa2, 0x00, 0x01, 0x01, 0x82, 0x18, 0x0b, 0x09],
+        ),
+        ("cleared-as-cbor-null", vec![0xa2, 0x00, 0x01, 0x01, 0xf6]),
+        ("terms", Terms::new(5, true).unwrap().to_bytes()),
+    ]
+}
+
+/// Add the product layouts' vectors to the file.
+fn add_layout_vectors(file: &mut Json) {
+    let named = |cases: Vec<(&'static str, Vec<u8>)>| -> Json {
+        cases
+            .into_iter()
+            .map(|(name, bytes)| json!({"name": name, "bytes": hex(&bytes)}))
+            .collect()
+    };
+    let object = file.as_object_mut().unwrap();
+    object.insert("terms".into(), json!(terms_vectors()));
+    object.insert("unreadable_terms".into(), named(unreadable_terms()));
+    object.insert("invalid_best_ofs".into(), json!([0, 2, 4, 6, u32::MAX - 1]));
+    object.insert("score_values".into(), json!(score_value_vectors()));
+    object.insert(
+        "unreadable_score_values".into(),
+        named(unreadable_score_values()),
+    );
+}
+
 fn parcel_json(name: &str, parcel: &Parcel) -> Json {
     json!({
         "name": name,
@@ -465,7 +637,7 @@ fn build() -> Json {
         .map(|input| json!({"input": hex(input), "checksum": format!("{:08x}", checksum(input))}))
         .collect();
 
-    json!({
+    let mut file = json!({
         "about": "FortyMM core golden vectors. Format choices are in core/FORMAT.md. Hex is lower case. Every record here verifies unless listed under unverifiable_records.",
         "format_version": fortymm_core::layout::FORMAT_VERSION,
         "labels": {
@@ -492,7 +664,9 @@ fn build() -> Json {
         "checksums": checksums,
         "usernames": usernames,
         "invalid_username_suffix_lengths": [0, 1, 3, MAX_SUFFIX_LENGTH + 1],
-    })
+    });
+    add_layout_vectors(&mut file);
+    file
 }
 
 fn rendered() -> String {
@@ -659,5 +833,37 @@ fn vectors_check_from_the_file_alone() {
     }
     for entry in file["invalid_der"].as_array().unwrap() {
         assert!(Signature::from_der(&unhex(entry["der"].as_str().unwrap())).is_err());
+    }
+    // The product layouts: each value gives its bytes and reads back from
+    // them, and the unreadable bytes read as nothing.
+    for entry in file["terms"].as_array().unwrap() {
+        let best_of = u32::try_from(entry["best_of"].as_u64().unwrap()).unwrap();
+        let terms = Terms::new(best_of, entry["rated"].as_bool().unwrap()).unwrap();
+        assert_eq!(json!(hex(&terms.to_bytes())), entry["bytes"]);
+        let bytes = unhex(entry["bytes"].as_str().unwrap());
+        assert_eq!(Terms::read(&bytes), Some(terms));
+    }
+    for entry in file["unreadable_terms"].as_array().unwrap() {
+        let bytes = unhex(entry["bytes"].as_str().unwrap());
+        assert_eq!(Terms::read(&bytes), None, "{}", entry["name"]);
+    }
+    for best_of in file["invalid_best_ofs"].as_array().unwrap() {
+        let best_of = u32::try_from(best_of.as_u64().unwrap()).unwrap();
+        assert!(Terms::new(best_of, false).is_err(), "best of {best_of}");
+    }
+    for entry in file["score_values"].as_array().unwrap() {
+        let value = match entry["score"].as_array() {
+            Some(points) => ScoreValue::Points(
+                [&points[0], &points[1]].map(|p| u32::try_from(p.as_u64().unwrap()).unwrap()),
+            ),
+            None => ScoreValue::Cleared,
+        };
+        assert_eq!(json!(hex(&value.to_bytes())), entry["bytes"]);
+        let bytes = unhex(entry["bytes"].as_str().unwrap());
+        assert_eq!(ScoreValue::read(&bytes), Some(value));
+    }
+    for entry in file["unreadable_score_values"].as_array().unwrap() {
+        let bytes = unhex(entry["bytes"].as_str().unwrap());
+        assert_eq!(ScoreValue::read(&bytes), None, "{}", entry["name"]);
     }
 }

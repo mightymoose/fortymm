@@ -142,6 +142,54 @@ export class Core {
     new DataView(head.buffer).setUint32(0, maxChars);
     return unframe(this.call("fmm_parcel_split", concat([head, binary])).out);
   }
+
+  // The product layouts: the bytes a `match` record carries as its terms and
+  // a `score` record as its value. Each layout has its own version. Reading
+  // gives null for bytes of another version and for damaged bytes; it never
+  // throws.
+  //
+  // The terms of a match that is best of `bestOf` games (an odd number, 1 or
+  // more), rated or not. Throws for any other best of.
+  termsBytes(bestOf, rated) {
+    if (typeof rated !== "boolean") throw new Error(`termsBytes: rated ${rated} is not true or false`);
+    const input = new Uint8Array(5);
+    new DataView(input.buffer).setUint32(0, uint32(bestOf, "termsBytes: best of"));
+    input[4] = rated ? 1 : 0;
+    return this.call("fmm_terms_bytes", input).out;
+  }
+  readTerms(terms) {
+    const out = this.optional("fmm_terms_read", terms);
+    if (out === null) return null;
+    return { bestOf: new DataView(out.buffer).getUint32(0), rated: out[4] === 1 };
+  }
+  // The value of a score: the two sides' points in the game, first side
+  // first, or null for a cleared game.
+  scoreValue(score) {
+    if (score === null) return this.call("fmm_score_value", new Uint8Array([0])).out;
+    if (!Array.isArray(score) || score.length !== 2) {
+      throw new Error("scoreValue: a score is two sides' points, or null");
+    }
+    const input = new Uint8Array(9);
+    const view = new DataView(input.buffer);
+    input[0] = 1;
+    view.setUint32(1, uint32(score[0], "scoreValue: points"));
+    view.setUint32(5, uint32(score[1], "scoreValue: points"));
+    return this.call("fmm_score_value", input).out;
+  }
+  readScoreValue(value) {
+    const out = this.optional("fmm_score_value_read", value);
+    if (out === null) return null;
+    if (out[0] === 0) return { score: null };
+    const view = new DataView(out.buffer);
+    return { score: [view.getUint32(1), view.getUint32(5)] };
+  }
+}
+
+function uint32(value, what) {
+  if (!Number.isInteger(value) || value < 0 || value > 0xffffffff) {
+    throw new Error(`${what} ${value} is not a whole number from 0 to 4294967295`);
+  }
+  return value;
 }
 
 function uint64(value, what) {

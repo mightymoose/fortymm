@@ -144,7 +144,7 @@ def public(thing: object) -> set[str]:
 
 check(names(stub.body) == public(core), f"stub: module names {names(stub.body) ^ public(core)}")
 for node in stub.body:
-    if isinstance(node, ast.ClassDef) and node.name in ("Record", "Parcel"):
+    if isinstance(node, ast.ClassDef) and node.name in ("Record", "Parcel", "Terms", "ScoreValue"):
         cls = getattr(core, node.name)
         found = names(node.body) - {"__init__"}
         check(found == public(cls), f"stub: {node.name} names {found ^ public(cls)}")
@@ -246,6 +246,37 @@ for v in vectors["checksums"]:
     data = unhex(v["input"])
     check(f"{core.checksum(data):08x}" == v["checksum"], f"checksum {v['input']}")
     check(f"{crc32c_msb_first(data):08x}" == v["checksum"], f"independent checksum {v['input']}")
+
+# The product layouts: each value gives the vector's bytes and reads back
+# from them; bytes of another version or damaged read as None.
+for v in vectors["terms"]:
+    what = f"terms best of {v['best_of']} rated {v['rated']}"
+    check(core.terms_bytes(v["best_of"], v["rated"]).hex() == v["bytes"], f"{what}: bytes")
+    terms = core.read_terms(unhex(v["bytes"]))
+    check(
+        terms is not None and (terms.best_of, terms.rated) == (v["best_of"], v["rated"]),
+        f"{what}: read {terms}",
+    )
+    check(terms == core.read_terms(unhex(v["bytes"])), f"{what}: equal to itself read again")
+
+for v in vectors["unreadable_terms"]:
+    check(core.read_terms(unhex(v["bytes"])) is None, f"unreadable terms {v['name']}: None")
+
+for best_of in vectors["invalid_best_ofs"] + [-1, 2**32 + 1]:
+    check(refusal(lambda: core.terms_bytes(best_of, False)) is not None, f"terms_bytes {best_of}: refused")
+
+for v in vectors["score_values"]:
+    score = None if v["score"] is None else (v["score"][0], v["score"][1])
+    what = f"score value {score}"
+    check(core.score_value(score).hex() == v["bytes"], f"{what}: bytes")
+    value = core.read_score_value(unhex(v["bytes"]))
+    check(value is not None and value.score == score, f"{what}: read {value}")
+
+for v in vectors["unreadable_score_values"]:
+    check(core.read_score_value(unhex(v["bytes"])) is None, f"unreadable score value {v['name']}: None")
+
+for score in [(-1, 0), (11, 2**32)]:
+    check(refusal(lambda: core.score_value(score)) is not None, f"score_value {score}: refused")
 
 print(f"Python {sys.version.split()[0]}, module {core.__file__}: {checks} checks")
 if failures:

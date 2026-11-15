@@ -9,6 +9,8 @@
 //!   splitting.
 //! - **Reading what is inside** (part of the fourth): the getters on
 //!   [`Record`] and the generated username of a player ([`username`]).
+//! - **The product layouts** ([`product`]): the terms of a match and the value
+//!   of a score, which a record carries as opaque bytes.
 //!
 //! The library is pure: no input or output, no clock, no random generator.
 //! Hashing and verification come from a [`Crypto`]; [`Software`] provides
@@ -25,6 +27,7 @@ mod hex;
 pub mod ids;
 pub mod layout;
 pub mod parcel;
+pub mod product;
 pub mod record;
 pub mod signature;
 pub mod username;
@@ -33,6 +36,7 @@ pub use crypto::Crypto;
 pub use crypto::Software;
 pub use ids::{AccountId, MatchId, OutcomeId, PlayerId, PublicKey, RecordId, Tag};
 pub use parcel::{Damaged, Parcel, ParcelError, SplitError};
+pub use product::{BadBestOf, ScoreValue, Terms};
 pub use record::{
     AssembleError, BadSignature, ClockReading, Content, Draft, DraftError, Environment, GrantSide,
     GrantSubject, Header, Kind, Record, RecordError, StaffFields, Stamp, Subject,

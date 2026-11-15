@@ -464,3 +464,73 @@ pub unsafe extern "C" fn fmm_parcel_split(pointer: *const u8, length: usize) -> 
         }
     })
 }
+
+// ---- The product layouts (FORMAT.md section 15) ----------------------------
+// The terms of a match and the value of a score: the bytes a record carries
+// in its terms and value fields.
+
+use fortymm_core::{ScoreValue, Terms};
+
+/// The bytes of terms. Input: best of (4 bytes, big-endian), then whether
+/// the match is rated (1 byte, 1 or 0).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_terms_bytes(pointer: *const u8, length: usize) -> i32 {
+    let Ok([b0, b1, b2, b3, rated]) = <[u8; 5]>::try_from(unsafe { input(pointer, length) }) else {
+        return fail(INVALID, "expected a best of and a rated flag");
+    };
+    let rated = match rated {
+        0 => false,
+        1 => true,
+        _ => return fail(INVALID, "the rated flag is 0 or 1"),
+    };
+    match Terms::new(u32::from_be_bytes([b0, b1, b2, b3]), rated) {
+        Ok(terms) => done(terms.to_bytes()),
+        Err(error) => fail(INVALID, error),
+    }
+}
+
+/// Read terms. Output: best of (4 bytes, big-endian), then whether the match
+/// is rated (1 byte, 1 or 0). Status 2 for bytes that are not terms of this
+/// layout version.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_terms_read(pointer: *const u8, length: usize) -> i32 {
+    match Terms::read(unsafe { input(pointer, length) }) {
+        Some(terms) => {
+            let mut out = terms.best_of().to_be_bytes().to_vec();
+            out.push(u8::from(terms.rated()));
+            done(out)
+        }
+        None => fail(NOT_APPLICABLE, "not terms this library reads"),
+    }
+}
+
+/// The bytes of a score value. Input: one byte, 0 for cleared; or 1, then
+/// the two sides' points (4 bytes each, big-endian).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_score_value(pointer: *const u8, length: usize) -> i32 {
+    let value = match unsafe { input(pointer, length) } {
+        [0] => ScoreValue::Cleared,
+        [1, a0, a1, a2, a3, b0, b1, b2, b3] => ScoreValue::Points([
+            u32::from_be_bytes([*a0, *a1, *a2, *a3]),
+            u32::from_be_bytes([*b0, *b1, *b2, *b3]),
+        ]),
+        _ => return fail(INVALID, "expected cleared, or two sides' points"),
+    };
+    done(value.to_bytes())
+}
+
+/// Read a score value. Output: laid out as `fmm_score_value` takes it.
+/// Status 2 for bytes that are not a score value of this layout version.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_score_value_read(pointer: *const u8, length: usize) -> i32 {
+    match ScoreValue::read(unsafe { input(pointer, length) }) {
+        Some(ScoreValue::Cleared) => done(vec![0]),
+        Some(ScoreValue::Points([first, second])) => {
+            let mut out = vec![1];
+            out.extend(first.to_be_bytes());
+            out.extend(second.to_be_bytes());
+            done(out)
+        }
+        None => fail(NOT_APPLICABLE, "not a score value this library reads"),
+    }
+}
