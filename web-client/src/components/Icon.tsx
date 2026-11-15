@@ -127,6 +127,14 @@ const paths = {
       <path d="m14 9 3 3-3 3" />
     </>
   ),
+  // Lucide "arrow-right": going on, after a primary action's label (Start
+  // match).
+  'arrow-right': (
+    <>
+      <path d="M5 12h14" />
+      <path d="m12 5 7 7-7 7" />
+    </>
+  ),
   // Lucide "layout-dashboard": the dashboard, in the sidebar and the bottom
   // bar.
   'layout-dashboard': (

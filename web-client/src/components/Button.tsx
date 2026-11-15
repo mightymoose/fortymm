@@ -1,4 +1,5 @@
 import type { ButtonHTMLAttributes, MouseEvent } from 'react'
+import { buttonClassName } from './button-class.ts'
 import type { ForcedState } from './forced-state.ts'
 import './Button.css'
 
@@ -50,14 +51,7 @@ export function Button({
   onClick,
   ...props
 }: ButtonProps) {
-  const className = [
-    'button',
-    `button--${variant}`,
-    size !== 'md' && `button--${size}`,
-    iconOnly && 'button--icon',
-  ]
-    .filter(Boolean)
-    .join(' ')
+  const className = buttonClassName({ variant, size, iconOnly })
 
   function click(event: MouseEvent<HTMLButtonElement>) {
     if (loading) {

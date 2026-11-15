@@ -1,5 +1,6 @@
 import { expect, test } from '../pages/test.ts'
-import { App, AppLayout, DashboardPage } from '../pages/app.ts'
+import type { Page } from '@playwright/test'
+import { App, AppLayout, DashboardPage, NewMatchPage } from '../pages/app.ts'
 import { StorageHarness } from '../pages/storage.ts'
 
 // What only a real browser can show about the layout around every screen
@@ -9,8 +10,10 @@ import { StorageHarness } from '../pages/storage.ts'
 // is a component test. How it looks is pinned by no test: screenshots are
 // only for the design system page (web-client/CLAUDE.md).
 //
-// On the dashboard, which shows only its heading and asks nothing of the
-// network.
+// On the dashboard and the new match screen, which ask nothing of the
+// network. Which way to the new match screen shows at which width (the
+// dashboard's button wider than a phone, the bottom bar's on a phone) is
+// the breakpoint's too.
 
 const desktop = { width: 1280, height: 800 }
 // An iPhone's width, under the layout's 768px breakpoint (AppLayout.css).
@@ -40,7 +43,48 @@ test.describe('at a desktop width', () => {
 
     await expect(layout.bottomBar).toHaveCount(0)
   })
+
+  test('the dashboard shows New match beside its heading, which opens the new match screen', async ({
+    page,
+  }) => {
+    const layout = new AppLayout(page)
+    const dashboard = new DashboardPage(page)
+    await dashboard.goto()
+
+    await expect(dashboard.newMatch).toBeInViewport({ ratio: 1 })
+    await expect(layout.bottomBarNewMatch).toHaveCount(0)
+    await dashboard.newMatch.click()
+
+    await expect(new NewMatchPage(page).heading).toBeVisible()
+    expect(new URL(page.url()).pathname).toBe('/matches/new')
+  })
 })
+
+// From the narrowest phone to a desktop, neither the dashboard nor the new
+// match screen is wider than the screen: nothing to scroll sideways to. At
+// 768px, the breakpoint itself, the layout is the desktop's.
+for (const width of [320, 768, 1280]) {
+  test.describe(`at ${width}px wide`, () => {
+    test.use({ viewport: { width, height: 800 } })
+
+    for (const [name, open] of [
+      ['the dashboard', (page: Page) => new DashboardPage(page).goto()],
+      ['the new match screen', (page: Page) => new NewMatchPage(page).goto()],
+    ] as const) {
+      test(`${name} has no horizontal scroll`, async ({ page }) => {
+        await open(page)
+        await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+
+        const overflow = await page.evaluate(
+          () =>
+            document.documentElement.scrollWidth -
+            document.documentElement.clientWidth,
+        )
+        expect(overflow).toBe(0)
+      })
+    }
+  })
+}
 
 test.describe('at a phone width', () => {
   test.use({ viewport: phone })
@@ -56,7 +100,7 @@ test.describe('at a phone width', () => {
     await expect(layout.sidebarToggle).toBeHidden()
   })
 
-  test('the bottom bar holds one link, to the dashboard, wholly on screen at the bottom, at least 44px to tap', async ({
+  test('the bottom bar holds two links, the dashboard then New match at its right end, wholly on screen at the bottom, each at least 44px to tap', async ({
     page,
   }) => {
     const layout = new AppLayout(page)
@@ -64,15 +108,62 @@ test.describe('at a phone width', () => {
 
     await expect(layout.bottomBar).toBeInViewport({ ratio: 1 })
     const links = layout.bottomBar.getByRole('link')
-    await expect(links).toHaveCount(1)
+    await expect(links).toHaveCount(2)
     const dashboard = layout.bottomBar.getByRole('link', { name: 'Dashboard' })
     await expect(dashboard).toHaveAttribute('href', '/')
-    await expect(dashboard).toBeInViewport({ ratio: 1 })
+    await expect(layout.bottomBarNewMatch).toHaveAttribute(
+      'href',
+      '/matches/new',
+    )
     const bar = (await layout.bottomBar.boundingBox())!
     expect(bar.y + bar.height).toBeCloseTo(phone.height, 0)
-    const link = (await dashboard.boundingBox())!
-    expect(link.width).toBeGreaterThanOrEqual(44)
-    expect(link.height).toBeGreaterThanOrEqual(44)
+    for (const link of [dashboard, layout.bottomBarNewMatch]) {
+      await expect(link).toBeInViewport({ ratio: 1 })
+      const box = (await link.boundingBox())!
+      expect(box.width).toBeGreaterThanOrEqual(44)
+      expect(box.height).toBeGreaterThanOrEqual(44)
+    }
+    // New match at the right end: its right edge within the bar's 16px.
+    const newMatch = (await layout.bottomBarNewMatch.boundingBox())!
+    const dashboardBox = (await dashboard.boundingBox())!
+    expect(newMatch.x).toBeGreaterThanOrEqual(
+      dashboardBox.x + dashboardBox.width,
+    )
+    expect(phone.width - (newMatch.x + newMatch.width)).toBeLessThanOrEqual(16)
+  })
+
+  test('the dashboard’s own New match is not displayed; the bottom bar’s opens the new match screen', async ({
+    page,
+  }) => {
+    const layout = new AppLayout(page)
+    const dashboard = new DashboardPage(page)
+    await dashboard.goto()
+    await expect(dashboard.heading).toBeVisible()
+
+    await expect(dashboard.newMatch).toHaveCount(0)
+    await layout.bottomBarNewMatch.click()
+
+    await expect(new NewMatchPage(page).heading).toBeVisible()
+    expect(new URL(page.url()).pathname).toBe('/matches/new')
+  })
+
+  test('on the new match screen, scrolled to its end, the form’s last part is above the bottom bar, and Start match is at least 44px to tap', async ({
+    page,
+  }) => {
+    const layout = new AppLayout(page)
+    const newMatch = new NewMatchPage(page)
+    await newMatch.goto()
+    await expect(newMatch.form).toBeVisible()
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+
+    await expect(layout.bottomBar).toBeInViewport({ ratio: 1 })
+    const last = newMatch.form.locator('*').last()
+    const box = (await last.boundingBox())!
+    const bar = (await layout.bottomBar.boundingBox())!
+    expect(box.y + box.height).toBeLessThanOrEqual(bar.y)
+    const start = (await newMatch.startMatch.boundingBox())!
+    expect(start.height).toBeGreaterThanOrEqual(44)
+    expect(start.y + start.height).toBeLessThanOrEqual(bar.y)
   })
 
   test('scrolled to the end of a long page, its last content is above the bottom bar, not under it', async ({

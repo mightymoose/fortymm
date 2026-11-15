@@ -1,0 +1,69 @@
+/* The match's length, after fortymm-real's .nm-bestof on the theme's
+   tokens: four options on a bg-panel tray, each a big number (the number
+   font) over its name, small and uppercase. The chosen one fills with the
+   accent, its text on-accent. Each is well over 44px high, to tap. */
+.best-of {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  min-width: 0;
+}
+.best-of__label {
+  font: 700 10px var(--font-num);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.best-of__options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  background: var(--bg-panel);
+}
+.best-of__option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 14px 4px 12px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  cursor: pointer;
+  transition: background-color var(--dur-change) var(--ease-out);
+}
+.best-of__n {
+  font: 700 28px / 1 var(--font-num);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-3);
+  transition: color var(--dur-change) var(--ease-out);
+}
+.best-of__name {
+  margin-top: 4px;
+  font: 600 9px var(--font-num);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.best-of__option:hover .best-of__n {
+  color: var(--fg-1);
+}
+.best-of__option:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.best-of__option[aria-checked='true'] {
+  background: var(--accent);
+}
+.best-of__option[aria-checked='true'] .best-of__n,
+.best-of__option[aria-checked='true'] .best-of__name {
+  color: var(--on-accent);
+}
+.best-of__help {
+  margin: 0;
+  font: 400 var(--text-xs) / 1.45 var(--font-ui);
+  color: var(--fg-3);
+}

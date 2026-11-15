@@ -1,0 +1,14 @@
+/* The dialog over the screen: fixed over everything, the bottom bar
+   included, on a backdrop of bg-app at 70%, the dialog centred. */
+.discard-changes {
+  position: fixed;
+  z-index: 2;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--s-4);
+  background: color-mix(in srgb, var(--bg-app) 70%, transparent);
+}
+.discard-changes__stay {
+  display: contents;
+}

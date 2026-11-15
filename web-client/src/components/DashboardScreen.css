@@ -1,0 +1,17 @@
+/* The dashboard's header: the heading, and at the row's end the "New
+   match" button, centred on the heading's line. The button shows at
+   non-phone widths only: AppLayout.css's breakpoint sets
+   --app-layout-wide-only-display. */
+.dashboard__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3) var(--s-4);
+}
+.dashboard__head > h1 {
+  margin: 0;
+}
+.dashboard__new-match {
+  display: var(--app-layout-wide-only-display, none);
+}
