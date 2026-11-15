@@ -66,6 +66,15 @@ export class MatchDetailsScreenPage {
     return within(await this.games()).queryByRole('table', { name: 'Games' })
   }
 
+  // The games' table's column headers, in order: "Game", "You", the
+  // opponent, "Won by".
+  async columnHeaders() {
+    const table = within(await this.games()).getByRole('table', {
+      name: 'Games',
+    })
+    return within(table).getAllByRole('columnheader')
+  }
+
   // The row of game `n` (from 1), its header "Game n".
   async game(n: number) {
     const table = within(await this.games()).getByRole('table', {

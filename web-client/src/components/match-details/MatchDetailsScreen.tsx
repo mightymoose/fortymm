@@ -4,7 +4,7 @@ import { gamesWon, isDecided, nextGame } from '../../scoring/scoring.ts'
 import type { MatchState } from '../../stores/match.ts'
 import { Avatar } from '../Avatar.tsx'
 import { buttonClassName } from '../button-class.ts'
-import { opponentInitials } from '../opponent.ts'
+import { opponentInitials, opponentLabel } from '../opponent.ts'
 import { GameScores } from './match-details-screen/GameScores.tsx'
 import '../Button.css'
 import './MatchDetailsScreen.css'
@@ -35,7 +35,9 @@ export function MatchDetailsScreen({
   scoreLink: ScoreLink
 }) {
   const stateId = useId()
-  const { opponentName: name, bestOf, rated, games } = match
+  const { opponentName, bestOf, rated, games } = match
+  // "Anonymous" for a match recorded with no opponent's name.
+  const name = opponentLabel(opponentName)
   const [you, opponent] = gamesWon(games)
   const finished = isDecided(games, bestOf)
   const winner = finished ? (you > opponent ? 'you' : 'opponent') : undefined
@@ -102,13 +104,13 @@ export function MatchDetailsScreen({
           <p
             className={`match-details__player match-details__player--opponent${winner === 'opponent' ? ' match-details__player--won' : ''}`}
           >
-            <Avatar initials={opponentInitials(name)} />
+            <Avatar initials={opponentInitials(opponentName)} />
             <span className="match-details__name">{name}</span>
           </p>
         </div>
       </section>
 
-      <GameScores opponentName={name} games={games} />
+      <GameScores opponentName={opponentName} games={games} />
     </div>
   )
 }
