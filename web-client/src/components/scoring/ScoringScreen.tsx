@@ -23,6 +23,8 @@ import {
 import { ConfirmDialog } from './scoring-screen/ConfirmDialog.tsx'
 import { Scoreline, type GameLink } from './scoring-screen/Scoreline.tsx'
 import {
+  refusalOf,
+  refusalPath,
   scoreDefaults,
   scoreSchema,
   type ScoreValues,
@@ -78,7 +80,8 @@ export function ScoringScreen(props: ScoringScreenProps) {
 // field that gets focus selects its score, so typing replaces it. Submit is
 // never disabled: an invalid score shows the one error line (the rules'
 // reason, or "Enter both scores to save this game."), from the first
-// submit on, and saves nothing.
+// submit on, and saves nothing. The rules' reason is the form's one error,
+// marking both fields; "Enter both scores" is each empty field's own.
 //
 // Leaving with a score typed and not saved (the form not as it opened) asks
 // "Leave without saving?", whether by a scoreline cell, any other link or
@@ -100,9 +103,11 @@ function ScoringGame({
   )
   const {
     control,
-    formState: { errors, isDirty },
+    clearErrors,
+    formState: { errors, isDirty, isSubmitted },
     getValues,
     handleSubmit,
+    setError,
     setFocus,
   } = useForm<ScoreValues, unknown, Score>({
     resolver: zodResolver(schema),
@@ -136,7 +141,21 @@ function ScoringGame({
   const arrow = submitLabel !== 'Finish match' && submitLabel !== 'Save game'
 
   const [wonByYou, wonByThem] = gamesWon(games)
-  const message = errors.yours?.message ?? errors.theirs?.message
+  // One error line: the refusal of the whole score (the form's error, which
+  // marks both fields), or "Enter both scores" on the empty ones.
+  const refused = errors.root !== undefined
+  const message = errors.root?.message ?? errors.yours?.message ?? errors.theirs?.message
+
+  // React Hook Form re-validates only the field that changed, so a refusal,
+  // which is the pair's, is checked again here on each change once
+  // submitted: a change that makes the score legal clears it from both
+  // fields; one still refused shows the new reason.
+  function typedInto(side: 'yours' | 'theirs', value: string) {
+    if (!isSubmitted) return
+    const reason = refusalOf(schema, { ...getValues(), [side]: value })
+    if (reason === undefined) clearErrors(refusalPath)
+    else setError(refusalPath, { type: 'custom', message: reason })
+  }
 
   // The one leave guard: the form's own dirty state, against how it opened.
   const blocker = useBlocker({
@@ -198,16 +217,20 @@ function ScoringGame({
                       name={field.name}
                       value={field.value}
                       onBlur={field.onBlur}
-                      onChange={(event) =>
-                        field.onChange(event.target.value.replace(/\D/g, ''))
-                      }
+                      onChange={(event) => {
+                        const value = event.target.value.replace(/\D/g, '')
+                        field.onChange(value)
+                        typedInto(side, value)
+                      }}
                       onFocus={selectScore}
                       onMouseDown={focusBeforeCaret}
                       onKeyDown={(event) => keyDown(side, event)}
                       aria-label={
                         side === 'yours' ? 'Your score' : `${opponentName}’s score`
                       }
-                      aria-invalid={errors[side] === undefined ? undefined : true}
+                      aria-invalid={
+                        refused || errors[side] !== undefined ? true : undefined
+                      }
                       aria-describedby={message === undefined ? undefined : errorId}
                       inputMode="numeric"
                       autoComplete="off"

@@ -11,6 +11,20 @@ import { saveRefusal, type BestOf, type Score } from '../../scoring/scoring.ts'
 
 export const bothScoresMessage = 'Enter both scores to save this game.'
 
+// Where a whole score's refusal goes: the form's, not a field's.
+export const refusalPath = 'root'
+
+// The refusal of what the pad holds, if a whole score is refused (none for
+// a legal score, or while a field is empty).
+export function refusalOf(
+  schema: ReturnType<typeof scoreSchema>,
+  values: ScoreValues,
+): string | undefined {
+  return schema
+    .safeParse(values)
+    .error?.issues.find(({ path }) => path[0] === refusalPath)?.message
+}
+
 // Where the game sits in its match: the games saved so far (in game order,
 // each `[yours, theirs]`), the match's length, and the number of the game
 // being scored.
@@ -35,12 +49,13 @@ export function scoreSchema({ bestOf, games, game }: ScoringContext) {
             context.addIssue({ code: 'custom', path: [path], message: bothScoresMessage })
         return
       }
-      // A whole score: the rules' reason it can't be saved as this game, on
-      // both fields (the score is wrong, not one side of it).
+      // A whole score: the rules' reason it can't be saved as this game, once,
+      // on the pair rather than on either field (the score is wrong, not one
+      // side of it). Path `root`: zodResolver puts it in React Hook Form's
+      // `errors.root` (an empty path would be `errors['']`).
       const refusal = saveRefusal(games, bestOf, game, [Number(yours), Number(theirs)])
       if (refusal !== null)
-        for (const path of ['yours', 'theirs'] as const)
-          context.addIssue({ code: 'custom', path: [path], message: refusal.message })
+        context.addIssue({ code: 'custom', path: [refusalPath], message: refusal.message })
     })
     .transform(({ yours, theirs }): Score => [Number(yours), Number(theirs)])
 }

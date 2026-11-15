@@ -103,6 +103,51 @@ test('the submit is never disabled, and after a refused submit the error follows
   expect(page.error()).toBeNull()
 })
 
+for (const [side, fixed] of [
+  ['yours', '12'],
+  ['theirs', '9'],
+] as const) {
+  test(`a refused score is one error on the pair: fixing ${side} alone clears it from both fields`, async () => {
+    const user = userEvent.setup()
+    const page = new ScoringScreenPage()
+    page.render(props())
+    await user.type(await page.yours(), '11')
+    await user.type(await page.theirs('Ana'), '10')
+    await user.click(await page.submit())
+    const deuce = 'At 10–10 the game enters deuce — the winner must lead by 2.'
+    expect(page.error()).toHaveTextContent(deuce)
+    expect(await page.yours()).toBeInvalid()
+    expect(await page.theirs('Ana')).toBeInvalid()
+    expect(await page.theirs('Ana')).toHaveAccessibleDescription(deuce)
+
+    const field = side === 'yours' ? await page.yours() : await page.theirs('Ana')
+    await user.clear(field)
+    await user.type(field, fixed)
+
+    expect(page.error()).toBeNull()
+    expect(await page.yours()).toBeValid()
+    expect(await page.theirs('Ana')).toBeValid()
+    expect(await page.yours()).not.toHaveAccessibleDescription()
+    expect(await page.theirs('Ana')).not.toHaveAccessibleDescription()
+  })
+}
+
+test('a refused score that is changed and still refused keeps its error, now with the new reason', async () => {
+  const user = userEvent.setup()
+  const page = new ScoringScreenPage()
+  page.render(props())
+  await user.type(await page.yours(), '11')
+  await user.type(await page.theirs('Ana'), '10')
+  await user.click(await page.submit())
+
+  await user.clear(await page.yours())
+  await user.type(await page.yours(), '10')
+
+  expect(page.error()).toHaveTextContent('The winning side must reach at least 11 points.')
+  expect(await page.yours()).toBeInvalid()
+  expect(await page.theirs('Ana')).toBeInvalid()
+})
+
 test('the fields keep digits only', async () => {
   const user = userEvent.setup()
   const page = new ScoringScreenPage()

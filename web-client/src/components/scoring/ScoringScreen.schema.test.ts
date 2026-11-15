@@ -1,6 +1,11 @@
 import { expect, test } from 'vitest'
 import type { Score } from '../../scoring/scoring.ts'
-import { bothScoresMessage, scoreDefaults, scoreSchema } from './ScoringScreen.schema.ts'
+import {
+  bothScoresMessage,
+  refusalOf,
+  scoreDefaults,
+  scoreSchema,
+} from './ScoringScreen.schema.ts'
 
 const game1 = scoreSchema({ bestOf: 5, games: [], game: 1 })
 
@@ -20,11 +25,11 @@ for (const [yours, theirs, reason] of [
   ['11', '11', 'A game cannot end in a tie.'],
   ['111', '9', 'Each side can score at most 99 points.'],
 ] as const) {
-  test(`${yours}–${theirs} is refused with the rules’ reason, on both fields`, () => {
+  test(`${yours}–${theirs} is refused with the rules’ reason, once, on the form`, () => {
     expect(issues(game1.safeParse({ yours, theirs }))).toEqual([
-      { path: ['yours'], message: reason },
-      { path: ['theirs'], message: reason },
+      { path: ['root'], message: reason },
     ])
+    expect(refusalOf(game1, { yours, theirs })).toBe(reason)
   })
 }
 
@@ -41,6 +46,11 @@ test('one field empty: “Enter both scores”, on the empty one only', () => {
   ])
 })
 
+test('a legal score, or one with a field empty, is no refusal', () => {
+  expect(refusalOf(game1, { yours: '11', theirs: '9' })).toBeUndefined()
+  expect(refusalOf(game1, { yours: '11', theirs: '' })).toBeUndefined()
+})
+
 test('a legal score the match can’t take there is refused with the rules’ message', () => {
   // Best of 3, won 2–0: there is no game 3 to save.
   const decided: Score[] = [
@@ -50,7 +60,7 @@ test('a legal score the match can’t take there is refused with the rules’ me
   const game3 = scoreSchema({ bestOf: 3, games: decided, game: 3 })
 
   expect(issues(game3.safeParse({ yours: '11', theirs: '5' }))?.[0]).toEqual({
-    path: ['yours'],
+    path: ['root'],
     message: "The match was already decided at game 2; game 3 can't be played.",
   })
 })
