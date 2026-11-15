@@ -5,7 +5,7 @@ import { AppLayoutPage } from '../../components/AppLayout.page.tsx'
 import { DashboardScreenPage } from '../../components/DashboardScreen.page.tsx'
 import { NewMatchScreenPage } from '../../components/new-match/NewMatchScreen.page.tsx'
 import { ScoringScreenPage } from '../../components/scoring/ScoringScreen.page.tsx'
-import { myMatchesStore } from '../../stores/my-matches.ts'
+import { matchesStore } from '../../stores/matches.ts'
 import { renderRoute } from '../../test/render-route.tsx'
 
 // The route's wiring. What the screen shows and does is its own test
@@ -31,8 +31,8 @@ test('Start match opens game 1’s scoring page for the new match, asking nothin
   const scoring = new ScoringScreenPage()
   expect(await scoring.theirs('Dee')).toBeVisible()
   expect(await scoring.heading()).toHaveTextContent('Enter game 1 score.')
-  await myMatchesStore.getState().load()
-  const matches = myMatchesStore.getState().myMatches
+  await matchesStore.getState().load()
+  const matches = matchesStore.getState().matches
   if (matches.status !== 'ready') throw new Error(`list ${matches.status}`)
   expect(matches.matches[0]).toMatchObject({ opponentName: 'Dee', bestOf: 5 })
   expect(router.state.location.pathname).toBe(
@@ -61,9 +61,9 @@ test('Back from the scoring page Start match opened goes where the person was be
 // memory until it exists: the store's action is replaced for this one test.
 test('a create the store refuses stays on the form, as filled, asking nothing', async () => {
   const user = userEvent.setup()
-  const { createMatch } = myMatchesStore.getState()
+  const { createMatch } = matchesStore.getState()
   let refused = false
-  myMatchesStore.setState({
+  matchesStore.setState({
     createMatch: async () => {
       refused = true
       return { ok: false, reason: 'storage-unavailable' }
@@ -82,7 +82,7 @@ test('a create the store refuses stays on the form, as filled, asking nothing', 
     expect(await page.opponent()).toHaveValue('Cy')
     expect(page.queryDiscardDialog()).toBeNull()
   } finally {
-    myMatchesStore.setState({ createMatch })
+    matchesStore.setState({ createMatch })
   }
 })
 

@@ -1,9 +1,9 @@
 import { useNavigate } from '@tanstack/react-router'
-import { myMatchesStore } from '../stores/my-matches.ts'
+import { matchesStore } from '../stores/matches.ts'
 import { NewMatchScreen } from './new-match/NewMatchScreen.tsx'
 
 // The new match page (/matches/new), connected to the match list's store
-// (src/stores/my-matches.ts).
+// (src/stores/matches.ts).
 //
 // Start match keeps the match on this device and, the moment the store
 // answers, opens game 1's scoring page in place of this one: Back from it
@@ -16,7 +16,7 @@ export function NewMatch() {
   return (
     <NewMatchScreen
       onSubmit={(match) => {
-        void myMatchesStore
+        void matchesStore
           .getState()
           .createMatch(match)
           .then((result) => {

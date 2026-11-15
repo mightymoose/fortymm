@@ -1,6 +1,6 @@
 import userEvent from '@testing-library/user-event'
 import { expect, test } from 'vitest'
-import { myMatchesStore } from '../stores/my-matches.ts'
+import { matchesStore } from '../stores/matches.ts'
 import { renderScreen } from '../test/render-screen.tsx'
 import { NewMatch } from './NewMatch.tsx'
 import { NewMatchScreenPage } from './new-match/NewMatchScreen.page.tsx'
@@ -16,8 +16,8 @@ import { NewMatchScreenPage } from './new-match/NewMatchScreen.page.tsx'
 const page = new NewMatchScreenPage()
 
 async function newestMatch() {
-  await myMatchesStore.getState().load()
-  const list = myMatchesStore.getState().myMatches
+  await matchesStore.getState().load()
+  const list = matchesStore.getState().matches
   if (list.status !== 'ready') throw new Error(`list ${list.status}`)
   return list.matches[0]
 }
