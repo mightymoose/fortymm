@@ -249,6 +249,123 @@ test('a match nobody watches is dropped after another store writes it, and read 
   expect(await gamesOf(unwatched, matchId)).toEqual([[11, 7]])
 })
 
+// What the source can do that memory, left alone, never does: wait, and
+// refuse. The memory is told to hold or fail its next read or write.
+
+const noGames = { opponentName: 'Ana', bestOf: 5, rated: false, games: [] }
+
+// Lets everything that can run without the held call run.
+const settle = () => new Promise((resolve) => setTimeout(resolve))
+
+test('a save shows in the store only once the write has succeeded', async () => {
+  const { memory, store, matchId } = await matchWith(5)
+  await store.getState().load(matchId)
+  const release = memory.holdNextWrite()
+
+  const saving = store.getState().setGameScore(matchId, 1, [11, 7])
+  await settle()
+
+  expect(store.getState().matches[matchId]).toEqual({ status: 'ready', match: noGames })
+  release()
+  expect(await saving).toEqual({ ok: true })
+  expect(store.getState().matches[matchId]).toEqual({
+    status: 'ready',
+    match: { ...noGames, games: [[11, 7]] },
+  })
+})
+
+test('a save the device refuses is returned, and the entry stays as it was', async () => {
+  const { memory, store, matchId } = await matchWith(5, [[11, 7]])
+  const before = store.getState().matches[matchId]
+  memory.failNextWrite('storage-unavailable')
+
+  expect(await store.getState().setGameScore(matchId, 2, [9, 11])).toEqual({
+    ok: false,
+    reason: 'storage-unavailable',
+  })
+
+  expect(before).toEqual({ status: 'ready', match: { ...noGames, games: [[11, 7]] } })
+  expect(store.getState().matches[matchId]).toBe(before)
+})
+
+test('load of a match the device refuses to read is unavailable', async () => {
+  const { memory, store, matchId } = await matchWith(5)
+  memory.failNextRead('storage-unavailable')
+
+  expect(await store.getState().load(matchId)).toEqual({
+    status: 'unavailable',
+    reason: 'storage-unavailable',
+  })
+
+  expect(store.getState().matches[matchId]).toEqual({
+    status: 'unavailable',
+    reason: 'storage-unavailable',
+  })
+})
+
+// The store here never hears of a change, so its copy stays as loaded while
+// the memory behind it moves on (as after another tab's write, before its
+// announcement arrives).
+test('the rules are asked about the match as kept, not the store’s copy', async () => {
+  const { memory, matchId } = await matchWith(3)
+  const store = createMatchStore({ ...memory, onChange: () => () => {} })
+  await store.getState().load(matchId)
+  await memory.saveGame(matchId, 1, () => ({ score: [11, 7] }))
+  await memory.saveGame(matchId, 2, () => ({ score: [11, 5] }))
+  expect(store.getState().matches[matchId]).toEqual({
+    status: 'ready',
+    match: { ...noGames, bestOf: 3 },
+  })
+
+  expect(await store.getState().setGameScore(matchId, 3, [11, 4])).toEqual({
+    ok: false,
+    reason: 'past-decider',
+    message: "The match is already decided; game 3 can't be played.",
+  })
+})
+
+test('a read that began before a save cannot remove the game', async () => {
+  const { memory, store, matchId } = await matchWith(5)
+  const release = memory.holdNextRead()
+
+  const reading = store.getState().load(matchId)
+  const saving = store.getState().setGameScore(matchId, 1, [11, 7])
+  await settle()
+  release()
+  await Promise.all([reading, saving])
+
+  expect(store.getState().matches[matchId]).toEqual({
+    status: 'ready',
+    match: { ...noGames, games: [[11, 7]] },
+  })
+})
+
+// The store here hears only 'all', so only that can bring it the saved game.
+test('a change of ‘all’ reads every watched match again and drops the rest', async () => {
+  const { memory, matchId: watched } = await matchWith(5)
+  const created = await createMatchesStore(memory).getState().createMatch(bestOf(3))
+  if (!created.ok) throw new Error('not created')
+  const store = createMatchStore({
+    ...memory,
+    onChange: (listener) =>
+      memory.onChange((changed) => {
+        if (changed === 'all') listener(changed)
+      }),
+  })
+  await store.getState().load(watched)
+  await store.getState().load(created.matchId)
+  store.getState().watchMatch(watched)
+  await memory.saveGame(watched, 1, () => ({ score: [11, 7] }))
+
+  memory.announceAll()
+
+  await vi.waitFor(() =>
+    expect(store.getState().matches).toEqual({
+      [watched]: { status: 'ready', match: { ...noGames, games: [[11, 7]] } },
+    }),
+  )
+})
+
 // The score is saved through another store over the app's memory (as another
 // page's store will be), so only the watch can bring it to this page.
 test('a page watching a match shows the new score after an action', async () => {

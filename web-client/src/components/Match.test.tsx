@@ -43,7 +43,7 @@ test('the match layout shows the page under it, and a change made elsewhere to t
   render(<RouterProvider router={router} />)
   expect(await screen.findByRole('heading', { name: '0 games' })).toBeVisible()
 
-  matchMemory.setGames(matchId, [[11, 7]])
+  await matchMemory.saveGame(matchId, 1, () => ({ score: [11, 7] }))
 
   expect(await screen.findByRole('heading', { name: '1 games' })).toBeVisible()
 })

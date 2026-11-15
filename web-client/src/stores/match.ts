@@ -1,21 +1,21 @@
 import { createStore, useStore } from 'zustand'
-import {
-  mayClear,
-  saveRefusal,
-  withGame,
-  type BestOf,
-  type Games,
-  type SaveRefusal,
-  type Score,
-} from '../scoring/scoring.ts'
-import { matchMemory, type MatchMemory, type StoredMatch } from './match-memory.ts'
+import { mayClear, saveRefusal, type BestOf, type Games, type Score } from '../scoring/scoring.ts'
+import { matchMemory } from './match-memory.ts'
+import type { ActionResult, MatchSource, StoredMatch, Unavailable } from './match-source.ts'
 import { createQueue } from './queue.ts'
+
+export type { ActionResult, Failure, Refusal } from './match-source.ts'
 
 // One entry per match id, for the pages that open a match (the scoring screen
 // first), and the scoring actions. The interface is the plan's match store
-// (PLAN-match-store-and-sync.md §2); until IndexedDB and the journal exist
-// (tasks D to G) its matches are in memory (match-memory.ts), so a reload
-// loses them, and those tasks replace only this module's insides.
+// (PLAN-match-store-and-sync.md §2). It reads and writes through a source
+// (match-source.ts) and knows nothing about where matches are kept: until
+// IndexedDB and the journal exist (tasks D to G2) the app's source is a
+// memory (match-memory.ts), so a reload loses them.
+//
+// A write goes to the source first. Only when it has succeeded does the
+// store change, by reading the match again; a write the source refuses is
+// returned and leaves the store as it was. There is no optimistic update.
 //
 // Only watched matches reload, as in the plan: after a write to a match, an
 // entry a mounted page watches (watchMatch) is read again, so the page shows
@@ -37,26 +37,11 @@ export type MatchState = {
 // - ready: the match.
 // - missing: no match of that id on this device (in memory: nobody created
 //   it in this page's life; a reload loses every match).
-// - unavailable: the device's storage refused. Only the real store gives it;
-//   memory never does, but callers handle it already.
+// - unavailable: the source refused the read.
 export type MatchEntry =
   | { status: 'ready'; match: MatchState }
   | { status: 'missing' }
-  | { status: 'unavailable'; reason: 'storage-unavailable' | 'core-unavailable' }
-
-// A write the device refused. Only the real store gives one; memory never does.
-export type Failure = {
-  reason: 'storage-unavailable' | 'locks-unavailable' | 'signing-unavailable' | 'core-unavailable'
-}
-
-// A score the rules refuse, or a game that may not be cleared, or a match
-// that isn't on this device: nothing changed, and the message says why.
-export type Refusal = {
-  reason: SaveRefusal['reason'] | 'not-clearable' | 'missing'
-  message: string
-}
-
-export type ActionResult = { ok: true } | ({ ok: false } & (Failure | Refusal))
+  | { status: 'unavailable'; reason: Unavailable['reason'] }
 
 export type MatchStore = {
   matches: Record<string, MatchEntry>
@@ -74,40 +59,36 @@ export type MatchStore = {
   clearGameScore(matchId: string, game: number): Promise<ActionResult>
 }
 
-// A store of its own over `memory`. The app has one, matchStore, over the
+// A store of its own over `source`. The app has one, matchStore, over the
 // app's memory; a test builds a fresh one over a fresh memory.
-export function createMatchStore(memory: MatchMemory = matchMemory) {
+export function createMatchStore(source: MatchSource = matchMemory) {
   const queue = createQueue()
   // How many mounted pages watch each match.
   const watching = new Map<string, number>()
 
   // Reads the match and replaces its entry, in one set.
-  const read = (matchId: string): MatchEntry => {
-    const entry = entryOf(memory.read(matchId))
+  const read = async (matchId: string): Promise<MatchEntry> => {
+    const entry = entryOf(await source.read(matchId))
     store.setState((state) => ({ matches: { ...state.matches, [matchId]: entry } }))
     return entry
   }
 
-  // Asks `decide` what to write to the match's games, writes it, and reads
+  // Has the source save what `decide` says game `game` becomes, then reads
   // the match again; or answers why not, changing nothing.
-  const write = (
+  const save = (
     matchId: string,
-    decide: (match: StoredMatch) => Refusal | { games: Games },
+    game: number,
+    decide: Parameters<MatchSource['saveGame']>[2],
   ): Promise<ActionResult> =>
     queue(async () => {
-      const match = memory.read(matchId)
-      if (match === null)
-        return { ok: false, reason: 'missing', message: 'This match isn’t on this device.' }
-      const decided = decide(match)
-      if ('reason' in decided) return { ok: false, ...decided }
-      memory.setGames(matchId, decided.games)
-      read(matchId)
-      return { ok: true }
+      const saved = await source.saveGame(matchId, game, decide)
+      if (saved.ok) await read(matchId)
+      return saved
     })
 
   const store = createStore<MatchStore>()(() => ({
     matches: {},
-    load: (matchId) => queue(async () => read(matchId)),
+    load: (matchId) => queue(() => read(matchId)),
     watchMatch(matchId) {
       watching.set(matchId, (watching.get(matchId) ?? 0) + 1)
       let stopped = false
@@ -119,31 +100,37 @@ export function createMatchStore(memory: MatchMemory = matchMemory) {
         else watching.set(matchId, left)
       }
     },
+    // The source asks these rules, about the match as it keeps it at that
+    // moment, never about this store's copy.
     setGameScore: (matchId, game, score) =>
-      write(matchId, ({ games, bestOf }) => {
+      save(matchId, game, ({ games, bestOf }) => {
         const refusal = saveRefusal(games, bestOf, game, score)
         if (refusal !== null) return refusal
-        return { games: withGame(games, game, [score[0], score[1]]) }
+        return { score: [score[0], score[1]] }
       }),
     clearGameScore: (matchId, game) =>
-      write(matchId, ({ games }) => {
+      save(matchId, game, ({ games }) => {
         if (!mayClear(games, game))
           return { reason: 'not-clearable', message: `Game ${game} isn’t saved.` }
-        return { games: withGame(games, game, null) }
+        return { score: null }
       }),
   }))
 
-  memory.onChange((matchId) => {
-    if (watching.has(matchId)) {
-      void queue(async () => {
-        read(matchId)
-      })
-      return
+  // After a write: each changed match a page watches is read again, and the
+  // others are dropped. 'all' is every match this store holds or watches.
+  source.onChange((changed) => {
+    const ids =
+      changed === 'all'
+        ? [...new Set([...Object.keys(store.getState().matches), ...watching.keys()])]
+        : changed
+    for (const matchId of ids) {
+      if (watching.has(matchId)) void queue(() => read(matchId))
     }
+    const dropped = ids.filter((matchId) => !watching.has(matchId))
     store.setState((state) => {
-      if (!(matchId in state.matches)) return state
+      if (!dropped.some((matchId) => matchId in state.matches)) return state
       const matches = { ...state.matches }
-      delete matches[matchId]
+      for (const matchId of dropped) delete matches[matchId]
       return { matches }
     })
   })
@@ -157,8 +144,9 @@ export function useMatch(matchId: string): MatchEntry | undefined {
   return useStore(matchStore, (store) => store.matches[matchId])
 }
 
-function entryOf(match: StoredMatch | null): MatchEntry {
-  if (match === null) return { status: 'missing' }
-  const { opponentName, bestOf, rated, games } = match
+function entryOf(read: { ok: true; match: StoredMatch | null } | Unavailable): MatchEntry {
+  if (!read.ok) return { status: 'unavailable', reason: read.reason }
+  if (read.match === null) return { status: 'missing' }
+  const { opponentName, bestOf, rated, games } = read.match
   return { status: 'ready', match: { opponentName, bestOf, rated, games } }
 }
