@@ -12,7 +12,7 @@ import { createMyMatchesStore, myMatchesStore } from './my-matches.ts'
 // connected component will.
 
 function bestOf(length: 1 | 3 | 5 | 7): NewMatch {
-  return { opponentName: 'Ana', format: { bestOf: length, points: 11 }, rated: false }
+  return { opponentName: 'Ana', format: { bestOf: length }, rated: false }
 }
 
 // A fresh match store, and a match in it with these games saved.
@@ -41,7 +41,7 @@ test('a match is scored, refused out of order, cleared and corrected', async () 
   const matches = createMatchStore(memory)
   const created = await myMatches.getState().createMatch({
     opponentName: 'Ana',
-    format: { bestOf: 5, points: 11 },
+    format: { bestOf: 5 },
     rated: false,
   })
   if (!created.ok) throw new Error('not created')

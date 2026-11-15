@@ -13,12 +13,12 @@ function fresh() {
 
 const againstAna: NewMatch = {
   opponentName: 'Ana',
-  format: { bestOf: 5, points: 11 },
+  format: { bestOf: 5 },
   rated: true,
 }
 const againstBo: NewMatch = {
   opponentName: 'Bo',
-  format: { bestOf: 3, points: 11 },
+  format: { bestOf: 3 },
   rated: false,
 }
 
