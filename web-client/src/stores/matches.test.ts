@@ -104,3 +104,63 @@ test('a list nobody watches goes back to unread after another store writes a mat
 
   expect(unwatched.getState().matches).toEqual({ status: 'unread' })
 })
+
+// What the source can do that memory, left alone, never does: refuse. The
+// memory is told to fail its next read or write.
+
+test('a create the device refuses is returned, and the list stays as it was', async () => {
+  const memory = createMatchMemory()
+  const matches = createMatchesStore(memory)
+  await matches.getState().createMatch(againstAna)
+  const before = matches.getState().matches
+  memory.failNextWrite('signing-unavailable')
+
+  expect(await matches.getState().createMatch(againstBo)).toEqual({
+    ok: false,
+    reason: 'signing-unavailable',
+  })
+
+  expect(before).toEqual({
+    status: 'ready',
+    matches: [{ matchId: expect.any(String), opponentName: 'Ana', bestOf: 5, rated: true }],
+  })
+  expect(matches.getState().matches).toBe(before)
+})
+
+test('load of a list the device refuses to read is unavailable', async () => {
+  const memory = createMatchMemory()
+  const matches = createMatchesStore(memory)
+  memory.failNextRead('core-unavailable')
+
+  await matches.getState().load()
+
+  expect(matches.getState().matches).toEqual({
+    status: 'unavailable',
+    reason: 'core-unavailable',
+  })
+})
+
+// The store here hears only 'all', so only that can bring it the new match.
+test('a watched list is read again after a change of ‘all’', async () => {
+  const memory = createMatchMemory()
+  const watched = createMatchesStore({
+    ...memory,
+    onChange: (listener) =>
+      memory.onChange((changed) => {
+        if (changed === 'all') listener(changed)
+      }),
+  })
+  await watched.getState().load()
+  watched.getState().watchMatches()
+  const created = await memory.create(againstAna)
+  if (!created.ok) throw new Error('not created')
+
+  memory.announceAll()
+
+  await vi.waitFor(() =>
+    expect(watched.getState().matches).toEqual({
+      status: 'ready',
+      matches: [{ matchId: created.matchId, opponentName: 'Ana', bestOf: 5, rated: true }],
+    }),
+  )
+})
