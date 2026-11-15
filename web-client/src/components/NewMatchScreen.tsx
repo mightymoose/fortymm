@@ -1,67 +1,80 @@
+import { useBlocker } from '@tanstack/react-router'
 import { useState, type FormEvent } from 'react'
-import { Breadcrumbs } from './Breadcrumbs.tsx'
+import { initials } from '../initials.ts'
+import { Avatar } from './Avatar.tsx'
+import { BestOfField, type BestOf } from './BestOfField.tsx'
 import { Button } from './Button.tsx'
 import { ButtonLink } from './ButtonLink.tsx'
+import { DiscardChangesDialog } from './DiscardChangesDialog.tsx'
 import { Field } from './Field.tsx'
-import { SegmentedControl } from './SegmentedControl.tsx'
+import { Icon } from './Icon.tsx'
+import { RatedField } from './RatedField.tsx'
 import { TextInput } from './TextInput.tsx'
 import './NewMatchScreen.css'
 
-// How long a match is: the most games it can take. The winner is first to
-// more than half of them.
-const bestOfOptions = [1, 3, 5, 7] as const
-export type BestOf = (typeof bestOfOptions)[number]
-
-// The points a game is played to, won by 2.
-const pointsOptions = [11, 21] as const
-export type Points = (typeof pointsOptions)[number]
-
-// What the form gives its handler: the opponent's name as typed, trimmed,
-// and the match's format, as the plan's match descriptor names it
-// (`format: {bestOf, points}`).
+// What the form gives its handler: the opponent's name as typed, trimmed;
+// the match's format, as the plan's match descriptor names it (`format:
+// {bestOf, points}`; every game is to 11); and whether it is rated.
 export type NewMatch = {
   opponentName: string
-  format: { bestOf: BestOf; points: Points }
+  format: { bestOf: BestOf; points: 11 }
+  rated: boolean
 }
 
+// The form as it opens. Anything else is a change that leaving would lose.
 const defaultBestOf: BestOf = 5
-const defaultPoints: Points = 11
+const defaultRated = false
 
 const opponentRequired = 'Enter your opponent’s name.'
 
-function gamesToWin(bestOf: BestOf) {
-  return Math.ceil(bestOf / 2)
-}
-
-function lengthHelp(bestOf: BestOf) {
-  return bestOf === 1
-    ? 'One game, winner takes all.'
-    : `First to ${gamesToWin(bestOf)} games.`
-}
-
-// The new match screen, at /matches/new: the opponent and the match's
-// format (its length, best of 1, 3, 5 or 7, and the points a game is played
-// to), then Start match, which hands what was entered to `onSubmit`, or
-// Cancel, back to the dashboard. The opponent's name is required: submitting
-// without one shows the field's error, moves focus to it and calls nothing.
-// Once a submit has failed, the error follows what is typed.
+// The new match screen, at /matches/new, after fortymm-real's match setup:
+// the title, then one card. In it: who you are (this device's user, `you`,
+// when there is one), the opponent, the match's length and whether it is
+// rated (side by side where the card is wide enough), then a summary of
+// the match with Cancel and Start match.
 //
-// A form for a match between this device's player and one other, after
-// fortymm-real's setup screen; the opponent is a typed name until players
-// can be looked up. It renders in the layout's <main> (AppLayout).
+// Start match hands what was entered to `onSubmit`. The opponent's name is
+// required: without one, it shows the field's error, moves focus to it and
+// calls nothing; once a submit has failed, the error follows what is typed.
+// Rated needs an opponent: with no name it is off and unavailable, and
+// clearing the name turns it off.
+//
+// Leaving a changed form (a name typed, the length or rated changed) asks
+// first, "Discard changes?", whether by Cancel, any other link, or the
+// browser's back; closing or reloading the tab asks through the browser.
+// It renders in the layout's <main> (AppLayout).
 export function NewMatchScreen({
+  you,
   onSubmit,
 }: {
+  you: { username: string } | null
   onSubmit: (match: NewMatch) => void
 }) {
   const [opponentName, setOpponentName] = useState('')
   const [bestOf, setBestOf] = useState<BestOf>(defaultBestOf)
-  const [points, setPoints] = useState<Points>(defaultPoints)
+  const [rated, setRated] = useState(defaultRated)
   const [triedSubmit, setTriedSubmit] = useState(false)
 
   const name = opponentName.trim()
+  const ratable = name !== ''
+  const isRated = rated && ratable
   const opponentError =
     triedSubmit && name === '' ? opponentRequired : undefined
+  const dirty =
+    opponentName !== '' || bestOf !== defaultBestOf || rated !== defaultRated
+
+  const blocker = useBlocker({
+    shouldBlockFn: () => dirty,
+    enableBeforeUnload: () => dirty,
+    withResolver: true,
+  })
+
+  function changeName(value: string) {
+    setOpponentName(value)
+    // No opponent, no rating: a rated match whose opponent is cleared is
+    // not rated again when another name is typed.
+    if (value.trim() === '') setRated(false)
+  }
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -71,24 +84,40 @@ export function NewMatchScreen({
       if (opponent instanceof HTMLInputElement) opponent.focus()
       return
     }
-    onSubmit({ opponentName: name, format: { bestOf, points } })
+    onSubmit({
+      opponentName: name,
+      format: { bestOf, points: 11 },
+      rated: isRated,
+    })
   }
 
   return (
+    <>
     <div className="new-match">
-      <Breadcrumbs trail={[{ label: 'Dashboard', href: '/' }]} current="New match" />
-      <h1>New match</h1>
+      <h1 className="new-match__title">
+        New match
+        <span className="new-match__dot" aria-hidden="true">
+          .
+        </span>
+      </h1>
 
       <form
-        className="new-match__form"
+        className="new-match__card"
         aria-label="New match"
         noValidate
         onSubmit={submit}
       >
-        <section className="new-match__section" aria-labelledby="new-match-players">
-          <h2 id="new-match-players" className="new-match__section-title">
-            Players
-          </h2>
+        <div className="new-match__you">
+          <Avatar initials={you === null ? '' : initials(you.username)} />
+          <div className="new-match__you-text">
+            <span className="new-match__overline">You</span>
+            {you !== null && (
+              <span className="new-match__you-name">{you.username}</span>
+            )}
+          </div>
+        </div>
+
+        <div className="new-match__opponent">
           <Field
             label="Opponent"
             help="Their name, as you’d call them."
@@ -102,75 +131,63 @@ export function NewMatchScreen({
                 autoCapitalize="words"
                 required
                 value={opponentName}
-                onChange={(event) => setOpponentName(event.target.value)}
+                onChange={(event) => changeName(event.target.value)}
               />
             )}
           </Field>
-        </section>
-
-        <section className="new-match__section" aria-labelledby="new-match-format">
-          <h2 id="new-match-format" className="new-match__section-title">
-            Format
-          </h2>
-          <div className="new-match__choice">
-            {/* The radiogroup is named "Best of" itself; this is that name,
-                shown. */}
-            <span className="field__label" aria-hidden="true">
-              Best of
-            </span>
-            <SegmentedControl
-              label="Best of"
-              options={bestOfOptions.map((n) => ({
-                value: String(n),
-                label: String(n),
-              }))}
-              defaultValue={String(defaultBestOf)}
-              onChange={(value) => setBestOf(Number(value) as BestOf)}
-            />
-            <p className="field__help">{lengthHelp(bestOf)}</p>
-          </div>
-          <div className="new-match__choice">
-            <span className="field__label" aria-hidden="true">
-              Points per game
-            </span>
-            <SegmentedControl
-              label="Points per game"
-              options={pointsOptions.map((n) => ({
-                value: String(n),
-                label: String(n),
-              }))}
-              defaultValue={String(defaultPoints)}
-              onChange={(value) => setPoints(Number(value) as Points)}
-            />
-            <p className="field__help">Win each game by 2.</p>
-          </div>
-        </section>
-
-        <div className="new-match__summary">
-          <p className="new-match__summary-line">
-            {name === '' ? (
-              'You vs your opponent'
-            ) : (
-              <>
-                You vs <b>{name}</b>
-              </>
-            )}
-          </p>
-          <p className="field__help">
-            {bestOf === 1 ? 'Single game' : `Best of ${bestOf}`} · games to{' '}
-            {points}
-          </p>
         </div>
 
-        <div className="new-match__actions">
-          <Button variant="primary" size="lg" type="submit">
-            Start match
-          </Button>
-          <ButtonLink to="/" variant="ghost" size="lg">
-            Cancel
-          </ButtonLink>
+        <div className="new-match__settings">
+          <BestOfField bestOf={bestOf} onChange={setBestOf} />
+          <RatedField rated={rated} ratable={ratable} onChange={setRated} />
+        </div>
+
+        <div className="new-match__summary">
+          <div className="new-match__read">
+            <p className="new-match__headline">
+              {ratable ? (
+                <>
+                  Ready: <b>You</b> vs <b>{name}</b>
+                </>
+              ) : (
+                <span className="new-match__tbd">
+                  Name your opponent to start
+                </span>
+              )}
+            </p>
+            <p className="new-match__sub">
+              {bestOf === 1
+                ? 'Single game'
+                : `Best of ${bestOf} · first to ${Math.ceil(bestOf / 2)}`}
+              {' · '}
+              {isRated ? (
+                <span className="new-match__rated">Rated</span>
+              ) : (
+                'Unrated'
+              )}
+              {' · games to 11, win by 2'}
+            </p>
+          </div>
+          <div className="new-match__actions">
+            <ButtonLink to="/" variant="secondary" size="lg">
+              Cancel
+            </ButtonLink>
+            <Button variant="primary" size="lg" type="submit">
+              Start match
+              <Icon name="arrow-right" />
+            </Button>
+          </div>
         </div>
       </form>
     </div>
+    {/* Outside the page's box, so nothing of the page's layout reaches it:
+        it covers the whole screen. */}
+    {blocker.status === 'blocked' && (
+      <DiscardChangesDialog
+        onLeave={() => blocker.proceed()}
+        onStay={() => blocker.reset()}
+      />
+    )}
+    </>
   )
 }

@@ -14,15 +14,14 @@ export class NewMatchScreenPage {
     return screen.findByRole('heading', { level: 1, name: 'New match' })
   }
 
-  // The breadcrumbs above the heading, and their link back to the
-  // dashboard.
-  async breadcrumbToDashboard() {
-    const crumbs = await screen.findByRole('navigation', { name: 'Breadcrumb' })
-    return within(crumbs).getByRole('link', { name: 'Dashboard' })
-  }
-
   form() {
     return screen.findByRole('form', { name: 'New match' })
+  }
+
+  // The card's "You": its text ("You", then the username when there is one).
+  async you() {
+    const form = await this.form()
+    return within(form).getByText('You', { exact: true }).parentElement!
   }
 
   // The opponent's name.
@@ -30,18 +29,28 @@ export class NewMatchScreenPage {
     return screen.findByRole('textbox', { name: 'Opponent' })
   }
 
-  // How many games, at most: the "Best of" radio for `n` (1, 3, 5 or 7).
+  // The match's length: the radio "Best of `n`" (1, 3, 5 or 7).
   async bestOf(n: number) {
-    const group = await screen.findByRole('radiogroup', { name: 'Best of' })
-    return within(group).getByRole('radio', { name: String(n) })
+    const group = await screen.findByRole('radiogroup', {
+      name: 'Match length',
+    })
+    return within(group).getByRole('radio', { name: `Best of ${n}` })
   }
 
-  // The points a game is played to: the radio for `n` (11 or 21).
-  async points(n: number) {
-    const group = await screen.findByRole('radiogroup', {
-      name: 'Points per game',
-    })
-    return within(group).getByRole('radio', { name: String(n) })
+  // The rated match switch.
+  rated() {
+    return screen.findByRole('switch', { name: 'Rated match' })
+  }
+
+  // "No opponent · unavailable" beside rated's label, or null.
+  ratedUnavailable() {
+    return screen.queryByText('No opponent · unavailable')
+  }
+
+  // The summary's first line ("Ready: You vs Ana").
+  async summary() {
+    const form = await this.form()
+    return within(form).getByText(/^Ready:|^Name your opponent/)
   }
 
   startMatch() {
@@ -55,5 +64,22 @@ export class NewMatchScreenPage {
   // The error under the opponent's field, by its text, or null.
   opponentError() {
     return screen.queryByText('Enter your opponent’s name.')
+  }
+
+  // "Discard changes?", when leaving a changed form, and its answers.
+  discardDialog() {
+    return screen.findByRole('dialog', { name: 'Discard changes?' })
+  }
+
+  queryDiscardDialog() {
+    return screen.queryByRole('dialog', { name: 'Discard changes?' })
+  }
+
+  keepEditing() {
+    return screen.findByRole('button', { name: 'Keep editing' })
+  }
+
+  discardAndLeave() {
+    return screen.findByRole('button', { name: 'Discard & leave' })
   }
 }
