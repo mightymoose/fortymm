@@ -1,0 +1,98 @@
+/* The scoreline (fortymm-real's .scoreline): a small uppercase label, then
+   one cell per game in a row, each "G1" over its score in the number font.
+   A saved cell's winning number is the winner colour; the current cell's
+   edge is the accent; blank cells are dimmer. The ✕ sits in a cell's top
+   right corner. */
+.scoreline {
+  margin-top: var(--s-6);
+}
+.scoreline__label {
+  margin: 0 0 var(--s-2);
+  font: 600 var(--text-xs) / 1 var(--font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.scoreline__cells {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: var(--s-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.scoreline__cell {
+  position: relative;
+}
+.scoreline__body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  padding: var(--s-2) var(--s-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-group);
+  color: var(--fg-3);
+  text-decoration: none;
+}
+.scoreline__inner {
+  display: contents;
+}
+a.scoreline__body:hover {
+  background: var(--bg-hover);
+}
+a.scoreline__body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.scoreline__cell[data-saved] .scoreline__body {
+  color: var(--fg-1);
+}
+.scoreline__cell[aria-current] .scoreline__body {
+  border-color: var(--accent);
+}
+.scoreline__n {
+  font: 600 var(--text-xs) / 1 var(--font-ui);
+  color: var(--fg-3);
+}
+.scoreline__score {
+  display: flex;
+  gap: 4px;
+  font: 600 var(--text-sm) / 1 var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+.scoreline__score [data-won] {
+  color: var(--winner);
+}
+.scoreline__dash {
+  color: var(--fg-3);
+}
+.scoreline__clear {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-pill);
+  background: var(--bg-panel);
+  color: var(--fg-2);
+  cursor: pointer;
+}
+.scoreline__clear:hover {
+  color: var(--danger);
+}
+.scoreline__clear:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.scoreline__clear .icon {
+  width: 14px;
+  height: 14px;
+}
