@@ -10,8 +10,10 @@ import { StorageHarness } from '../pages/storage.ts'
 // is a component test. How it looks is pinned by no test: screenshots are
 // only for the design system page (web-client/CLAUDE.md).
 //
-// On the dashboard, which shows only its heading and asks nothing of the
-// network.
+// On the dashboard and the new match screen, which ask nothing of the
+// network. Which way to the new match screen shows at which width (the
+// dashboard's button wider than a phone, the bottom bar's on a phone) is
+// the breakpoint's too.
 
 const desktop = { width: 1280, height: 800 }
 // An iPhone's width, under the layout's 768px breakpoint (AppLayout.css).
