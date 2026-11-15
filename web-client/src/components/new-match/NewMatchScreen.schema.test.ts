@@ -1,12 +1,12 @@
 import { expect, test } from 'vitest'
 import { newMatchSchema } from './NewMatchScreen.schema.ts'
 
-test('the schema trims the opponent’s name and gives the match’s format, to 11', () => {
+test('the schema trims the opponent’s name and gives the match’s format', () => {
   expect(
     newMatchSchema.parse({ opponentName: '  Ana Silva ', bestOf: 3, rated: true }),
   ).toEqual({
     opponentName: 'Ana Silva',
-    format: { bestOf: 3, points: 11 },
+    format: { bestOf: 3 },
     rated: true,
   })
 })

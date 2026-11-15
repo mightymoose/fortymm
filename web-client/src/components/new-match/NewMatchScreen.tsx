@@ -19,8 +19,8 @@ import { TextInput } from '../TextInput.tsx'
 import './NewMatchScreen.css'
 
 // What the form gives its handler (NewMatchScreen.schema.ts): the opponent's
-// name as typed, trimmed; the match's format (`format: {bestOf, points}`;
-// every game is to 11); and whether it is rated.
+// name as typed, trimmed; the match's format (`format: {bestOf}`); and
+// whether it is rated.
 export type { NewMatch }
 
 // The new match screen, at /matches/new, after fortymm-real's match setup:

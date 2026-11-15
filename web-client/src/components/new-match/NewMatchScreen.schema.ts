@@ -22,10 +22,10 @@ export const newMatchSchema = z
     rated: z.boolean(),
   })
   // The match's format, as the plan's match descriptor names it (`format:
-  // {bestOf, points}`); every game is to 11.
+  // {bestOf}`).
   .transform(({ opponentName, bestOf, rated }) => ({
     opponentName,
-    format: { bestOf, points: 11 as const },
+    format: { bestOf },
     rated,
   }))
 

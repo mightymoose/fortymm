@@ -69,7 +69,7 @@ test('after a failed submit, typing a name clears the error', async () => {
   expect(await page.opponent()).toBeValid()
 })
 
-test('left as it opens but for the name, the match is best of 5, to 11, unrated', async () => {
+test('left as it opens but for the name, the match is best of 5, unrated', async () => {
   const user = userEvent.setup()
   const onSubmit = vi.fn()
   const page = new NewMatchScreenPage()
@@ -83,7 +83,7 @@ test('left as it opens but for the name, the match is best of 5, to 11, unrated'
   expect(onSubmit).toHaveBeenCalledTimes(1)
   expect(onSubmit).toHaveBeenCalledWith({
     opponentName: 'Ana',
-    format: { bestOf: 5, points: 11 },
+    format: { bestOf: 5 },
     rated: false,
   })
 })
@@ -102,7 +102,7 @@ test('a complete form calls the handler once with the name, trimmed, the length 
   expect(onSubmit).toHaveBeenCalledTimes(1)
   expect(onSubmit).toHaveBeenCalledWith({
     opponentName: 'Ana Silva',
-    format: { bestOf: 3, points: 11 },
+    format: { bestOf: 3 },
     rated: true,
   })
 })
