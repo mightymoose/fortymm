@@ -1,5 +1,5 @@
 import { useSingleSelection } from '../../single-selection.ts'
-import { bestOfs, type BestOf } from '../NewMatchScreen.schema.ts'
+import { bestOfs, type BestOf } from '../../../scoring/scoring.ts'
 import './BestOfField.css'
 
 // How long a match is: the most games it can take (the form's schema says

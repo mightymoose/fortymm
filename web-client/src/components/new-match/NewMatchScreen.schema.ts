@@ -1,12 +1,10 @@
 import { z } from 'zod'
+import { bestOfs } from '../../scoring/scoring.ts'
 
 // The new match form's rules, the one place they are written
 // (web-client/CLAUDE.md, "Forms"). Its input is what the form holds; its
-// output is what Start match hands on.
-
-// Every length a match can be, shortest first (BestOfField names each).
-export const bestOfs = [1, 3, 5, 7] as const
-export type BestOf = (typeof bestOfs)[number]
+// output is what Start match hands on. Every length a match can be is the
+// scoring rules' (`bestOfs`).
 
 // The opponent's name: what was typed, trimmed, and not empty. The screen
 // also asks it whether what is typed so far is a name (rated needs one).
