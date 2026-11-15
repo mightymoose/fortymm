@@ -66,7 +66,6 @@ test.describe('at a desktop width', () => {
       'Matches',
       'Health',
       'Settings',
-      'Design system',
     ]) {
       await expect(layout.link(name)).toBeVisible()
     }

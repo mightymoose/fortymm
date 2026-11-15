@@ -3,14 +3,12 @@ import { Icon, type IconName } from '../Icon.tsx'
 import './Sidebar.css'
 
 // The pages the sidebar links to, in order. The router marks a link current
-// at its path and below it (the design system's tabs, under
-// /design-system), and the dashboard's, at /, only at / itself.
+// at its path and below it, and the dashboard's, at /, only at / itself.
 const links = [
   { to: '/', label: 'Dashboard', icon: 'layout-dashboard' },
   { to: '/matches', label: 'Matches', icon: 'list' },
   { to: '/health', label: 'Health', icon: 'heart-pulse' },
   { to: '/settings', label: 'Settings', icon: 'settings' },
-  { to: '/design-system', label: 'Design system', icon: 'palette' },
 ] as const satisfies readonly { to: string; label: string; icon: IconName }[]
 
 // The sidebar, at non-phone widths only (AppLayout.css's breakpoint): the
