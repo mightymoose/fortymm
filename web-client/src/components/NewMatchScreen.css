@@ -55,42 +55,9 @@
   background: var(--bg-group);
   box-shadow: var(--shadow-overlay);
 }
-.new-match__you,
 .new-match__opponent,
 .new-match__settings {
   border-bottom: 1px solid var(--border-subtle);
-}
-
-/* You: the avatar, then "You" over the username. */
-.new-match__you {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 14px var(--s-5);
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--accent) 6%, transparent),
-    transparent 55%
-  );
-}
-.new-match__you-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.new-match__overline {
-  font: 600 10px var(--font-num);
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: var(--fg-3);
-}
-.new-match__you-name {
-  overflow: hidden;
-  font: 600 var(--text-base) var(--font-ui);
-  color: var(--fg-1);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .new-match__opponent {

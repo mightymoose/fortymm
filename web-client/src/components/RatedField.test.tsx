@@ -8,7 +8,7 @@ function rated() {
   return screen.getByRole('switch', { name: 'Rated match' })
 }
 
-test('with no opponent, it is off and disabled, says why, and shows “No opponent · unavailable”', () => {
+test('with no opponent, it is off and disabled, described by what makes it available, and nothing else says so', () => {
   render(<RatedField rated={false} ratable={false} onChange={vi.fn()} />)
 
   expect(rated()).toBeDisabled()
@@ -16,7 +16,7 @@ test('with no opponent, it is off and disabled, says why, and shows “No oppone
   expect(rated()).toHaveAccessibleDescription(
     'Enter your opponent’s name to make this rated.',
   )
-  expect(screen.getByText('No opponent · unavailable')).toBeVisible()
+  expect(screen.queryByText(/unavailable/i)).toBeNull()
 })
 
 test('with no opponent, a stored on still shows off', () => {
@@ -33,7 +33,6 @@ test('with an opponent and off, it is enabled: just for fun, no rating change', 
   expect(rated()).toHaveAccessibleDescription(
     'No rating change. Still logged to history.',
   )
-  expect(screen.queryByText('No opponent · unavailable')).toBeNull()
 })
 
 test('on, it counts toward rating and updates both', () => {

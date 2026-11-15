@@ -1,6 +1,5 @@
 /* Whether the match is rated, after fortymm-real's .nm-rated on the theme's
-   tokens: an uppercase label (and, with no opponent, "No opponent ·
-   unavailable" at its right end), then a bg-panel box holding the switch
+   tokens: an uppercase label, then a bg-panel box holding the switch
    with its title, and under the title what the choice means. The box's
    edge turns to the accent while the match is rated. The switch is at least
    44px high, to tap. */
@@ -11,19 +10,9 @@
   min-width: 0;
 }
 .rated-field__label {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 4px var(--s-3);
   font: 700 10px var(--font-num);
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--fg-3);
-}
-.rated-field__unavailable {
-  font: 500 10px var(--font-num);
-  letter-spacing: 0.14em;
   color: var(--fg-3);
 }
 .rated-field__box {

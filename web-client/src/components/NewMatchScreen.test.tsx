@@ -2,29 +2,20 @@ import userEvent from '@testing-library/user-event'
 import { expect, test, vi } from 'vitest'
 import { NewMatchScreenPage } from './NewMatchScreen.page.tsx'
 
-const you = { username: 'brisk-otter-0042' }
-
-test('the new match screen has its heading, the card’s You with this device’s username, and Cancel back to the dashboard', async () => {
+test('the new match screen has its heading, the opponent’s name field, and Cancel back to the dashboard', async () => {
   const page = new NewMatchScreenPage()
-  page.render({ you, onSubmit: vi.fn() })
+  page.render({ onSubmit: vi.fn() })
 
   expect(await page.heading()).toBeVisible()
-  expect(await page.you()).toHaveTextContent(/^You\s*brisk-otter-0042$/)
+  expect(await page.opponent()).toBeVisible()
   expect(await page.cancel()).toHaveAttribute('href', '/')
-})
-
-test('with no user on this device, You shows no name', async () => {
-  const page = new NewMatchScreenPage()
-  page.render({ you: null, onSubmit: vi.fn() })
-
-  expect(await page.you()).toHaveTextContent(/^You$/)
 })
 
 test('submitting with no opponent shows the opponent field’s error, marks it invalid, focuses it, and calls nothing', async () => {
   const user = userEvent.setup()
   const onSubmit = vi.fn()
   const page = new NewMatchScreenPage()
-  page.render({ you, onSubmit })
+  page.render({ onSubmit })
   expect(page.opponentError()).toBeNull()
 
   await user.click(await page.startMatch())
@@ -40,7 +31,7 @@ test('a name of only spaces is no name: submitting shows the error and calls not
   const user = userEvent.setup()
   const onSubmit = vi.fn()
   const page = new NewMatchScreenPage()
-  page.render({ you, onSubmit })
+  page.render({ onSubmit })
 
   await user.type(await page.opponent(), '   ')
   await user.click(await page.startMatch())
@@ -54,7 +45,7 @@ test('a name of only spaces is no name: submitting shows the error and calls not
 test('after a failed submit, typing a name clears the error', async () => {
   const user = userEvent.setup()
   const page = new NewMatchScreenPage()
-  page.render({ you, onSubmit: vi.fn() })
+  page.render({ onSubmit: vi.fn() })
   await user.click(await page.startMatch())
 
   await user.type(await page.opponent(), 'Ana')
@@ -67,7 +58,7 @@ test('left as it opens but for the name, the match is best of 5, to 11, unrated'
   const user = userEvent.setup()
   const onSubmit = vi.fn()
   const page = new NewMatchScreenPage()
-  page.render({ you, onSubmit })
+  page.render({ onSubmit })
   expect(await page.bestOf(5)).toBeChecked()
 
   await user.type(await page.opponent(), 'Ana')
@@ -86,7 +77,7 @@ test('a complete form calls the handler once with the name, trimmed, the length 
   const user = userEvent.setup()
   const onSubmit = vi.fn()
   const page = new NewMatchScreenPage()
-  page.render({ you, onSubmit })
+  page.render({ onSubmit })
 
   await user.type(await page.opponent(), '  Ana Silva ')
   await user.click(await page.bestOf(3))
@@ -101,27 +92,31 @@ test('a complete form calls the handler once with the name, trimmed, the length 
   })
 })
 
-test('with no opponent, rated is off, unavailable and can’t be turned on; a name makes it available', async () => {
+test('with no opponent, rated is off and disabled, described by what makes it available; a name enables it', async () => {
   const user = userEvent.setup()
   const page = new NewMatchScreenPage()
-  page.render({ you, onSubmit: vi.fn() })
+  page.render({ onSubmit: vi.fn() })
 
   const rated = await page.rated()
   expect(rated).toBeDisabled()
   expect(rated).not.toBeChecked()
-  expect(page.ratedUnavailable()).toBeVisible()
+  expect(rated).toHaveAccessibleDescription(
+    'Enter your opponent’s name to make this rated.',
+  )
 
   await user.type(await page.opponent(), 'Ana')
 
   expect(await page.rated()).toBeEnabled()
-  expect(page.ratedUnavailable()).toBeNull()
+  expect(await page.rated()).toHaveAccessibleDescription(
+    'No rating change. Still logged to history.',
+  )
 })
 
 test('clearing the opponent turns rated off, and naming one again doesn’t turn it back on', async () => {
   const user = userEvent.setup()
   const onSubmit = vi.fn()
   const page = new NewMatchScreenPage()
-  page.render({ you, onSubmit })
+  page.render({ onSubmit })
   await user.type(await page.opponent(), 'Ana')
   await user.click(await page.rated())
   expect(await page.rated()).toBeChecked()
@@ -140,7 +135,7 @@ test('clearing the opponent turns rated off, and naming one again doesn’t turn
 test('the summary says who plays once there is an opponent', async () => {
   const user = userEvent.setup()
   const page = new NewMatchScreenPage()
-  page.render({ you, onSubmit: vi.fn() })
+  page.render({ onSubmit: vi.fn() })
   expect(await page.summary()).toHaveTextContent('Name your opponent to start')
 
   await user.type(await page.opponent(), 'Ana')
@@ -152,7 +147,7 @@ test('pressing Enter in the opponent’s field submits the form', async () => {
   const user = userEvent.setup()
   const onSubmit = vi.fn()
   const page = new NewMatchScreenPage()
-  page.render({ you, onSubmit })
+  page.render({ onSubmit })
 
   await user.type(await page.opponent(), 'Ana{Enter}')
 
@@ -162,7 +157,7 @@ test('pressing Enter in the opponent’s field submits the form', async () => {
 test('Cancel on a form left as it opened leaves with no question', async () => {
   const user = userEvent.setup()
   const page = new NewMatchScreenPage()
-  page.render({ you, onSubmit: vi.fn() })
+  page.render({ onSubmit: vi.fn() })
 
   await user.click(await page.cancel())
 
@@ -184,7 +179,7 @@ for (const [change, make] of [
   test(`Cancel with ${change} asks “Discard changes?”, its focus on Keep editing`, async () => {
     const user = userEvent.setup()
     const page = new NewMatchScreenPage()
-    page.render({ you, onSubmit: vi.fn() })
+    page.render({ onSubmit: vi.fn() })
     await make(user, page)
 
     await user.click(await page.cancel())
@@ -197,7 +192,7 @@ for (const [change, make] of [
 test('Keep editing, or Escape, closes the question and keeps what was entered', async () => {
   const user = userEvent.setup()
   const page = new NewMatchScreenPage()
-  page.render({ you, onSubmit: vi.fn() })
+  page.render({ onSubmit: vi.fn() })
   await user.type(await page.opponent(), 'Ana')
 
   await user.click(await page.cancel())

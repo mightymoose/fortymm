@@ -1,7 +1,5 @@
 import { useBlocker } from '@tanstack/react-router'
 import { useState, type FormEvent } from 'react'
-import { initials } from '../initials.ts'
-import { Avatar } from './Avatar.tsx'
 import { BestOfField, type BestOf } from './BestOfField.tsx'
 import { Button } from './Button.tsx'
 import { ButtonLink } from './ButtonLink.tsx'
@@ -28,15 +26,14 @@ const defaultRated = false
 const opponentRequired = 'Enter your opponent’s name.'
 
 // The new match screen, at /matches/new, after fortymm-real's match setup:
-// the title, then one card. In it: who you are (this device's user, `you`,
-// when there is one), the opponent, the match's length and whether it is
-// rated (side by side where the card is wide enough), then a summary of
-// the match with Cancel and Start match.
+// the title, then one card. In it: the opponent's name, the match's length
+// and whether it is rated (side by side where the card is wide enough), then
+// a summary of the match ("Ready: You vs Ana") with Cancel and Start match.
 //
 // Start match hands what was entered to `onSubmit`. The opponent's name is
 // required: without one, it shows the field's error, moves focus to it and
 // calls nothing; once a submit has failed, the error follows what is typed.
-// Rated needs an opponent: with no name it is off and unavailable, and
+// Rated needs an opponent: with no name it is off and disabled, and
 // clearing the name turns it off.
 //
 // Leaving a changed form (a name typed, the length or rated changed) asks
@@ -44,10 +41,8 @@ const opponentRequired = 'Enter your opponent’s name.'
 // browser's back; closing or reloading the tab asks through the browser.
 // It renders in the layout's <main> (AppLayout).
 export function NewMatchScreen({
-  you,
   onSubmit,
 }: {
-  you: { username: string } | null
   onSubmit: (match: NewMatch) => void
 }) {
   const [opponentName, setOpponentName] = useState('')
@@ -107,19 +102,9 @@ export function NewMatchScreen({
         noValidate
         onSubmit={submit}
       >
-        <div className="new-match__you">
-          <Avatar initials={you === null ? '' : initials(you.username)} />
-          <div className="new-match__you-text">
-            <span className="new-match__overline">You</span>
-            {you !== null && (
-              <span className="new-match__you-name">{you.username}</span>
-            )}
-          </div>
-        </div>
-
         <div className="new-match__opponent">
           <Field
-            label="Opponent"
+            label="Opponent’s name"
             help="Their name, as you’d call them."
             error={opponentError}
           >

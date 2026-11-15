@@ -222,7 +222,7 @@ export class NewMatchPage {
     const main = page.getByRole('main')
     this.heading = main.getByRole('heading', { level: 1, name: 'New match' })
     this.form = main.getByRole('form', { name: 'New match' })
-    this.opponent = this.form.getByRole('textbox', { name: 'Opponent' })
+    this.opponent = this.form.getByRole('textbox', { name: 'Opponent’s name' })
     this.startMatch = this.form.getByRole('button', { name: 'Start match' })
   }
 

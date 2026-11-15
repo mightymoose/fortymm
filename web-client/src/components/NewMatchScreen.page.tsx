@@ -18,15 +18,9 @@ export class NewMatchScreenPage {
     return screen.findByRole('form', { name: 'New match' })
   }
 
-  // The card's "You": its text ("You", then the username when there is one).
-  async you() {
-    const form = await this.form()
-    return within(form).getByText('You', { exact: true }).parentElement!
-  }
-
   // The opponent's name.
   opponent() {
-    return screen.findByRole('textbox', { name: 'Opponent' })
+    return screen.findByRole('textbox', { name: 'Opponent’s name' })
   }
 
   // The match's length: the radio "Best of `n`" (1, 3, 5 or 7).
@@ -40,11 +34,6 @@ export class NewMatchScreenPage {
   // The rated match switch.
   rated() {
     return screen.findByRole('switch', { name: 'Rated match' })
-  }
-
-  // "No opponent · unavailable" beside rated's label, or null.
-  ratedUnavailable() {
-    return screen.queryByText('No opponent · unavailable')
   }
 
   // The summary's first line ("Ready: You vs Ana").

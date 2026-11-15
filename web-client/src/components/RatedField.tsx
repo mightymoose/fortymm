@@ -5,9 +5,10 @@ import './RatedField.css'
 // Whether the match counts toward both players' ratings (fortymm-real's
 // RatedField), on the design system's Switch, named "Rated match". Only a
 // match with an opponent can be rated: until the form has one (`ratable`),
-// the switch is off and disabled, the label says "No opponent ·
-// unavailable", and the line under it says what to do. Beside the switch,
-// what the choice means, which the switch is described by.
+// the switch is off and disabled (announced as unavailable), and the line
+// under it, which describes it, says what to do. Otherwise that line says
+// what the choice means. Its visible label, "Rated match", is the switch's
+// name, so assistive technology skips the label itself.
 //
 // fortymm-real's hint to a guest to add an email once rated is on isn't
 // here: this app has no emails.
@@ -30,14 +31,9 @@ export function RatedField({
 
   return (
     <div className="rated-field">
-      <div className="rated-field__label">
-        <span aria-hidden="true">Rated match</span>
-        {!ratable && (
-          <span className="rated-field__unavailable">
-            No opponent · unavailable
-          </span>
-        )}
-      </div>
+      <span className="rated-field__label" aria-hidden="true">
+        Rated match
+      </span>
       <div className="rated-field__box" data-on={on || undefined}>
         <Switch
           aria-label="Rated match"
