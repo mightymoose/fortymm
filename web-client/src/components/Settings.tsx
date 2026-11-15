@@ -1,5 +1,5 @@
 import { useUser } from '../stores/user.ts'
-import { SettingsScreen, SettingsScreenPending } from './SettingsScreen.tsx'
+import { SettingsScreen, SettingsScreenPending } from './settings/SettingsScreen.tsx'
 
 // /settings, connected to the user store (src/stores/user.ts), which reads
 // this device's user again on every change to it, so the screen shows each

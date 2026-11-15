@@ -185,7 +185,7 @@ test.describe('at a phone width', () => {
 })
 
 // This device's user's mark, at the top bar's right end: the initials on
-// phones, the initials and the username wider (src/components/UserMark.tsx). The app's own first launch stores the user;
+// phones, the initials and the username wider (src/components/app-layout/UserMark.tsx). The app's own first launch stores the user;
 // the "harness" build's storage page gives the username the core makes for
 // this device's key. Where the mark and the brand are is measured from their
 // boxes, never from a style.

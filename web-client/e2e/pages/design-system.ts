@@ -8,7 +8,7 @@ import { expect, test as base } from './test.ts'
 //
 // The viewport is the board's width: its 1280px less its 48px margins, plus
 // the app's own 16px margins on each side, plus the layout's sidebar,
-// expanded as it starts (240px, Sidebar.css), so each section is laid out at
+// expanded as it starts (240px, app-layout/Sidebar.css), so each section is laid out at
 // the board's width and a target here is the size of the same target there.
 export function designSystemScreenshots(tab: DesignSystemTab) {
   base.use({ viewport: { width: 1216 + 240, height: 900 } })

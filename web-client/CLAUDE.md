@@ -6,7 +6,7 @@ The repository's `CLAUDE.md` covers the tasks and layout; `README.md` here has t
 
 "I'd prefer the route files to just be cheap wiring to a component in components/ for the web client and handling only routing specific concerns, this makes the components easier to test." (the user, 2026-11-14)
 
-Each screen is one component in `src/components/`, named for the screen (`HealthScreen.tsx`, its CSS beside it if it has any). It takes everything it shows as props and holds the screen's markup, state and display logic. A route file in `src/routes/` holds only what the router needs to reach it.
+Each screen is one component under `src/components/` (where: "Component files follow the component tree", below), named for the screen (`HealthScreen.tsx`, its CSS beside it if it has any). It takes everything it shows as props and holds the screen's markup, state and display logic. A route file in `src/routes/` holds only what the router needs to reach it.
 
 A route file may contain only:
 
@@ -29,10 +29,21 @@ Where neither list fits, these are decided:
 
 How each part is tested, at the narrowest seam:
 
-- **A screen's behavior**: `src/components/<Name>Screen.test.tsx`, with the component rendered alone, given the props each state takes, through its page object `src/components/<Name>Screen.page.tsx`. The page object's `render(props)` calls `renderScreen(<HealthScreen ... />)` (`src/test/render-screen.tsx`), which gives the screen a bare router of its own (`<Link>` and `<Await>` need one) and none of the app's routes. Its other methods only find elements, by role and accessible name, and work wherever the screen is mounted. Every state the screen can show is a case here; nothing is faked, since a screen fetches nothing.
+- **A screen's behavior**: `<Name>Screen.test.tsx` beside the screen (`src/components/HealthScreen.test.tsx`), with the component rendered alone, given the props each state takes, through its page object beside it, `<Name>Screen.page.tsx`. The page object's `render(props)` calls `renderScreen(<HealthScreen ... />)` (`src/test/render-screen.tsx`), which gives the screen a bare router of its own (`<Link>` and `<Await>` need one) and none of the app's routes. Its other methods only find elements, by role and accessible name, and work wherever the screen is mounted. Every state the screen can show is a case here; nothing is faked, since a screen fetches nothing.
 - **A loading function, or an api call**: its own test beside it (`src/core/check.test.ts`, `src/api/health.test.ts`), with only what it reads replaced at a contract (MSW for the api, `vi.mock('./storage.ts')` for storage).
 - **A store**: `src/stores/<name>.test.ts`, every case of its logic through its actions, on a fresh store (`create<Name>Store()`), with `storage.ts` replaced and changes announced with the real `announce` (`src/stores/user.test.ts`). **A connected component**: `src/components/<Name>.test.tsx`, once, against the real store, with `storage.ts` replaced: that it shows what the store reads after a change (`Settings.test.tsx`).
 - **A route**: `src/routes/<route>.test.tsx`, through `renderRoute(path)` (the app's real router and route tree), proves only the wiring, with the screen's page object's finders: the path shows its screen with the loader's data (one case), its pending, error or not-found component, and how params, search and redirects behave. Never a screen's states again.
+
+## Component files follow the component tree
+
+"I want it to be that, for CSS and really anything else, the directory structure for the components at least follows the component structure. If I have a new match component and it has a length selector, we should have something like components/NewMatch.tsx and then components/new-match/NewMatchScreen.tsx and then components/new-match/new-match-screen/RatedField.tsx with the css, tests, page object etc for each of those next to the component" (the user, 2026-11-14)
+
+- A component a route renders (`component`, `pendingComponent`...), or a top-level wrapper around a screen (`NewMatch.tsx`, `Settings.tsx`), is directly in `src/components/`.
+- A component used by one other component is in a folder beside its parent, named for the parent in kebab-case: `NewMatch.tsx` renders `new-match/NewMatchScreen.tsx`, which renders `new-match/new-match-screen/RatedField.tsx`. A folder holds the children of exactly one component, and deeper nesting follows the same rule.
+- A component used by several (the design system's `Button`, `Field`, `Icon`, `Switch`...) is in the folder of the nearest component that contains all its users (`FilterChip`, used by `ControlsTab` and `FilterChips`, is in `controls-tab/`); when its users have no common ancestor, it is directly in `src/components/`. Importing a component's CSS (`TabNav` wears `Tabs.css`) counts as using it.
+- Everything of a component's own sits beside it, with its name: its CSS, its tests (`RatedField.test.tsx`, `Button.test-d.tsx`), its page object (`NewMatchScreen.page.tsx`). A helper module or stylesheet shared by several components (`single-selection.ts`, `choice.css`, `forced-state.ts`) follows the same rule as a shared component, by who imports it.
+- A file goes where its main component goes (the one it is named for); a route may import a sibling export from it: `/settings`'s `pendingComponent` is `SettingsScreenPending`, from `settings/SettingsScreen.tsx`.
+- Placement follows the imports: when a component gains or loses a user, move it (`git mv`) to where the rule now puts it. A test that covers several components (`DesignSystemTabs.test.tsx`, the five tabs) sits with the nearest folder that holds them all.
 
 ## Screenshot tests are for the design system pages only
 
@@ -43,12 +54,12 @@ How each part is tested, at the narrowest seam:
 
 ## The design system's components
 
-The controls in `src/components/` (`Button`, `Field`, `Checkbox`, `Tabs`...; README "The controls") are the design system's, checked against its reference sheet, `../references/design-system/`.
+The controls under `src/components/` (`Button`, `Field`, `Checkbox`, `Tabs`...; README "The controls") are the design system's, checked against its reference sheet, `../references/design-system/`.
 
 - A component is the real element (`<button>`, `<input>` inside its `<label>`, `role="tab"`, `role="switch"`), named the way the design system says, one per file with its CSS beside it. Every colour is a token (mix a token with `color-mix()` rather than copy a value); only sizes the tokens lack are px.
 - Its CSS follows the kit's `fm-*` rule for it in `reference.css`. A change to how one looks changes its screenshots: write them again (`./bin/mise run web-client:e2e -- --update-snapshots`) and look at each beside the same `data-testid` on the board before committing.
 - A state the design system page draws without causing it (hover, focus, pressed) is the `forcedState` prop, rendered as `data-forced-state`, beside the real pseudo-class in the same CSS rule. Nothing else sets it.
-- What a component does is its own test, `src/components/<Name>.test.tsx`, rendered alone, by role and accessible name; how it looks is only ever a screenshot (`e2e/tests/design-system-<tab>.spec.ts`), never a style read in a test.
+- What a component does is its own test, `<Name>.test.tsx` beside it, rendered alone, by role and accessible name; how it looks is only ever a screenshot (`e2e/tests/design-system-<tab>.spec.ts`), never a style read in a test.
 - The design system page (`/design-system`, README "The design system page") has a tab per board of the reference sheet, each a subroute whose route file names one `<Name>Tab` component; `/design-system` redirects to the first. A new target on a board gets the board's `data-testid` in its tab (`ColourTab`, `TypeTab`, `FoundationsTab`, `ControlsTab`, `FeedbackTab`), laid out with `Board.tsx`, and a line in that tab's spec.
 - The page shows a token's value by reading it from the stylesheet (`tokenValue()`, `colourValue()` in `src/theme/token-value.ts`), never by writing it down: the page names tokens, the theme gives values.
 - Navigation that looks like tabs is `TabNav` (router links, `aria-current="page"`), not `Tabs` (a tablist on one page); both wear `Tabs.css`.

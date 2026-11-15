@@ -1,4 +1,4 @@
-import { NewMatchScreen, type NewMatch as Match } from './NewMatchScreen.tsx'
+import { NewMatchScreen, type NewMatch as Match } from './new-match/NewMatchScreen.tsx'
 
 // What starting a match does: nothing yet. The form is UI only; storing the
 // match on this device (a match store's action, then the match's page) comes

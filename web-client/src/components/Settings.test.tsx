@@ -6,7 +6,7 @@ import { loadMe, type LoadUserResult, type User } from '../storage.ts'
 import { userStore } from '../stores/user.ts'
 import { renderScreen } from '../test/render-screen.tsx'
 import { Settings } from './Settings.tsx'
-import { SettingsScreenPage } from './SettingsScreen.page.tsx'
+import { SettingsScreenPage } from './settings/SettingsScreen.page.tsx'
 
 // The settings page connected to the real user store (src/stores/user.ts):
 // it shows whatever the store reads. Only the storage the store reads is
