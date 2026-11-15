@@ -194,6 +194,129 @@ for v in vectors["invalid_hello_inputs"]:
         expected = "the random value is 8 bytes"
     check(got is not None and got == expected, f"invalid hello input {v['name']}: {got}, expected {expected}")
 
+# ---- Making a `player`, a `match` and a `score`, and reading a score ----
+#
+# The made records are signed by the Rust tests' software keys: the vectors
+# hold each body's raw signature.
+
+SCORE_GETTERS = ("scored_match", "slot", "value", "replaces")
+
+
+def hexes(value: object) -> object:
+    if isinstance(value, bytes):
+        return value.hex()
+    if isinstance(value, list):
+        return [hexes(item) for item in value]
+    return value
+
+
+def body_of(v: dict, **replaced: object) -> bytes:
+    """The body a made record's vector describes, with any input replaced."""
+    i = {**v, **replaced}
+    signer, random = unhex(i["signer"]), unhex(i["random"])
+    if i["kind_name"] == "player":
+        return core.player_body(i["environment"], signer, random, i["clock"])
+    if i["kind_name"] == "match":
+        sides = [[unhex(p) for p in side] for side in i["sides"]]
+        return core.match_body(i["environment"], signer, random, sides, unhex(i["terms"]), i["clock"])
+    return core.score_body(
+        i["environment"],
+        signer,
+        random,
+        unhex(i["scored_match"]),
+        i["slot"],
+        unhex(i["value"]),
+        [unhex(r) for r in i["replaces"]],
+        i["clock"],
+    )
+
+
+vector = {v["name"]: v for v in vectors["made_records"]}
+
+# B1. Each body, signed and assembled, verifies and is of its kind. Same bytes
+# as Rust.
+made = {}
+for v in vectors["made_records"]:
+    name = v["name"]
+    body = body_of(v)
+    check(body.hex() == v["body"], f"made {name}: body")
+    record = core.Record.from_parts(body, core.signature_from_raw(unhex(v["raw_signature"])))
+    check(record.to_bytes().hex() == v["record"], f"made {name}: record")
+    check(record.verify(), f"made {name}: verifies")
+    check(record.kind_name == v["kind_name"], f"made {name}: kind is {record.kind_name}")
+    check(record.id().hex() == v["id"] == sha(body), f"made {name}: id")
+    made[name] = record
+# The clock is optional, as hello_body's is.
+p = vector["player"]
+check(
+    core.player_body(p["environment"], unhex(p["signer"]), unhex(p["random"])).hex() == p["body"],
+    "made player: no clock given",
+)
+
+# B2. A made match gives back its sides and terms through the existing
+# getters, and a made player's extra player can be a side.
+v = vector["match"]
+check(hexes(made["match"].sides) == v["sides"], "made match: sides")
+check(hexes(made["match"].terms) == v["terms"], "made match: terms")
+check(hexes(made["match"].match_id()) == v["id"], "made match: its id is the record id")
+players = [p for side in made["match"].sides for p in side]
+for name in ("player", "player-with-clock"):
+    extra = made[name].extra_player_id()
+    check(extra is not None and extra in players, f"made match: {name}'s extra player is a side")
+check(
+    made["player"].extra_player_id() != made["player-with-clock"].extra_player_id(),
+    "made players: two random values, two players",
+)
+
+# B3. A made score gives back its match, slot, value and replaced ids; those
+# getters give nothing for another kind.
+for v in vectors["made_records"]:
+    if v["kind_name"] != "score":
+        continue
+    name, record = v["name"], made[v["name"]]
+    check(hexes(record.scored_match) == v["scored_match"], f"made {name}: scored_match")
+    check(record.scored_match == made["match"].match_id(), f"made {name}: is about the made match")
+    check(record.slot == v["slot"], f"made {name}: slot")
+    check(hexes(record.value) == v["value"], f"made {name}: value")
+    check(hexes(record.replaces) == v["replaces"], f"made {name}: replaces")
+    check(record.match_id() is None, f"made {name}: is not a match")
+check(made["score-replacing"].replaces == [made["score"].id()], "made score-replacing: replaces the made score")
+others = [(f"made {v['name']}", made[v["name"]]) for v in vectors["made_records"] if v["kind_name"] != "score"]
+others += [(f"made {v['name']}", core.Record.decode(unhex(v["record"]))) for v in vectors["made_hellos"]]
+for name, record in others:
+    for getter in SCORE_GETTERS:
+        check(getattr(record, getter) is None, f"{name}: {getter} is None")
+# The same over every record vector: its value, or None when it has none.
+for v in vectors["records"]:
+    record = core.Record.decode(unhex(v["record"]))
+    for getter in SCORE_GETTERS:
+        got = hexes(getattr(record, getter))
+        check(got == v.get(getter), f"{v['name']}: {getter} gave {got}")
+
+# B5. A key or a random value of the wrong length raises Malformed, with the
+# reason hello_body gives.
+for bad in vectors["invalid_hello_inputs"]:
+    expected = refusal(lambda: core.hello_body(bad["environment"], unhex(bad["signer"]), unhex(bad["random"])))
+    for name in ("player", "match", "score"):
+        got = refusal(lambda: body_of(vector[name], signer=bad["signer"], random=bad["random"]))
+        check(
+            got is not None and got == expected,
+            f"invalid {name} input {bad['name']}: {got}, expected {expected}",
+        )
+# The other inputs are checked too: ids are 32 bytes, and a match has two
+# sides with a player each.
+ID = "00" * 32
+for what, name, replaced in [
+    ("a player id of 31 bytes", "match", {"sides": [[ID[2:]], [ID]]}),
+    ("a player id of 33 bytes", "match", {"sides": [[ID], [ID, ID + "00"]]}),
+    ("an empty side", "match", {"sides": [[ID], []]}),
+    ("one side", "match", {"sides": [[ID]]}),
+    ("three sides", "match", {"sides": [[ID], [ID], [ID]]}),
+    ("a match id of 31 bytes", "score", {"scored_match": ID[2:]}),
+    ("a replaced id of 33 bytes", "score", {"replaces": [ID + "00"]}),
+]:
+    check(refusal(lambda: body_of(vector[name], **replaced)) is not None, f"{name} body with {what}: refused")
+
 by_name = {}
 for v in vectors["parcels"]:
     by_name[v["name"]] = v

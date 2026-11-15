@@ -534,3 +534,157 @@ pub unsafe extern "C" fn fmm_score_value_read(pointer: *const u8, length: usize)
         None => fail(NOT_APPLICABLE, "not a score value this library reads"),
     }
 }
+
+// ---- Making a `player`, a `match` and a `score`, and reading a score ----
+//
+// Each body is made as a `hello`'s is and assembled with
+// `fmm_record_assemble`. The input starts as `fmm_hello_body`'s does: the
+// environment (8 bytes, big-endian), whether there is a clock reading (1
+// byte, 1 or 0), the clock reading (8 bytes, big-endian), then items laid out
+// as `fmm_parcel_records` writes them. The first two items are the signer's
+// 33-byte compressed key and the 8-byte random value; the kind's own items
+// follow. A list of ids is one item, itself laid out the same way: one
+// 32-byte item per id.
+
+/// Read the shared inputs, build the draft from the kind's own items, and
+/// output its body. A bad key or random value fails with the same reason as
+/// in `fmm_hello_body`.
+fn make_body(bytes: &[u8], draft: impl FnOnce(&[&[u8]]) -> Result<Draft, String>) -> i32 {
+    let Some((environment, rest)) = bytes.split_first_chunk::<8>() else {
+        return fail(INVALID, "no environment");
+    };
+    let Some((&[has_clock], rest)) = rest.split_first_chunk::<1>() else {
+        return fail(INVALID, "no clock flag");
+    };
+    let Some((clock, rest)) = rest.split_first_chunk::<8>() else {
+        return fail(INVALID, "no clock reading");
+    };
+    let Some(items) = unframe(rest) else {
+        return fail(INVALID, "truncated inputs");
+    };
+    let Some(([key, random], fields)) = items.split_first_chunk::<2>() else {
+        return fail(INVALID, "expected a key and a random value");
+    };
+    let Some(signer) = PublicKey::from_sec1_compressed(key) else {
+        return fail(INVALID, "not a compressed P-256 key");
+    };
+    let Ok(random) = <[u8; 8]>::try_from(*random) else {
+        return fail(INVALID, "the random value is 8 bytes");
+    };
+    let clock = match has_clock {
+        0 => None,
+        1 => Some(ClockReading::from_unix_millis(u64::from_be_bytes(*clock))),
+        _ => return fail(INVALID, "the clock flag is 0 or 1"),
+    };
+    let environment = Environment(u64::from_be_bytes(*environment));
+    let draft = match draft(fields) {
+        Ok(draft) => draft,
+        Err(reason) => return fail(INVALID, reason),
+    };
+    match draft.body(environment, signer, random, clock) {
+        Ok(body) => done(body),
+        Err(error) => fail(INVALID, error),
+    }
+}
+
+/// One 32-byte id.
+fn id_of(bytes: &[u8], what: &str) -> Result<[u8; 32], String> {
+    <[u8; 32]>::try_from(bytes).map_err(|_| format!("{what} is 32 bytes"))
+}
+
+/// A list of 32-byte ids, one item each.
+fn ids_of(bytes: &[u8], what: &str) -> Result<Vec<[u8; 32]>, String> {
+    let items = unframe(bytes).ok_or_else(|| format!("truncated list: {what}"))?;
+    items.into_iter().map(|id| id_of(id, what)).collect()
+}
+
+/// The body of a `player`, to sign. It has no items of its own.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_player_body(pointer: *const u8, length: usize) -> i32 {
+    make_body(unsafe { input(pointer, length) }, |fields| match fields {
+        [] => Ok(Draft::player()),
+        _ => Err("a player has no fields".into()),
+    })
+}
+
+/// The body of a `match`, to sign. Its own items: the terms, then each of
+/// the two sides as a list of player ids.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_match_body(pointer: *const u8, length: usize) -> i32 {
+    make_body(unsafe { input(pointer, length) }, |fields| {
+        let [terms, first, second] = fields else {
+            return Err("expected the terms and two sides".into());
+        };
+        let side = |bytes: &[u8]| -> Result<Vec<PlayerId>, String> {
+            let ids = ids_of(bytes, "a player id")?;
+            Ok(ids.into_iter().map(PlayerId::from_bytes).collect())
+        };
+        Draft::match_([side(first)?, side(second)?], terms.to_vec()).map_err(|e| e.to_string())
+    })
+}
+
+/// The body of a `score`, to sign. Its own items: the 32-byte match id, the
+/// slot (8 bytes, big-endian), the value, and the list of the record ids it
+/// replaces.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_score_body(pointer: *const u8, length: usize) -> i32 {
+    make_body(unsafe { input(pointer, length) }, |fields| {
+        let [match_id, slot, value, replaces] = fields else {
+            return Err("expected a match id, a slot, a value and the replaced ids".into());
+        };
+        let match_id = fortymm_core::MatchId::from_bytes(id_of(match_id, "a match id")?);
+        let slot = <[u8; 8]>::try_from(*slot).map_err(|_| "the slot is 8 bytes".to_string())?;
+        let replaces = ids_of(replaces, "a record id")?;
+        Ok(Draft::score(
+            match_id,
+            u64::from_be_bytes(slot),
+            value.to_vec(),
+            replaces
+                .into_iter()
+                .map(fortymm_core::RecordId::from_bytes)
+                .collect(),
+        ))
+    })
+}
+
+/// The record's kind by name, as UTF-8. Status 2 for a kind number the
+/// design does not name.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_record_kind(pointer: *const u8, length: usize) -> i32 {
+    getter(unsafe { input(pointer, length) }, |r| {
+        r.kind().map(|kind| kind.name().as_bytes().to_vec())
+    })
+}
+
+/// The match a `score` record is about.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_record_scored_match(pointer: *const u8, length: usize) -> i32 {
+    getter(unsafe { input(pointer, length) }, |r| {
+        r.scored_match().map(|id| id.as_bytes().to_vec())
+    })
+}
+
+/// The slot of a `score` record: 8 bytes, big-endian.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_record_slot(pointer: *const u8, length: usize) -> i32 {
+    getter(unsafe { input(pointer, length) }, |r| {
+        r.slot().map(|slot| slot.to_be_bytes().to_vec())
+    })
+}
+
+/// The value of a `score` record.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_record_value(pointer: *const u8, length: usize) -> i32 {
+    getter(unsafe { input(pointer, length) }, |r| {
+        r.value().map(<[u8]>::to_vec)
+    })
+}
+
+/// The ids a `score` record replaces: 32 bytes each, one after another.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fmm_record_replaces(pointer: *const u8, length: usize) -> i32 {
+    getter(unsafe { input(pointer, length) }, |r| {
+        r.replaces()
+            .map(|ids| ids.iter().flat_map(|id| *id.as_bytes()).collect())
+    })
+}

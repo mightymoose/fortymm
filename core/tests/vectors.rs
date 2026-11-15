@@ -11,13 +11,14 @@
 
 mod common;
 
-use common::{CRYPTO, ENV, fixtures, hex, high_s, random, raw_body};
+use common::{CRYPTO, ENV, TERMS, TestKey, fixtures, hex, high_s, random, raw_body};
 use fortymm_core::cbor::Value;
 use fortymm_core::ids::label;
 use fortymm_core::layout::username::MAX_SUFFIX_LENGTH;
 use fortymm_core::parcel::checksum;
 use fortymm_core::{
-    ClockReading, Content, Draft, Environment, Kind, Parcel, PlayerId, PublicKey, Record, Signature,
+    ClockReading, Content, Draft, Environment, Kind, MatchId, Parcel, PlayerId, PublicKey, Record,
+    RecordId, Signature,
 };
 use fortymm_core::{ScoreValue, Terms};
 use serde_json::{Value as Json, json};
@@ -74,6 +75,20 @@ fn record_json(name: &str, record: &Record) -> Json {
         object.insert("subject".into(), json!(hex(&subject.to_bytes())));
         object.insert("outcome_id".into(), json!(hex(outcome.as_bytes())));
         object.insert("tag".into(), json!(hex(outcome.tag().as_bytes())));
+    }
+    // A score's getters, present together and only for a `score`.
+    if let Some(id) = record.scored_match() {
+        object.insert("scored_match".into(), json!(hex(id.as_bytes())));
+    }
+    if let Some(slot) = record.slot() {
+        object.insert("slot".into(), json!(slot));
+    }
+    if let Some(value) = record.value() {
+        object.insert("value".into(), json!(hex(value)));
+    }
+    if let Some(replaces) = record.replaces() {
+        let replaces: Vec<String> = replaces.iter().map(|id| hex(id.as_bytes())).collect();
+        object.insert("replaces".into(), json!(replaces));
     }
     entry
 }
@@ -492,6 +507,186 @@ fn add_layout_vectors(file: &mut Json) {
     );
 }
 
+/// One made record: its inputs, the body, the platform's raw signature, the
+/// record and its id. The inputs after the header are under the getters'
+/// names: `sides` and `terms` for a `match`; `scored_match`, `slot`, `value`
+/// and `replaces` for a `score`.
+fn made_record(
+    name: &str,
+    key: &TestKey,
+    environment: Environment,
+    draft: &Draft,
+    random: [u8; 8],
+    clock: Option<u64>,
+) -> (Json, Record) {
+    let body = draft
+        .body(
+            environment,
+            key.public(),
+            random,
+            clock.map(ClockReading::from_unix_millis),
+        )
+        .unwrap();
+    let raw = key.sign_raw(&body);
+    let signature = Signature::from_raw(&raw).unwrap();
+    let record = Record::assemble_verified(body.clone(), signature, &CRYPTO).unwrap();
+    let mut entry = json!({
+        "name": name,
+        "kind_name": draft.kind().name(),
+        "environment": environment.0,
+        "signer": hex(key.public().as_bytes()),
+        "random": hex(&random),
+        "clock": clock,
+        "body": hex(&body),
+        "raw_signature": hex(&raw),
+        "record": hex(&record.to_bytes()),
+        "id": hex(record.id(&CRYPTO).as_bytes()),
+    });
+    let object = entry.as_object_mut().unwrap();
+    let ids = |ids: &[&[u8; 32]]| ids.iter().map(|id| hex(*id)).collect::<Vec<_>>();
+    match record.content() {
+        Content::Match { sides, terms } => {
+            let sides: Vec<Vec<String>> = sides
+                .iter()
+                .map(|side| ids(&side.iter().map(PlayerId::as_bytes).collect::<Vec<_>>()))
+                .collect();
+            object.insert("sides".into(), json!(sides));
+            object.insert("terms".into(), json!(hex(terms)));
+        }
+        Content::Score {
+            match_id,
+            slot,
+            value,
+            replaces,
+        } => {
+            object.insert("scored_match".into(), json!(hex(match_id.as_bytes())));
+            object.insert("slot".into(), json!(slot));
+            object.insert("value".into(), json!(hex(value)));
+            let replaces = ids(&replaces.iter().map(RecordId::as_bytes).collect::<Vec<_>>());
+            object.insert("replaces".into(), json!(replaces));
+        }
+        _ => {}
+    }
+    (entry, record)
+}
+
+/// A `player`, a `match` and a `score` made the way a platform makes them
+/// (see `made_hellos`): body from the inputs, raw signature converted, record
+/// assembled and verified. Each build makes the same bytes from these inputs.
+/// The match names both made players as sides, and the scores are about the
+/// made match.
+fn made_records() -> Vec<Json> {
+    let fixtures = fixtures();
+    let [alice, bob, ..] = &fixtures.keys;
+    let clock = Some(1_794_355_200_000u64);
+    let mut made = Vec::new();
+    let mut make = |name, key, environment, draft: Draft, random, clock| {
+        let (entry, record) = made_record(name, key, environment, &draft, random, clock);
+        made.push(entry);
+        record
+    };
+
+    // Two players from one key: only the random value tells them apart.
+    let first = make("player", alice, ENV, Draft::player(), random(50), None);
+    let second = make(
+        "player-with-clock",
+        alice,
+        ENV,
+        Draft::player(),
+        random(51),
+        clock,
+    );
+    let extra = |record: &Record| record.extra_player_id(&CRYPTO).unwrap();
+    make(
+        "player-production",
+        bob,
+        Environment::PRODUCTION,
+        Draft::player(),
+        random(50),
+        None,
+    );
+
+    let sides = [
+        vec![alice.own_player(), extra(&first)],
+        vec![bob.own_player(), extra(&second)],
+    ];
+    let match_ = make(
+        "match",
+        alice,
+        ENV,
+        Draft::match_(sides, TERMS.to_vec()).unwrap(),
+        random(52),
+        clock,
+    );
+    let match_id = match_.match_id(&CRYPTO).unwrap();
+
+    let score = make(
+        "score",
+        bob,
+        ENV,
+        Draft::score(match_id, 1, vec![11, 9], vec![]),
+        random(53),
+        None,
+    );
+    let corrected = make(
+        "score-replacing",
+        alice,
+        ENV,
+        Draft::score(match_id, 1, vec![11, 7], vec![score.id(&CRYPTO)]),
+        random(54),
+        clock,
+    );
+    // The whole match's slot, an empty value, and two replaced ids.
+    make(
+        "score-empty-value-replacing-two",
+        alice,
+        ENV,
+        Draft::score(
+            match_id,
+            0,
+            vec![],
+            vec![score.id(&CRYPTO), corrected.id(&CRYPTO)],
+        ),
+        random(55),
+        None,
+    );
+    made
+}
+
+/// The draft a made record's entry describes, read from the file alone.
+fn draft_of(entry: &Json) -> Draft {
+    let id =
+        |value: &Json| -> [u8; 32] { common::unhex(value.as_str().unwrap()).try_into().unwrap() };
+    let bytes = |key: &str| common::unhex(entry[key].as_str().unwrap());
+    match entry["kind_name"].as_str().unwrap() {
+        "player" => Draft::player(),
+        "match" => {
+            let sides: Vec<Vec<PlayerId>> = entry["sides"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|side| {
+                    let side = side.as_array().unwrap();
+                    side.iter().map(|p| PlayerId::from_bytes(id(p))).collect()
+                })
+                .collect();
+            Draft::match_(sides.try_into().unwrap(), bytes("terms")).unwrap()
+        }
+        "score" => Draft::score(
+            MatchId::from_bytes(id(&entry["scored_match"])),
+            entry["slot"].as_u64().unwrap(),
+            bytes("value"),
+            entry["replaces"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| RecordId::from_bytes(id(r)))
+                .collect(),
+        ),
+        other => panic!("no made record of kind {other}"),
+    }
+}
+
 fn parcel_json(name: &str, parcel: &Parcel) -> Json {
     json!({
         "name": name,
@@ -656,6 +851,7 @@ fn build() -> Json {
         "unverifiable_records": unverifiable_records().into_iter().map(|(name, bytes)| json!({"name": name, "record": hex(&bytes)})).collect::<Vec<_>>(),
         "made_hellos": made_hellos(),
         "invalid_hello_inputs": invalid_hello_inputs(),
+        "made_records": made_records(),
         "parcels": parcels,
         "damaged_parcel_texts": damaged,
         "harmless_parcel_texts": harmless,
@@ -734,6 +930,20 @@ fn vectors_check_from_the_file_alone() {
         assert_eq!(json!(record.repeats_player()), field("repeats_player"));
         assert_eq!(key_hex(record.creator()), field("creator"));
         assert_eq!(key_hex(record.introduced_key()), field("introduced_key"));
+        assert_eq!(
+            json!(record.scored_match().map(|id| hex(id.as_bytes()))),
+            field("scored_match")
+        );
+        assert_eq!(json!(record.slot()), field("slot"));
+        assert_eq!(json!(record.value().map(hex)), field("value"));
+        assert_eq!(
+            json!(
+                record
+                    .replaces()
+                    .map(|ids| { ids.iter().map(|id| hex(id.as_bytes())).collect::<Vec<_>>() })
+            ),
+            field("replaces")
+        );
     }
     for entry in file["usernames"].as_array().unwrap() {
         let player: [u8; 32] = unhex(entry["player_id"].as_str().unwrap())
@@ -792,6 +1002,35 @@ fn vectors_check_from_the_file_alone() {
         let signer = PublicKey::from_sec1_compressed(&unhex(entry["signer"].as_str().unwrap()));
         let random = <[u8; 8]>::try_from(unhex(entry["random"].as_str().unwrap()));
         assert!(signer.is_none() || random.is_err(), "{}", entry["name"]);
+    }
+    for entry in file["made_records"].as_array().unwrap() {
+        let name = &entry["name"];
+        let signer =
+            PublicKey::from_sec1_compressed(&unhex(entry["signer"].as_str().unwrap())).unwrap();
+        let random: [u8; 8] = unhex(entry["random"].as_str().unwrap()).try_into().unwrap();
+        let clock = entry["clock"].as_u64().map(ClockReading::from_unix_millis);
+        let environment = Environment(entry["environment"].as_u64().unwrap());
+        let draft = draft_of(entry);
+        let body = draft.body(environment, signer, random, clock).unwrap();
+        assert_eq!(json!(hex(&body)), entry["body"], "{name}: body");
+        let signature =
+            Signature::from_raw(&unhex(entry["raw_signature"].as_str().unwrap())).unwrap();
+        let record = Record::assemble_verified(body, signature, &CRYPTO).unwrap();
+        assert_eq!(
+            json!(hex(&record.to_bytes())),
+            entry["record"],
+            "{name}: record"
+        );
+        assert_eq!(
+            json!(hex(record.id(&CRYPTO).as_bytes())),
+            entry["id"],
+            "{name}: id"
+        );
+        assert_eq!(
+            json!(record.kind().map(Kind::name)),
+            entry["kind_name"],
+            "{name}: kind"
+        );
     }
     for entry in file["parcels"].as_array().unwrap() {
         for form in ["text", "link"] {

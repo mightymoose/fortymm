@@ -109,6 +109,20 @@ fn random_value_makes_two_records() {
 }
 
 #[test]
+fn two_player_bodies_from_different_random_values_are_two_players() {
+    // A `player` has no fields of its own, so the random value is all that
+    // tells one extra player from the next made by the same key.
+    let fixtures = fixtures();
+    let alice = &fixtures.keys[0];
+    let first = alice.commit(&Draft::player(), [1; 8], None);
+    let second = alice.commit(&Draft::player(), [2; 8], None);
+    assert_ne!(
+        first.extra_player_id(&CRYPTO).unwrap(),
+        second.extra_player_id(&CRYPTO).unwrap()
+    );
+}
+
+#[test]
 fn the_random_value_is_not_part_of_the_subject() {
     let fixtures = fixtures();
     let a = fixtures.get("result-first-side");

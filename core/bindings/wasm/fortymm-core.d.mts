@@ -4,6 +4,29 @@
 
 export class Damaged extends Error {}
 
+// Every kind of record the design names (core/FORMAT.md, section 3), as
+// `kind` gives it.
+export type Kind =
+  | 'hello'
+  | 'player'
+  | 'match'
+  | 'score'
+  | 'result'
+  | 'ruling'
+  | 'close-match'
+  | 'grant'
+  | 'attach-email'
+  | 'join'
+  | 'same-person'
+  | 'name'
+  | 'release'
+  | 'revoke'
+  | 'change-email'
+  | 'close-account'
+  | 'suspend'
+  | 'reinstate'
+  | 'clear-name'
+
 export class Core {
   static load(wasmBytes: BufferSource): Promise<Core>
 
@@ -36,6 +59,27 @@ export class Core {
   // milliseconds since the Unix epoch, or null.
   helloBody(environment: number, publicKey: Uint8Array, random: Uint8Array, clock?: number | null): Uint8Array
   assemble(body: Uint8Array, signature: Uint8Array): Uint8Array
+
+  // Making a `player`, a `match` and a `score`: each body is signed and
+  // assembled as a hello's is. A key, a random value or an id of the wrong
+  // length throws. An id is 32 bytes; a side is one or more player ids;
+  // `terms` and `value` are bytes the core carries and does not read; `slot`
+  // is 0 for the whole match or n for game n.
+  playerBody(environment: number, publicKey: Uint8Array, random: Uint8Array, clock?: number | null): Uint8Array
+  matchBody(environment: number, publicKey: Uint8Array, random: Uint8Array, sides: [Uint8Array[], Uint8Array[]], terms: Uint8Array, clock?: number | null): Uint8Array
+  scoreBody(environment: number, publicKey: Uint8Array, random: Uint8Array, matchId: Uint8Array, slot: number, value: Uint8Array, replaces: Uint8Array[], clock?: number | null): Uint8Array
+
+  // The record's kind by name; null for a kind number the design does not
+  // name.
+  kind(record: Uint8Array): Kind | null
+
+  // What a `score` record says: the match it is about (`matchId` is a
+  // `match` record's own id), its slot, its value and the ids of the `score`
+  // records it replaces. Null for a record of any other kind.
+  scoredMatch(record: Uint8Array): Uint8Array | null
+  slot(record: Uint8Array): number | null
+  value(record: Uint8Array): Uint8Array | null
+  replaces(record: Uint8Array): Uint8Array[] | null
 
   // Keys: the 33 bytes a record stores.
   accountId(publicKey: Uint8Array): Uint8Array
