@@ -1,0 +1,64 @@
+/* The games, after fortymm-real's per-game grid (.md-games) on the theme's
+   tokens: a card (bg-group, a border-subtle edge) holding a table whose
+   points are in the number font, the game's winner's points in fg-1 and the
+   loser's in fg-3. Four narrow columns, so it fits a 320px phone without
+   scrolling; long names wrap. */
+.game-scores {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  background: var(--bg-group);
+  padding: var(--s-4);
+}
+.game-scores__heading {
+  margin: 0 0 var(--s-3);
+  font: 600 var(--text-xs) / 1 var(--font-num);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.game-scores__none {
+  margin: 0;
+  color: var(--fg-3);
+}
+.game-scores__table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+.game-scores__table th,
+.game-scores__table td {
+  padding: var(--s-3) var(--s-2);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.game-scores__table :is(th, td):first-child {
+  padding-left: 0;
+  text-align: left;
+}
+.game-scores__table :is(th, td):last-child {
+  padding-right: 0;
+  text-align: right;
+}
+.game-scores__table thead th {
+  font: 600 var(--text-xs) / var(--lh-snug) var(--font-ui);
+  color: var(--fg-3);
+}
+.game-scores__table tbody tr {
+  border-top: 1px solid var(--border-subtle);
+}
+.game-scores__table tbody th {
+  font: 600 var(--text-sm) / var(--lh-snug) var(--font-ui);
+  color: var(--fg-2);
+}
+.game-scores__table td {
+  font: 700 var(--text-lg) / 1 var(--font-num);
+  font-variant-numeric: tabular-nums;
+  color: var(--loser);
+}
+.game-scores__table td.game-scores__won {
+  color: var(--winner);
+}
+.game-scores__table td.game-scores__winner {
+  font: 600 var(--text-sm) / var(--lh-snug) var(--font-ui);
+  color: var(--fg-2);
+}
