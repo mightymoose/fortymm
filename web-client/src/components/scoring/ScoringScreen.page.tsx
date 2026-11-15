@@ -1,8 +1,7 @@
-import { useLocation, useNavigate } from '@tanstack/react-router'
 import { screen, within } from '@testing-library/react'
-import { useState } from 'react'
 import { renderScreen } from '../../test/render-screen.tsx'
 import type { BestOf, Score } from '../../scoring/scoring.ts'
+import { Match } from './ScoringScreen.match.tsx'
 import { ScoringScreen, type ScoringScreenProps } from './ScoringScreen.tsx'
 
 // The scoring screen (ScoringScreen.tsx): how to render it alone, and what a
@@ -12,11 +11,8 @@ export class ScoringScreenPage {
     return renderScreen(<ScoringScreen {...props} />, { path: '/scoring' })
   }
 
-  // The screen with a caller around it, for a journey across games: the
-  // caller keeps the games saved, opens game n at `#game-n` (where a
-  // scoreline cell links), and after a save opens the next game to score,
-  // past the screen's leave guard. A stand-in for the routes and the match
-  // store, which come later; the screen is the same.
+  // The screen with a stand-in caller around it (ScoringScreen.match.tsx),
+  // for a journey across games.
   renderMatch(match: { opponentName: string; bestOf: BestOf; games: Score[] }) {
     return renderScreen(<Match {...match} />, { path: '/scoring' })
   }
@@ -110,32 +106,3 @@ export class ScoringScreenPage {
   }
 }
 
-function Match({
-  opponentName,
-  bestOf,
-  games: saved,
-}: {
-  opponentName: string
-  bestOf: BestOf
-  games: Score[]
-}) {
-  const [games, setGames] = useState<readonly Score[]>(saved)
-  const hash = useLocation({ select: (location) => location.hash })
-  const navigate = useNavigate()
-  const game = Number(/^game-(\d+)$/.exec(hash)?.[1] ?? games.length + 1)
-  return (
-    <ScoringScreen
-      opponentName={opponentName}
-      bestOf={bestOf}
-      games={games}
-      game={game}
-      gameLink={(n) => ({ to: '/', hash: `game-${n}` })}
-      onSave={(n, score) => {
-        const next = n <= games.length ? games.with(n - 1, score) : [...games, score]
-        setGames(next)
-        void navigate({ to: '/', hash: `game-${next.length + 1}`, ignoreBlocker: true })
-      }}
-      onClear={(n) => setGames(games.slice(0, n - 1))}
-    />
-  )
-}
