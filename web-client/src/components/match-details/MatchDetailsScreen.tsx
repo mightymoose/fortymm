@@ -4,6 +4,7 @@ import { gamesWon, isDecided, nextGame } from '../../scoring/scoring.ts'
 import type { MatchState } from '../../stores/match.ts'
 import { Avatar } from '../Avatar.tsx'
 import { buttonClassName } from '../button-class.ts'
+import { opponentInitials } from '../opponent.ts'
 import { GameScores } from './match-details-screen/GameScores.tsx'
 import '../Button.css'
 import './MatchDetailsScreen.css'
@@ -12,15 +13,6 @@ import './MatchDetailsScreen.css'
 // game `game`'s scoring screen. The caller gives them, so the screen knows
 // nothing of the route that shows it (as the scoring screen's GameLink).
 export type ScoreLink = (game: number) => LinkOptions
-
-function initials(name: string) {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((word) => word[0].toUpperCase())
-    .join('')
-}
 
 // The match details screen, at /matches/<id>, after fortymm-real's match
 // page: a link back to the matches, the title ("You vs Ana") with, while the
@@ -110,7 +102,7 @@ export function MatchDetailsScreen({
           <p
             className={`match-details__player match-details__player--opponent${winner === 'opponent' ? ' match-details__player--won' : ''}`}
           >
-            <Avatar initials={initials(name)} />
+            <Avatar initials={opponentInitials(name)} />
             <span className="match-details__name">{name}</span>
           </p>
         </div>
