@@ -1,5 +1,5 @@
 import { screen, within } from '@testing-library/react'
-import { renderScreen } from '../test/render-screen.tsx'
+import { renderScreen } from '../../test/render-screen.tsx'
 import { MatchDetailsScreen } from './MatchDetailsScreen.tsx'
 
 // The match details screen (MatchDetailsScreen.tsx): how to render it alone,
@@ -8,7 +8,7 @@ import { MatchDetailsScreen } from './MatchDetailsScreen.tsx'
 export class MatchDetailsScreenPage {
   render(props: Parameters<typeof MatchDetailsScreen>[0]) {
     return renderScreen(<MatchDetailsScreen {...props} />, {
-      path: '/matches/sample-1',
+      path: '/matches/m-1',
     })
   }
 

@@ -1,37 +1,17 @@
-import { Link } from '@tanstack/react-router'
+import { Link, type LinkOptions } from '@tanstack/react-router'
 import { useId } from 'react'
-import { Avatar } from './Avatar.tsx'
-import { buttonClassName } from './button-class.ts'
+import { gamesWon, isDecided, nextGame } from '../../scoring/scoring.ts'
+import type { MatchState } from '../../stores/match.ts'
+import { Avatar } from '../Avatar.tsx'
+import { buttonClassName } from '../button-class.ts'
 import { GameScores } from './match-details-screen/GameScores.tsx'
-import './Button.css'
+import '../Button.css'
 import './MatchDetailsScreen.css'
 
-// One saved game's score: this device's player's points first, then the
-// opponent's.
-export type GameScore = { you: number; opponent: number }
-
-// What the match details screen shows: one match between this device's
-// player ("You") and one opponent, its format, whether it is rated, and its
-// saved games in the order they were played.
-export type MatchDetails = {
-  opponentName: string
-  format: { bestOf: number; points: number }
-  rated: boolean
-  games: GameScore[]
-}
-
-// Who won what, from the games alone: a game goes to whoever has more
-// points, and the match is over once one side has won more than half of
-// best of N. This is the screen's own reading of the props, not the scoring
-// rules (no deuce, no validation): the games it is given are taken as saved.
-function tally({ format, games }: MatchDetails) {
-  const you = games.filter((game) => game.you > game.opponent).length
-  const opponent = games.filter((game) => game.opponent > game.you).length
-  const toWin = Math.ceil(format.bestOf / 2)
-  const winner =
-    you >= toWin ? 'you' : opponent >= toWin ? 'opponent' : undefined
-  return { you, opponent, winner, nextGame: games.length + 1 } as const
-}
+// Where the Score button links: the options of the router's <Link> that open
+// game `game`'s scoring screen. The caller gives them, so the screen knows
+// nothing of the route that shows it (as the scoring screen's GameLink).
+export type ScoreLink = (game: number) => LinkOptions
 
 function initials(name: string) {
   return name
@@ -43,26 +23,31 @@ function initials(name: string) {
 }
 
 // The match details screen, at /matches/<id>, after fortymm-real's match
-// page: a link back to the matches, the title ("You vs Ana") with, while
-// the match goes on and the scoring screen's address is given, a Score
-// button to it; then the scoreboard: the match's state (in progress, with
-// the next game, or the winner), its format, both players and the tally in
-// games; then each saved game's score and who won it.
+// page: a link back to the matches, the title ("You vs Ana") with, while the
+// match is undecided, a Score button to the next game's scoring screen; then
+// the scoreboard: the match's state (in progress, with the next game, or the
+// winner), its format, both players and the tally in games; then each game
+// up to the last saved one, its score and who won it, or "Not played" for a
+// gap.
 //
-// `scoreLink` is the address of the scoring screen for the next game. With
-// none, or once the match is finished, there is no Score button.
+// Who has won what, and which game is next, are the scoring rules'
+// (src/scoring/scoring.ts): games won wherever they sit, the match decided
+// once a side has won more than half of best of, the next game the lowest
+// empty one. Every score is `[yours, theirs]`.
 // It renders in the layout's <main> (AppLayout).
 export function MatchDetailsScreen({
   match,
   scoreLink,
 }: {
-  match: MatchDetails
-  scoreLink?: string
+  match: MatchState
+  scoreLink: ScoreLink
 }) {
   const stateId = useId()
-  const { you, opponent, winner, nextGame } = tally(match)
-  const name = match.opponentName
-  const finished = winner !== undefined
+  const { opponentName: name, bestOf, rated, games } = match
+  const [you, opponent] = gamesWon(games)
+  const finished = isDecided(games, bestOf)
+  const winner = finished ? (you > opponent ? 'you' : 'opponent') : undefined
+  const next = nextGame(games, bestOf)
   const state = finished
     ? `${winner === 'you' ? 'You' : name} won`
     : 'In progress'
@@ -78,13 +63,13 @@ export function MatchDetailsScreen({
         <h1 className="match-details__title">
           You <span className="match-details__vs">vs</span> {name}
         </h1>
-        {scoreLink !== undefined && !finished && (
-          <a
-            href={scoreLink}
+        {next !== null && (
+          <Link
+            {...scoreLink(next)}
             className={`${buttonClassName({ variant: 'primary', size: 'lg' })} match-details__score`}
           >
             Score
-          </a>
+          </Link>
         )}
       </div>
 
@@ -101,16 +86,14 @@ export function MatchDetailsScreen({
             )}
           </h2>
           <p className="match-details__format">
-            {match.format.bestOf === 1
-              ? 'Single game'
-              : `Best of ${match.format.bestOf}`}
+            {bestOf === 1 ? 'Single game' : `Best of ${bestOf}`}
             {' · '}
-            {match.rated ? (
+            {rated ? (
               <span className="match-details__rated">Rated</span>
             ) : (
               'Unrated'
             )}
-            {!finished && ` · Game ${nextGame} next`}
+            {next !== null && ` · Game ${next} next`}
           </p>
         </div>
 
@@ -133,7 +116,7 @@ export function MatchDetailsScreen({
         </div>
       </section>
 
-      <GameScores opponentName={name} games={match.games} />
+      <GameScores opponentName={name} games={games} />
     </div>
   )
 }

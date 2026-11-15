@@ -62,3 +62,10 @@
   font: 600 var(--text-sm) / var(--lh-snug) var(--font-ui);
   color: var(--fg-2);
 }
+/* A game not played (a gap before a later saved game): muted, both points
+   and who won it. */
+.game-scores__table tr.game-scores__gap td,
+.game-scores__table tr.game-scores__gap td.game-scores__winner {
+  color: var(--fg-3);
+  font-weight: 400;
+}
