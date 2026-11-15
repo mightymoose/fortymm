@@ -1,0 +1,12 @@
+/* A link that looks like a button (Button.css). The theme's link colours
+   (a, a:hover in theme.css) would win over a variant's text colour on
+   hover, which Button.css doesn't restate; these keep each variant's own.
+   Only the variants a link uses: an action that goes somewhere is never
+   destructive. */
+a.button--primary:hover {
+  color: var(--on-accent);
+}
+a.button--secondary:hover,
+a.button--ghost:hover {
+  color: var(--fg-1);
+}
