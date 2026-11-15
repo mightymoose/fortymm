@@ -2,7 +2,9 @@ import { createStore, useStore } from 'zustand'
 import {
   mayClear,
   saveRefusal,
+  withGame,
   type BestOf,
+  type Games,
   type SaveRefusal,
   type Score,
 } from '../scoring/scoring.ts'
@@ -25,8 +27,8 @@ export type MatchState = {
   opponentName: string
   bestOf: BestOf
   rated: boolean
-  // The saved games in game order: games[0] is game 1.
-  games: readonly Score[]
+  // The games, one slot per game number: games[0] is game 1 (scoring.ts).
+  games: Games
 }
 
 // A match as this store holds it.
@@ -65,7 +67,8 @@ export type MatchStore = {
   // Saves `score` as game `game` (1 is the first), a new game or a
   // correction, unless the scoring rules refuse it (saveRefusal).
   setGameScore(matchId: string, game: number, score: Score): Promise<ActionResult>
-  // Clears game `game`, unless it isn't the highest saved game (mayClear).
+  // Clears game `game`, any saved game, leaving its slot empty (a gap when
+  // a later game is saved), unless it isn't saved (mayClear).
   clearGameScore(matchId: string, game: number): Promise<ActionResult>
 }
 
@@ -87,7 +90,7 @@ export function createMatchStore(memory: MatchMemory = matchMemory) {
   // the match again; or answers why not, changing nothing.
   const write = (
     matchId: string,
-    decide: (match: StoredMatch) => Refusal | { games: Score[] },
+    decide: (match: StoredMatch) => Refusal | { games: Games },
   ): Promise<ActionResult> =>
     queue(async () => {
       const match = memory.read(matchId)
@@ -118,20 +121,13 @@ export function createMatchStore(memory: MatchMemory = matchMemory) {
       write(matchId, ({ games, bestOf }) => {
         const refusal = saveRefusal(games, bestOf, game, score)
         if (refusal !== null) return refusal
-        const saved: Score = [score[0], score[1]]
-        return { games: game > games.length ? [...games, saved] : games.with(game - 1, saved) }
+        return { games: withGame(games, game, [score[0], score[1]]) }
       }),
     clearGameScore: (matchId, game) =>
       write(matchId, ({ games }) => {
         if (!mayClear(games, game))
-          return {
-            reason: 'not-clearable',
-            message:
-              games.length === 0
-                ? 'No game is saved yet.'
-                : `Only the last saved game, game ${games.length}, can be cleared.`,
-          }
-        return { games: games.slice(0, -1) }
+          return { reason: 'not-clearable', message: `Game ${game} isn’t saved.` }
+        return { games: withGame(games, game, null) }
       }),
   }))
 

@@ -1,4 +1,4 @@
-import type { BestOf, Score } from '../scoring/scoring.ts'
+import type { BestOf, Games } from '../scoring/scoring.ts'
 
 // This tab's matches, in memory: what the match stores (match.ts,
 // matches.ts) read and write until the plan's IndexedDB storage and
@@ -15,8 +15,8 @@ export type StoredMatch = {
   readonly opponentName: string
   readonly bestOf: BestOf
   readonly rated: boolean
-  // The saved games in game order: games[0] is game 1.
-  readonly games: readonly Score[]
+  // The games, one slot per game number: games[0] is game 1 (scoring.ts).
+  readonly games: Games
 }
 
 export type MatchMemory = {
@@ -25,7 +25,7 @@ export type MatchMemory = {
   // The match, or null for an id nobody added.
   read(matchId: string): StoredMatch | null
   // Replaces a kept match's games. An id nobody added is ignored.
-  setGames(matchId: string, games: readonly Score[]): void
+  setGames(matchId: string, games: Games): void
   // Every match, newest first.
   list(): StoredMatch[]
   // Calls listener with the id of each match a write changed, after the

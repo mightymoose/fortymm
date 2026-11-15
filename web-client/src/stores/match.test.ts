@@ -2,7 +2,7 @@ import { act, renderHook } from '@testing-library/react'
 import { useEffect } from 'react'
 import { expect, test, vi } from 'vitest'
 import type { NewMatch } from '../components/new-match/NewMatchScreen.schema.ts'
-import type { Score } from '../scoring/scoring.ts'
+import type { Games, Score } from '../scoring/scoring.ts'
 import { createMatchMemory } from './match-memory.ts'
 import { createMatchStore, matchStore, useMatch } from './match.ts'
 import { createMatchesStore, matchesStore } from './matches.ts'
@@ -15,13 +15,15 @@ function bestOf(length: 1 | 3 | 5 | 7): NewMatch {
   return { opponentName: 'Ana', format: { bestOf: length }, rated: false }
 }
 
-// A fresh match store, and a match in it with these games saved.
-async function matchWith(length: 1 | 3 | 5 | 7, games: Score[] = []) {
+// A fresh match store, and a match in it with these games saved (a null
+// slot left empty), in game order.
+async function matchWith(length: 1 | 3 | 5 | 7, games: Games = []) {
   const memory = createMatchMemory()
   const store = createMatchStore(memory)
   const created = await createMatchesStore(memory).getState().createMatch(bestOf(length))
   if (!created.ok) throw new Error('not created')
   for (const [index, score] of games.entries()) {
+    if (score === null) continue
     expect(await store.getState().setGameScore(created.matchId, index + 1, score)).toEqual({
       ok: true,
     })
@@ -35,7 +37,7 @@ async function gamesOf(store: ReturnType<typeof createMatchStore>, matchId: stri
   return entry.match.games
 }
 
-test('a match is scored, refused out of order, cleared and corrected', async () => {
+test('a match is scored in any order, cleared in the middle and corrected', async () => {
   const memory = createMatchMemory()
   const matches = createMatchesStore(memory)
   const match = createMatchStore(memory)
@@ -48,6 +50,7 @@ test('a match is scored, refused out of order, cleared and corrected', async () 
   const { matchId } = created
   const { setGameScore, clearGameScore, load } = match.getState()
 
+  expect(await setGameScore(matchId, 3, [11, 4])).toEqual({ ok: true })
   expect(await setGameScore(matchId, 1, [11, 7])).toEqual({ ok: true })
   expect(await setGameScore(matchId, 2, [9, 11])).toEqual({ ok: true })
   expect(await load(matchId)).toEqual({
@@ -59,17 +62,13 @@ test('a match is scored, refused out of order, cleared and corrected', async () 
       games: [
         [11, 7],
         [9, 11],
+        [11, 4],
       ],
     },
   })
-  expect(await setGameScore(matchId, 4, [11, 5])).toEqual({
-    ok: false,
-    reason: 'non-contiguous',
-    message: 'Save game 3 before game 4.',
-  })
-  expect(await clearGameScore(matchId, 2)).toEqual({ ok: true })
-  expect(await setGameScore(matchId, 1, [12, 10])).toEqual({ ok: true })
-  expect(await gamesOf(match, matchId)).toEqual([[12, 10]])
+  expect(await clearGameScore(matchId, 1)).toEqual({ ok: true })
+  expect(await setGameScore(matchId, 3, [12, 10])).toEqual({ ok: true })
+  expect(await gamesOf(match, matchId)).toEqual([null, [9, 11], [12, 10]])
 })
 
 test('load of an id nobody created is missing', async () => {
@@ -102,7 +101,7 @@ test('setting a saved game’s score again keeps the last one', async () => {
 
 // Each refusal the rules give: the games saved, the score asked for, and the
 // answer. Nothing changes.
-test.each<{ name: string; length: 1 | 3 | 5 | 7; saved: Score[]; game: number; score: Score; reason: string; message: string }>([
+test.each<{ name: string; length: 1 | 3 | 5 | 7; saved: Games; game: number; score: Score; reason: string; message: string }>([
   {
     name: 'an illegal score',
     length: 5,
@@ -113,25 +112,13 @@ test.each<{ name: string; length: 1 | 3 | 5 | 7; saved: Score[]; game: number; s
     message: 'At 10–10 the game enters deuce — the winner must lead by 2.',
   },
   {
-    name: 'a game after a gap',
-    length: 5,
-    saved: [[11, 7]],
-    game: 3,
-    score: [11, 7],
-    reason: 'non-contiguous',
-    message: 'Save game 2 before game 3.',
-  },
-  {
-    name: 'a game after the decider',
+    name: 'an empty game of a decided match',
     length: 3,
-    saved: [
-      [11, 7],
-      [11, 8],
-    ],
-    game: 3,
+    saved: [[11, 7], null, [11, 8]],
+    game: 2,
     score: [11, 9],
     reason: 'past-decider',
-    message: "The match was already decided at game 2; game 3 can't be played.",
+    message: "The match is already decided; game 2 can't be played.",
   },
   {
     name: 'a game past the best of',
@@ -141,20 +128,6 @@ test.each<{ name: string; length: 1 | 3 | 5 | 7; saved: Score[]; game: number; s
     score: [11, 7],
     reason: 'past-best-of',
     message: "This match is best of 3; game 4 can't exist.",
-  },
-  {
-    name: 'an edit that would decide the match before a later saved game',
-    length: 3,
-    saved: [
-      [11, 7],
-      [7, 11],
-      [11, 9],
-    ],
-    game: 2,
-    score: [11, 7],
-    reason: 'past-decider',
-    message:
-      'The match is already decided at game 2 — clear the games after it before saving this score.',
   },
 ])('$name is refused with the rules’ message, and nothing changes', async (refused) => {
   const { store, matchId } = await matchWith(refused.length, refused.saved)
@@ -168,6 +141,14 @@ test.each<{ name: string; length: 1 | 3 | 5 | 7; saved: Score[]; game: number; s
   expect(await gamesOf(store, matchId)).toEqual(refused.saved)
 })
 
+test('game 3 is saved before game 2, leaving game 2 empty', async () => {
+  const { store, matchId } = await matchWith(5, [[11, 7]])
+
+  expect(await store.getState().setGameScore(matchId, 3, [11, 4])).toEqual({ ok: true })
+
+  expect(await gamesOf(store, matchId)).toEqual([[11, 7], null, [11, 4]])
+})
+
 test('clearGameScore clears the highest saved game', async () => {
   const { store, matchId } = await matchWith(5, [
     [11, 7],
@@ -179,32 +160,40 @@ test('clearGameScore clears the highest saved game', async () => {
   expect(await gamesOf(store, matchId)).toEqual([[11, 7]])
 })
 
-test('clearGameScore refuses a game that isn’t the highest saved, and nothing changes', async () => {
+test('clearGameScore clears the middle game, leaving a gap', async () => {
   const { store, matchId } = await matchWith(5, [
     [11, 7],
     [9, 11],
+    [11, 4],
   ])
 
-  expect(await store.getState().clearGameScore(matchId, 1)).toEqual({
-    ok: false,
-    reason: 'not-clearable',
-    message: 'Only the last saved game, game 2, can be cleared.',
-  })
+  expect(await store.getState().clearGameScore(matchId, 2)).toEqual({ ok: true })
 
-  expect(await gamesOf(store, matchId)).toEqual([
-    [11, 7],
-    [9, 11],
-  ])
+  expect(await gamesOf(store, matchId)).toEqual([[11, 7], null, [11, 4]])
 })
 
-test('clearGameScore refuses when no game is saved', async () => {
-  const { store, matchId } = await matchWith(5)
+test('clearGameScore clears a game of a decided match, which reopens its empty games', async () => {
+  const { store, matchId } = await matchWith(3, [
+    [11, 7],
+    [11, 5],
+  ])
 
-  expect(await store.getState().clearGameScore(matchId, 1)).toEqual({
+  expect(await store.getState().clearGameScore(matchId, 1)).toEqual({ ok: true })
+  expect(await store.getState().setGameScore(matchId, 3, [4, 11])).toEqual({ ok: true })
+
+  expect(await gamesOf(store, matchId)).toEqual([null, [11, 5], [4, 11]])
+})
+
+test('clearGameScore refuses a game that isn’t saved, and nothing changes', async () => {
+  const { store, matchId } = await matchWith(5, [[11, 7], null, [11, 4]])
+
+  expect(await store.getState().clearGameScore(matchId, 2)).toEqual({
     ok: false,
     reason: 'not-clearable',
-    message: 'No game is saved yet.',
+    message: 'Game 2 isn’t saved.',
   })
+
+  expect(await gamesOf(store, matchId)).toEqual([[11, 7], null, [11, 4]])
 })
 
 test('an action on a match nobody created is refused', async () => {
