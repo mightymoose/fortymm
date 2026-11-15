@@ -1,3 +1,4 @@
+import { screen } from '@testing-library/react'
 import { expect, test } from 'vitest'
 import type { Health } from '../api/health.ts'
 import type { CoreCheck } from '../core/check.ts'
@@ -22,6 +23,17 @@ function onItsWay<T>() {
   })
   return { promise, settle }
 }
+
+test('the health screen has no link of its own', async () => {
+  const page = new HealthScreenPage()
+  page.render({
+    health: Promise.resolve({ status: 'healthy' }),
+    core: Promise.resolve(coreLoaded),
+  })
+  await page.healthy()
+
+  expect(screen.queryAllByRole('link')).toEqual([])
+})
 
 test('the health screen says the api is healthy when the answer is healthy', async () => {
   const page = new HealthScreenPage()
