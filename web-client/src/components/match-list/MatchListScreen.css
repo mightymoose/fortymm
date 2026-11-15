@@ -5,7 +5,7 @@
    displayed; wider, every rule below falls back to the table's own value.
    The design system has no list of matches: the table is the data table's
    (.fm-table: header in fg-3 over a border-control rule, rows ruled in
-   border-subtle) on a bg-panel card, the score in figures. */
+   border-subtle) on a bg-panel card. */
 
 /* The heading and, at non-phone widths, New match at the row's end, as on
    the dashboard. */
@@ -47,18 +47,13 @@
 }
 
 /* A match. Wider: a table row, its cells ruled. On phones: a card on
-   bg-panel, the opponent over the format and the state, the score at the
-   right, the whole card the link to the match (at least 44px to tap: far
-   more). */
+   bg-panel, the opponent over the format, the whole card the link to the
+   match (at least 44px to tap: far more). */
 .match-list-screen__table tbody tr {
   display: var(--app-layout-phone-grid, table-row);
   position: relative;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    'opponent games'
-    'format games'
-    'state games';
-  gap: var(--s-1) var(--s-4);
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s-1);
   margin-bottom: var(--s-3);
   padding: var(--s-4);
   border-radius: var(--r-md);
@@ -77,29 +72,9 @@
   border-bottom: 0;
 }
 .match-list-screen__opponent {
-  grid-area: opponent;
   font-weight: 600;
 }
 .match-list-screen__format {
-  grid-area: format;
-}
-.match-list-screen__state {
-  grid-area: state;
-  color: var(--fg-3);
-}
-.match-list-screen__games {
-  grid-area: games;
-  align-self: center;
-  font-family: var(--font-num);
-  font-size: var(--text-md);
-  font-variant-numeric: tabular-nums;
-  color: var(--fg-1);
-  text-align: right;
-  white-space: nowrap;
-}
-.match-list-screen__table th.match-list-screen__games {
-  text-align: right;
-  font: 500 var(--text-sm) var(--font-ui);
   color: var(--fg-3);
 }
 

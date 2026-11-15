@@ -21,6 +21,31 @@ import { StorageHarness } from '../pages/storage.ts'
 // dashboard's button wider than a phone, the bottom bar's on a phone) is
 // the breakpoint's too.
 
+// Keeps a match against each opponent through the new match form, then
+// opens the matches list by the layout's Matches link (the sidebar's, or on
+// a phone the bottom bar's). All in one page load: matches are kept in
+// memory for now, so a reload would lose them.
+async function startMatchesThenOpenList(page: Page, opponents: string[]) {
+  const newMatch = new NewMatchPage(page)
+  const matchesLink = page.getByRole('link', { name: 'Matches', exact: true })
+  await newMatch.goto()
+  for (const [index, opponent] of opponents.entries()) {
+    if (index > 0) {
+      await matchesLink.filter({ visible: true }).click()
+      await page
+        .getByRole('link', { name: 'New match' })
+        .filter({ visible: true })
+        .first()
+        .click()
+    }
+    await newMatch.opponent.fill(opponent)
+    await newMatch.startMatch.click()
+    await expect(page).toHaveURL(/\/games\/1\/scores\/edit$/)
+  }
+  await matchesLink.filter({ visible: true }).click()
+  await expect(new MatchesPage(page).heading).toBeVisible()
+}
+
 const desktop = { width: 1280, height: 800 }
 // An iPhone's width, under the layout's 768px breakpoint (AppLayout.css).
 const phone = { width: 390, height: 844 }
@@ -76,19 +101,12 @@ test.describe('at a desktop width', () => {
   }) => {
     const layout = new AppLayout(page)
     const matches = new MatchesPage(page)
-    await new DashboardPage(page).goto()
+    await startMatchesThenOpenList(page, ['Ana', 'Ben'])
 
-    await layout.link('Matches').click()
-
-    await expect(matches.heading).toBeVisible()
+    await expect(layout.link('Matches')).toHaveAttribute('aria-current', 'page')
     expect(new URL(page.url()).pathname).toBe('/matches')
-    await expect(matches.columnHeaders).toHaveText([
-      'Opponent',
-      'Format',
-      'State',
-      'Games',
-    ])
-    await expect(matches.rows).toHaveCount(3)
+    await expect(matches.columnHeaders).toHaveText(['Opponent', 'Format'])
+    await expect(matches.rows).toHaveCount(2)
     await expect(matches.newMatch).toBeInViewport({ ratio: 1 })
   })
 })
@@ -103,7 +121,11 @@ for (const width of [320, 768, 1280]) {
     for (const [name, open] of [
       ['the dashboard', (page: Page) => new DashboardPage(page).goto()],
       ['the new match screen', (page: Page) => new NewMatchPage(page).goto()],
-      ['the matches list', (page: Page) => new MatchesPage(page).goto()],
+      ['the matches list, empty', (page: Page) => new MatchesPage(page).goto()],
+      [
+        'the matches list, with a match',
+        (page: Page) => startMatchesThenOpenList(page, ['Ana']),
+      ],
     ] as const) {
       test(`${name} has no horizontal scroll`, async ({ page }) => {
         await open(page)
@@ -188,11 +210,11 @@ test.describe('at a phone width', () => {
   }) => {
     const layout = new AppLayout(page)
     const matches = new MatchesPage(page)
-    await new DashboardPage(page).goto()
+    await startMatchesThenOpenList(page, ['Ana', 'Ben', 'Chen'])
 
-    await layout.bottomBar.getByRole('link', { name: 'Matches' }).click()
-
-    await expect(matches.heading).toBeVisible()
+    await expect(
+      layout.bottomBar.getByRole('link', { name: 'Matches' }),
+    ).toHaveAttribute('aria-current', 'page')
     await expect(matches.rows).toHaveCount(3)
     await expect(matches.columnHeaders).toHaveCount(0)
     await expect(matches.newMatch).toHaveCount(0)
@@ -208,9 +230,11 @@ test.describe('at a phone width', () => {
     // A tap near the card's bottom right corner, away from its link's text,
     // opens the match's page.
     const ana = matches.rows.filter({ hasText: 'You vs Ana' })
+    const href = await ana.getByRole('link').getAttribute('href')
+    expect(href).toMatch(/^\/matches\/[^/]+$/)
     const card = (await ana.boundingBox())!
     await ana.click({ position: { x: card.width - 8, y: card.height - 8 } })
-    await expect(page).toHaveURL(/\/matches\/sample-1$/)
+    await expect(page).toHaveURL(new RegExp(`${href}$`))
   })
 
   test('on the new match screen, scrolled to its end, the form’s last part is above the bottom bar, and Start match is at least 44px to tap', async ({

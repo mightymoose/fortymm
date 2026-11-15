@@ -30,7 +30,7 @@ export class MatchListScreenPage {
     return within(body!).getAllByRole('row')
   }
 
-  // A row's cells' text, in order: opponent, format, state, games.
+  // A row's cells' text, in order: opponent, format.
   cells(row: HTMLElement) {
     return within(row)
       .getAllByRole('cell')

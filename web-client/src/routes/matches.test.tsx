@@ -1,8 +1,11 @@
 import { within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { expect, test } from 'vitest'
 import { AppLayoutPage } from '../components/AppLayout.page.tsx'
+import { MatchDetailsScreenPage } from '../components/match-details/MatchDetailsScreen.page.tsx'
 import { MatchListScreenPage } from '../components/match-list/MatchListScreen.page.tsx'
 import { NewMatchScreenPage } from '../components/new-match/NewMatchScreen.page.tsx'
+import { createMatch } from '../test/match.ts'
 import { renderRoute } from '../test/render-route.tsx'
 
 // The layout route's wiring. That the layout shows its child is its own test
@@ -20,7 +23,11 @@ test('/matches/new is reached through the /matches layout route', async () => {
   ])
 })
 
-test('/matches alone shows the matches list, through the layout route, in the layout’s one main landmark, with the three sample matches', async () => {
+test('/matches alone shows the matches list, through the layout route, in the layout’s one main landmark, with a match created through the store, whose link opens its details page at /matches/<id>', async () => {
+  const user = userEvent.setup()
+  // With game 1 saved, which leaves the list unread (no page watches it):
+  // the route's loader reads it.
+  const matchId = await createMatch(5, [[11, 7]])
   const { router } = renderRoute('/matches')
   const list = new MatchListScreenPage()
 
@@ -37,12 +44,15 @@ test('/matches alone shows the matches list, through the layout route, in the la
   ])
   const rows = await list.rows()
   expect(rows.map((row) => list.cells(row))).toEqual([
-    ['You vs Chen', 'Best of 5 · Unrated', 'In progress · Game 1 next', '0 – 0'],
-    ['You vs Ana', 'Best of 5 · Unrated', 'In progress · Game 4 next', '2 – 1'],
-    ['You vs Ben', 'Best of 3 · Rated', 'Finished · You won', '2 – 0'],
+    ['You vs Ana', 'Best of 5 · Unrated'],
   ])
-  expect(await list.matchLink('You vs Ana')).toHaveAttribute(
-    'href',
-    '/matches/sample-1',
-  )
+  const link = await list.matchLink('You vs Ana')
+  expect(link).toHaveAttribute('href', `/matches/${matchId}`)
+
+  await user.click(link)
+
+  await expect
+    .poll(() => router.state.location.pathname)
+    .toBe(`/matches/${matchId}`)
+  expect(await new MatchDetailsScreenPage().heading()).toHaveTextContent('You vs Ana')
 })

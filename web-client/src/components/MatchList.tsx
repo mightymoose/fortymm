@@ -1,19 +1,22 @@
-import { MatchListScreen } from './match-list/MatchListScreen.tsx'
-import { listedSampleMatches } from './match-list/sample-matches.ts'
+import { useEffect } from 'react'
+import { matchesStore, useMatches } from '../stores/matches.ts'
+import {
+  MatchListScreen,
+  MatchListScreenPending,
+} from './match-list/MatchListScreen.tsx'
 
-// A match's page. A plain path, since its route (/matches/$matchId) is not
-// on this branch yet: once it is, the screen takes the router's typed `to`
-// and `params` instead.
-function matchLink(id: string) {
-  return `/matches/${encodeURIComponent(id)}`
-}
-
-// /matches: the matches list, showing the sample matches (sample data, to
-// delete when the store is connected). When matches are kept on this device,
-// this becomes the connected component around the screen
-// (web-client/CLAUDE.md), handing it the store's matches.
+// /matches, connected to the match list store (src/stores/matches.ts): this
+// device's matches, newest first, watched while the page is mounted, so a
+// match kept meanwhile shows with no reload. The route's loader has read the
+// list before this mounts; the pending view is for a list not read yet, and
+// for storage refusing (`unavailable`, which only the real store gives; the
+// screen has no state for it yet).
 export function MatchList() {
-  return (
-    <MatchListScreen matches={listedSampleMatches()} matchLink={matchLink} />
+  const matches = useMatches()
+  useEffect(() => matchesStore.getState().watchMatches(), [])
+  return matches.status === 'ready' ? (
+    <MatchListScreen matches={matches.matches} />
+  ) : (
+    <MatchListScreenPending />
   )
 }
