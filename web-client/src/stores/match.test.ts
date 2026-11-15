@@ -5,7 +5,7 @@ import type { NewMatch } from '../components/new-match/NewMatchScreen.schema.ts'
 import type { Score } from '../scoring/scoring.ts'
 import { createMatchMemory } from './match-memory.ts'
 import { createMatchStore, matchStore, useMatch } from './match.ts'
-import { createMyMatchesStore, myMatchesStore } from './my-matches.ts'
+import { createMatchesStore, matchesStore } from './matches.ts'
 
 // The match store's logic through its actions, on fresh stores over a fresh
 // memory of their own; the last test uses the app's own stores and hook, as a
@@ -19,7 +19,7 @@ function bestOf(length: 1 | 3 | 5 | 7): NewMatch {
 async function matchWith(length: 1 | 3 | 5 | 7, games: Score[] = []) {
   const memory = createMatchMemory()
   const store = createMatchStore(memory)
-  const created = await createMyMatchesStore(memory).getState().createMatch(bestOf(length))
+  const created = await createMatchesStore(memory).getState().createMatch(bestOf(length))
   if (!created.ok) throw new Error('not created')
   for (const [index, score] of games.entries()) {
     expect(await store.getState().setGameScore(created.matchId, index + 1, score)).toEqual({
@@ -37,16 +37,16 @@ async function gamesOf(store: ReturnType<typeof createMatchStore>, matchId: stri
 
 test('a match is scored, refused out of order, cleared and corrected', async () => {
   const memory = createMatchMemory()
-  const myMatches = createMyMatchesStore(memory)
-  const matches = createMatchStore(memory)
-  const created = await myMatches.getState().createMatch({
+  const matches = createMatchesStore(memory)
+  const match = createMatchStore(memory)
+  const created = await matches.getState().createMatch({
     opponentName: 'Ana',
     format: { bestOf: 5 },
     rated: false,
   })
   if (!created.ok) throw new Error('not created')
   const { matchId } = created
-  const { setGameScore, clearGameScore, load } = matches.getState()
+  const { setGameScore, clearGameScore, load } = match.getState()
 
   expect(await setGameScore(matchId, 1, [11, 7])).toEqual({ ok: true })
   expect(await setGameScore(matchId, 2, [9, 11])).toEqual({ ok: true })
@@ -69,7 +69,7 @@ test('a match is scored, refused out of order, cleared and corrected', async () 
   })
   expect(await clearGameScore(matchId, 2)).toEqual({ ok: true })
   expect(await setGameScore(matchId, 1, [12, 10])).toEqual({ ok: true })
-  expect(await gamesOf(matches, matchId)).toEqual([[12, 10]])
+  expect(await gamesOf(match, matchId)).toEqual([[12, 10]])
 })
 
 test('load of an id nobody created is missing', async () => {
@@ -249,7 +249,7 @@ test('a match nobody watches is dropped after another store writes it, and read 
 // The score is saved through another store over the app's memory (as another
 // page's store will be), so only the watch can bring it to this page.
 test('a page watching a match shows the new score after an action', async () => {
-  const created = await myMatchesStore.getState().createMatch(bestOf(5))
+  const created = await matchesStore.getState().createMatch(bestOf(5))
   if (!created.ok) throw new Error('not created')
   const { matchId } = created
   await matchStore.getState().load(matchId)

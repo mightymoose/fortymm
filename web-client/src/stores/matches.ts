@@ -6,14 +6,14 @@ import { matchMemory, type MatchMemory } from './match-memory.ts'
 import { createQueue } from './queue.ts'
 
 // This device's matches as a list, for the page that will show them, and
-// creating a match. The interface is the plan's (PLAN-match-store-and-sync.md
-// §2), without the revision only the device's storage keeps; until IndexedDB
+// creating a match. The interface is the plan's `my-matches.ts`
+// (PLAN-match-store-and-sync.md §2), named without "my", and without the revision only the device's storage keeps; until IndexedDB
 // and the journal exist (tasks D to G) its matches are in memory
 // (match-memory.ts), the same memory the match store reads, so a reload loses
 // them.
 //
 // As in the plan, after a write to any match the list is read again if a
-// mounted page watches it (watchMyMatches), and goes back to unread if not.
+// mounted page watches it (watchMatches), and goes back to unread if not.
 
 // A match as the list shows it.
 export type MatchSummary = {
@@ -26,27 +26,27 @@ export type MatchSummary = {
 // - unread: not read since the last change (or ever).
 // - ready: every match, newest first.
 // - unavailable: the device's storage refused. Only the real store gives it.
-export type MyMatchesState =
+export type MatchesState =
   | { status: 'unread' }
   | { status: 'ready'; matches: MatchSummary[] }
   | { status: 'unavailable'; reason: 'storage-unavailable' | 'core-unavailable' }
 
 export type CreateMatchResult = { ok: true; matchId: string } | ({ ok: false } & Failure)
 
-export type MyMatchesStore = {
-  myMatches: MyMatchesState
+export type MatchesStore = {
+  matches: MatchesState
   // For loaders: resolves once the list has been read. Never rejects.
   load(): Promise<void>
   // While a page shows the list: keeps it current after every write. Gives
   // the function that stops watching.
-  watchMyMatches(): () => void
+  watchMatches(): () => void
   // Keeps a new match with no games, under a fresh id, and gives the id.
   createMatch(match: NewMatch): Promise<CreateMatchResult>
 }
 
-// A store of its own over `memory`. The app has one, myMatchesStore, over the
+// A store of its own over `memory`. The app has one, matchesStore, over the
 // app's memory; a test builds a fresh one over a fresh memory.
-export function createMyMatchesStore(memory: MatchMemory = matchMemory) {
+export function createMatchesStore(memory: MatchMemory = matchMemory) {
   const queue = createQueue()
   let watchers = 0
 
@@ -57,13 +57,13 @@ export function createMyMatchesStore(memory: MatchMemory = matchMemory) {
       bestOf,
       rated,
     }))
-    store.setState({ myMatches: { status: 'ready', matches } })
+    store.setState({ matches: { status: 'ready', matches } })
   }
 
-  const store = createStore<MyMatchesStore>()(() => ({
-    myMatches: { status: 'unread' },
+  const store = createStore<MatchesStore>()(() => ({
+    matches: { status: 'unread' },
     load: () => queue(async () => read()),
-    watchMyMatches() {
+    watchMatches() {
       watchers += 1
       let stopped = false
       return () => {
@@ -83,14 +83,14 @@ export function createMyMatchesStore(memory: MatchMemory = matchMemory) {
 
   memory.onChange(() => {
     if (watchers > 0) void queue(async () => read())
-    else store.setState({ myMatches: { status: 'unread' } })
+    else store.setState({ matches: { status: 'unread' } })
   })
   return store
 }
 
-export const myMatchesStore = createMyMatchesStore()
+export const matchesStore = createMatchesStore()
 
 // The list, for a connected component.
-export function useMyMatches(): MyMatchesState {
-  return useStore(myMatchesStore, (store) => store.myMatches)
+export function useMatches(): MatchesState {
+  return useStore(matchesStore, (store) => store.matches)
 }

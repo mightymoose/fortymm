@@ -1,7 +1,7 @@
 import type { BestOf, Score } from '../scoring/scoring.ts'
 
 // This tab's matches, in memory: what the match stores (match.ts,
-// my-matches.ts) read and write until the plan's IndexedDB storage and
+// matches.ts) read and write until the plan's IndexedDB storage and
 // journal exist (tasks D to G). It stands where storage.ts and its
 // announcement will: the one source of truth both stores read, and the one
 // place that says a match changed, after each write. Nothing is kept past the
