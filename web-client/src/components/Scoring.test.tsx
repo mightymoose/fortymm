@@ -144,3 +144,21 @@ test('clearing the highest saved game removes it and stays on the page', async (
   expect(router.state.location.pathname).toBe(edit(matchId, 2))
   expect(await gamesOf(matchId)).toEqual([[11, 7]])
 })
+
+// The screen opens a fresh form whenever a game's saved score changes, so
+// most saves leave nothing dirty by the time the page moves on. A score
+// saved again as it was, typed differently, keeps the same form, still
+// dirty: the move on must get past the screen's leave guard.
+test('saving a game’s score again as it was, typed differently, moves on asking nothing', async () => {
+  const user = userEvent.setup()
+  const matchId = await createMatch(5, [[11, 7]])
+  const router = await renderScoring(matchId, 1)
+  await page.heading()
+
+  await user.keyboard('11{Enter}07{Enter}')
+
+  expect(await page.heading()).toHaveTextContent('Enter game 2 score.')
+  expect(router.state.location.pathname).toBe(edit(matchId, 2))
+  expect(page.queryLeaveDialog()).toBeNull()
+  expect(await gamesOf(matchId)).toEqual([[11, 7]])
+})
