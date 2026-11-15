@@ -19,6 +19,7 @@ import { Route as DesignSystemControlsRouteImport } from './routes/design-system
 import { Route as DesignSystemFeedbackRouteImport } from './routes/design-system/feedback'
 import { Route as DesignSystemFoundationsRouteImport } from './routes/design-system/foundations'
 import { Route as DesignSystemTypeRouteImport } from './routes/design-system/type'
+import { Route as MatchesNewRouteImport } from './routes/matches/new'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -70,6 +71,11 @@ const DesignSystemTypeRoute = DesignSystemTypeRouteImport.update({
   path: '/type',
   getParentRoute: () => DesignSystemRoute,
 } as any)
+const MatchesNewRoute = MatchesNewRouteImport.update({
+  id: '/matches/new',
+  path: '/matches/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -81,6 +87,7 @@ export interface FileRoutesByFullPath {
   '/design-system/feedback': typeof DesignSystemFeedbackRoute
   '/design-system/foundations': typeof DesignSystemFoundationsRoute
   '/design-system/type': typeof DesignSystemTypeRoute
+  '/matches/new': typeof MatchesNewRoute
   '/design-system/': typeof DesignSystemIndexRoute
 }
 export interface FileRoutesByTo {
@@ -92,6 +99,7 @@ export interface FileRoutesByTo {
   '/design-system/feedback': typeof DesignSystemFeedbackRoute
   '/design-system/foundations': typeof DesignSystemFoundationsRoute
   '/design-system/type': typeof DesignSystemTypeRoute
+  '/matches/new': typeof MatchesNewRoute
   '/design-system': typeof DesignSystemIndexRoute
 }
 export interface FileRoutesById {
@@ -105,6 +113,7 @@ export interface FileRoutesById {
   '/design-system/feedback': typeof DesignSystemFeedbackRoute
   '/design-system/foundations': typeof DesignSystemFoundationsRoute
   '/design-system/type': typeof DesignSystemTypeRoute
+  '/matches/new': typeof MatchesNewRoute
   '/design-system/': typeof DesignSystemIndexRoute
 }
 export interface FileRouteTypes {
@@ -119,6 +128,7 @@ export interface FileRouteTypes {
     | '/design-system/feedback'
     | '/design-system/foundations'
     | '/design-system/type'
+    | '/matches/new'
     | '/design-system/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -130,6 +140,7 @@ export interface FileRouteTypes {
     | '/design-system/feedback'
     | '/design-system/foundations'
     | '/design-system/type'
+    | '/matches/new'
     | '/design-system'
   id:
     | '__root__'
@@ -142,6 +153,7 @@ export interface FileRouteTypes {
     | '/design-system/feedback'
     | '/design-system/foundations'
     | '/design-system/type'
+    | '/matches/new'
     | '/design-system/'
   fileRoutesById: FileRoutesById
 }
@@ -150,6 +162,7 @@ export interface RootRouteChildren {
   DesignSystemRoute: typeof DesignSystemRouteWithChildren
   HealthRoute: typeof HealthRoute
   SettingsRoute: typeof SettingsRoute
+  MatchesNewRoute: typeof MatchesNewRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -224,6 +237,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DesignSystemTypeRouteImport
       parentRoute: typeof DesignSystemRoute
     }
+    '/matches/new': {
+      id: '/matches/new'
+      path: '/matches/new'
+      fullPath: '/matches/new'
+      preLoaderRoute: typeof MatchesNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -254,6 +274,7 @@ const rootRouteChildren: RootRouteChildren = {
   DesignSystemRoute: DesignSystemRouteWithChildren,
   HealthRoute: HealthRoute,
   SettingsRoute: SettingsRoute,
+  MatchesNewRoute: MatchesNewRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
