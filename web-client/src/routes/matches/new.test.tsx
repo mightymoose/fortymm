@@ -41,6 +41,24 @@ test('Start match opens game 1’s scoring page for the new match, asking nothin
   expect(page.queryDiscardDialog()).toBeNull()
 })
 
+test('Start match with no opponent’s name opens game 1’s scoring page against Anonymous', async () => {
+  const user = userEvent.setup()
+  const { router } = renderRoute('/matches/new')
+
+  await user.click(await new NewMatchScreenPage().startMatch())
+
+  const scoring = new ScoringScreenPage()
+  expect(await scoring.theirsAnonymous()).toBeVisible()
+  expect(await scoring.heading()).toHaveTextContent('Enter game 1 score.')
+  await matchesStore.getState().load()
+  const matches = matchesStore.getState().matches
+  if (matches.status !== 'ready') throw new Error(`list ${matches.status}`)
+  expect(matches.matches[0]).toMatchObject({ opponentName: null })
+  expect(router.state.location.pathname).toBe(
+    `/matches/${matches.matches[0]!.matchId}/games/1/scores/edit`,
+  )
+})
+
 test('Back from the scoring page Start match opened goes where the person was before the form', async () => {
   const user = userEvent.setup()
   const { router } = renderRoute('/')

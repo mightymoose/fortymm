@@ -15,23 +15,29 @@ test.each([
   { name: 'empty', opponentName: '' },
   { name: 'only spaces', opponentName: '   ' },
 ])(
-  'the schema refuses a name that is $name, with the field’s message',
+  'the schema makes a name that is $name no opponent, null',
   ({ opponentName }) => {
-    const result = newMatchSchema.safeParse({
-      opponentName,
-      bestOf: 5,
-      rated: false,
-    })
-
-    expect(result.success).toBe(false)
-    expect(result.error?.issues).toEqual([
-      expect.objectContaining({
-        path: ['opponentName'],
-        message: 'Enter your opponent’s name.',
-      }),
-    ])
+    expect(
+      newMatchSchema.parse({ opponentName, bestOf: 5, rated: false }),
+    ).toEqual({ opponentName: null, format: { bestOf: 5 }, rated: false })
   },
 )
+
+test('the schema refuses a rated match with no opponent, on the name, with its message', () => {
+  const result = newMatchSchema.safeParse({
+    opponentName: ' ',
+    bestOf: 5,
+    rated: true,
+  })
+
+  expect(result.success).toBe(false)
+  expect(result.error?.issues).toEqual([
+    expect.objectContaining({
+      path: ['opponentName'],
+      message: 'Enter your opponent’s name to rate this match.',
+    }),
+  ])
+})
 
 test.each([0, 2, 4, 9])(
   'the schema refuses best of %i: a match is best of 1, 3, 5 or 7',

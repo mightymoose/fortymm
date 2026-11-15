@@ -6,18 +6,25 @@ import { bestOfs } from '../../scoring/scoring.ts'
 // output is what Start match hands on. Every length a match can be is the
 // scoring rules' (`bestOfs`).
 
-// The opponent's name: what was typed, trimmed, and not empty. The screen
-// also asks it whether what is typed so far is a name (rated needs one).
-export const opponentNameSchema = z
+// The opponent's name: what was typed, trimmed, or `null` when that leaves
+// nothing (a match recorded with no opponent). The screen also asks it
+// whether what is typed so far is a name, `null` or not (rated needs one).
+export const opponentNameSchema: z.ZodType<string | null, string> = z
   .string()
   .trim()
-  .min(1, 'Enter your opponent’s name.')
+  .transform((name) => (name === '' ? null : name))
 
 export const newMatchSchema = z
   .object({
     opponentName: opponentNameSchema,
     bestOf: z.literal(bestOfs),
     rated: z.boolean(),
+  })
+  // Only a match with an opponent can be rated. The screen never gets here
+  // (rated is off and disabled with no name); this is the rule itself.
+  .refine(({ opponentName, rated }) => !(rated && opponentName === null), {
+    path: ['opponentName'],
+    message: 'Enter your opponent’s name to rate this match.',
   })
   // The match's format, as the plan's match descriptor names it (`format:
   // {bestOf}`).

@@ -11,62 +11,35 @@ test('the new match screen has its heading, the opponent’s name field, and Can
   expect(await page.cancel()).toHaveAttribute('href', '/')
 })
 
-test('submitting with no opponent shows the opponent field’s error, marks it invalid, focuses it, and calls nothing', async () => {
-  const user = userEvent.setup()
-  const onSubmit = vi.fn()
+test('the opponent’s name is optional: not required, and described so', async () => {
   const page = new NewMatchScreenPage()
-  page.render({ onSubmit })
-  expect(page.opponentError()).toBeNull()
-
-  await user.click(await page.startMatch())
+  page.render({ onSubmit: vi.fn() })
 
   const opponent = await page.opponent()
-  expect(opponent).toHaveAccessibleDescription('Enter your opponent’s name.')
-  expect(opponent).toBeInvalid()
-  expect(opponent).toHaveFocus()
-  expect(onSubmit).not.toHaveBeenCalled()
+  expect(opponent).not.toBeRequired()
+  expect(opponent).toHaveAccessibleDescription(
+    'Optional. Leave it empty to record a match without an opponent.',
+  )
 })
 
-test('a name of only spaces is no name: submitting shows the error and calls nothing', async () => {
+test('Start match on a form left as it opens hands an unrated best of 5 with no opponent, and shows no error', async () => {
   const user = userEvent.setup()
   const onSubmit = vi.fn()
   const page = new NewMatchScreenPage()
   page.render({ onSubmit })
 
-  await user.type(await page.opponent(), '   ')
   await user.click(await page.startMatch())
 
-  expect(await page.opponent()).toHaveAccessibleDescription(
-    'Enter your opponent’s name.',
-  )
-  expect(onSubmit).not.toHaveBeenCalled()
-})
-
-test('before any submit, a name typed and cleared shows no error', async () => {
-  const user = userEvent.setup()
-  const page = new NewMatchScreenPage()
-  page.render({ onSubmit: vi.fn() })
-
-  await user.type(await page.opponent(), 'Ana')
-  await user.clear(await page.opponent())
-  await user.tab()
-
-  expect(page.opponentError()).toBeNull()
-  expect(await page.opponent()).toHaveAccessibleDescription(
-    'Their name, as you’d call them.',
-  )
-})
-
-test('after a failed submit, typing a name clears the error', async () => {
-  const user = userEvent.setup()
-  const page = new NewMatchScreenPage()
-  page.render({ onSubmit: vi.fn() })
-  await user.click(await page.startMatch())
-
-  await user.type(await page.opponent(), 'Ana')
-
-  expect(page.opponentError()).toBeNull()
+  expect(onSubmit).toHaveBeenCalledTimes(1)
+  expect(onSubmit).toHaveBeenCalledWith({
+    opponentName: null,
+    format: { bestOf: 5 },
+    rated: false,
+  })
   expect(await page.opponent()).toBeValid()
+  expect(await page.opponent()).toHaveAccessibleDescription(
+    'Optional. Leave it empty to record a match without an opponent.',
+  )
 })
 
 test('left as it opens but for the name, the match is best of 5, unrated', async () => {
@@ -147,11 +120,11 @@ test('clearing the opponent turns rated off, and naming one again doesn’t turn
   )
 })
 
-test('the summary says who plays once there is an opponent', async () => {
+test('the summary says who plays: Anonymous with no name, then the name typed', async () => {
   const user = userEvent.setup()
   const page = new NewMatchScreenPage()
   page.render({ onSubmit: vi.fn() })
-  expect(await page.summary()).toHaveTextContent('Name your opponent to start')
+  expect(await page.summary()).toHaveTextContent('Ready: You vs Anonymous')
 
   await user.type(await page.opponent(), 'Ana')
 

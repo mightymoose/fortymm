@@ -91,10 +91,6 @@
   color: var(--fg-1);
   overflow-wrap: anywhere;
 }
-.new-match__tbd {
-  font-weight: 500;
-  color: var(--fg-3);
-}
 .new-match__sub {
   margin: 0;
   font: 500 var(--text-sm) / 1.45 var(--font-num);
