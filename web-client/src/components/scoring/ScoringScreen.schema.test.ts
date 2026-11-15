@@ -59,11 +59,11 @@ test('a legal score the match can’t take there is refused with the rules’ me
 
   expect(issues(game3.safeParse({ yours: '11', theirs: '5' }))?.[0]).toEqual({
     path: ['root'],
-    message: "The match was already decided at game 2; game 3 can't be played.",
+    message: "The match is already decided; game 3 can't be played.",
   })
 })
 
 test('the pad opens empty for a new game, with the saved score for a saved one', () => {
-  expect(scoreDefaults(undefined)).toEqual({ yours: '', theirs: '' })
+  expect(scoreDefaults(null)).toEqual({ yours: '', theirs: '' })
   expect(scoreDefaults([11, 7])).toEqual({ yours: '11', theirs: '7' })
 })

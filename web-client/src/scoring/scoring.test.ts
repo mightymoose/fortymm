@@ -1,12 +1,13 @@
 import { describe, expect, test } from 'vitest'
 import {
-  decidingGame,
   gamesWon,
   illegalGameReason,
   isDecided,
   mayClear,
   nextGame,
   saveRefusal,
+  withGame,
+  type Games,
   type Score,
 } from './scoring.ts'
 
@@ -53,7 +54,7 @@ describe('a game score', () => {
 })
 
 describe('a match under way', () => {
-  const games: Score[] = [
+  const games: Games = [
     [11, 7],
     [9, 11],
   ]
@@ -63,7 +64,6 @@ describe('a match under way', () => {
   })
 
   test('after 11–7, 9–11 in a best of 5, nothing is decided', () => {
-    expect(decidingGame(games, 5)).toBeNull()
     expect(isDecided(games, 5)).toBe(false)
   })
 
@@ -76,16 +76,42 @@ describe('a match under way', () => {
   })
 })
 
+describe('a match with gaps', () => {
+  // Games 1 and 3 saved, game 2 empty.
+  const gapped: Games = [[11, 7], null, [11, 4]]
+  const decided: Games = [[11, 7], null, [11, 4], null, [11, 9]]
+
+  test('the next game is the lowest empty one, game 2', () => {
+    expect(nextGame(gapped, 5)).toBe(2)
+  })
+
+  test('the games won count every saved game, wherever it sits', () => {
+    expect(gamesWon(gapped)).toEqual([2, 0])
+  })
+
+  test('games 1, 3 and 5 won in a best of 5 decide it, with games 2 and 4 empty and no next game', () => {
+    expect(isDecided(decided, 5)).toBe(true)
+    expect(nextGame(decided, 5)).toBeNull()
+  })
+
+  test('game 3 may be saved before game 2', () => {
+    expect(saveRefusal([[11, 7]], 5, 3, [11, 4])).toBeNull()
+  })
+
+  test('an empty game of a match decided with gaps is refused as past the decider', () => {
+    expect(saveRefusal(decided, 5, 2, [11, 3])).toEqual({
+      reason: 'past-decider',
+      message: "The match is already decided; game 2 can't be played.",
+    })
+  })
+})
+
 describe('a decided match', () => {
-  const games: Score[] = [
+  const games: Games = [
     [11, 7],
     [11, 5],
     [11, 9],
   ]
-
-  test('3–0 in a best of 5 is decided at game 3', () => {
-    expect(decidingGame(games, 5)).toBe(3)
-  })
 
   test('3–0 in a best of 5 is decided, with no next game', () => {
     expect(isDecided(games, 5)).toBe(true)
@@ -95,17 +121,17 @@ describe('a decided match', () => {
   test('saving a game 4 after 3–0 in a best of 5 is refused as past the decider', () => {
     expect(saveRefusal(games, 5, 4, [11, 3])).toEqual({
       reason: 'past-decider',
-      message: "The match was already decided at game 3; game 4 can't be played.",
+      message: "The match is already decided; game 4 can't be played.",
     })
   })
 
   test('in a best of 1, one game decides the match', () => {
-    expect(decidingGame([[8, 11]], 1)).toBe(1)
+    expect(isDecided([[8, 11]], 1)).toBe(true)
     expect(nextGame([[8, 11]], 1)).toBeNull()
   })
 
-  test('a 4–3 in a best of 7 is decided at game 7', () => {
-    const sevenGames: Score[] = [
+  test('a 4–3 in a best of 7 is decided', () => {
+    const sevenGames: Games = [
       [11, 2],
       [2, 11],
       [11, 2],
@@ -114,39 +140,18 @@ describe('a decided match', () => {
       [2, 11],
       [11, 2],
     ]
-    expect(decidingGame(sevenGames, 7)).toBe(7)
+    expect(isDecided(sevenGames, 7)).toBe(true)
     expect(gamesWon(sevenGames)).toEqual([4, 3])
+  })
+
+  test.each([1, 2, 3])('its saved game %i may still be corrected, with any legal score', (game) => {
+    expect(saveRefusal(games, 5, game, [4, 11])).toBeNull()
   })
 })
 
 describe('saving a game', () => {
-  test('saving game 3 when only game 1 is saved is refused: game 2 comes first', () => {
-    expect(saveRefusal([[11, 7]], 5, 3, [11, 4])).toEqual({
-      reason: 'non-contiguous',
-      message: 'Save game 2 before game 3.',
-    })
-  })
-
-  test('saving the next game is allowed', () => {
-    expect(saveRefusal([[11, 7]], 5, 2, [11, 4])).toBeNull()
-  })
-
-  test('correcting game 1 when games 1 to 3 are saved is allowed', () => {
-    const games: Score[] = [
-      [11, 7],
-      [7, 11],
-      [11, 9],
-    ]
-    expect(saveRefusal(games, 5, 1, [12, 10])).toBeNull()
-  })
-
   test('a game past the best of is refused', () => {
-    const games: Score[] = [
-      [11, 7],
-      [7, 11],
-      [11, 9],
-    ]
-    expect(saveRefusal(games, 3, 4, [11, 4])).toEqual({
+    expect(saveRefusal([[11, 7]], 3, 4, [11, 4])).toEqual({
       reason: 'past-best-of',
       message: "This match is best of 3; game 4 can't exist.",
     })
@@ -156,72 +161,71 @@ describe('saving a game', () => {
     expect(saveRefusal([], 5, 0, [11, 4])?.reason).toBe('past-best-of')
   })
 
-  test('an illegal score for the next game is refused with its reason', () => {
+  test('an illegal score for an empty game is refused with its reason', () => {
     expect(saveRefusal([], 5, 1, [11, 10])).toEqual({
       reason: 'illegal',
       message: 'At 10–10 the game enters deuce — the winner must lead by 2.',
     })
   })
-})
 
-describe('correcting a saved game changes who decides the match', () => {
-  test('a correction that undoes the decider leaves the match open at the next game', () => {
-    const games: Score[] = [
+  test('an illegal correction of a saved game is refused with its reason', () => {
+    expect(saveRefusal([[11, 7]], 5, 1, [12, 9])?.reason).toBe('illegal')
+  })
+
+  test('a correction that undoes the decider leaves the match open at the lowest empty game', () => {
+    const games: Games = [
       [11, 7],
       [11, 5],
       [11, 9],
     ]
     expect(saveRefusal(games, 5, 3, [9, 11])).toBeNull()
-    const corrected = games.with(2, [9, 11])
+    const corrected = withGame(games, 3, [9, 11])
     expect(isDecided(corrected, 5)).toBe(false)
     expect(nextGame(corrected, 5)).toBe(4)
   })
+})
 
-  test('a correction that decides the match before a later saved game is refused, so no saved game is lost', () => {
-    // 2–1 after three games, decided 3–1 at game 4. Making game 2 a win for
-    // the first side would decide the match at game 3, leaving the saved
-    // game 4 past the decider.
-    const games: Score[] = [
-      [11, 7],
-      [9, 11],
-      [11, 5],
-      [11, 3],
-    ]
-    expect(saveRefusal(games, 5, 2, [11, 9])).toEqual({
-      reason: 'past-decider',
-      message:
-        'The match is already decided at game 3 — clear the games after it before saving this score.',
-    })
+describe('the games with one game set or emptied', () => {
+  test('setting game 3 of a match with nothing saved leaves games 1 and 2 empty', () => {
+    expect(withGame([], 3, [11, 4])).toEqual([null, null, [11, 4]])
   })
 
-  test('a correction of the deciding game that keeps it deciding is allowed', () => {
-    const games: Score[] = [
-      [11, 7],
-      [9, 11],
-      [11, 5],
-      [11, 3],
-    ]
-    expect(saveRefusal(games, 5, 4, [13, 11])).toBeNull()
+  test('emptying the middle game leaves a gap', () => {
+    expect(withGame([[11, 7], [9, 11], [11, 4]], 2, null)).toEqual([[11, 7], null, [11, 4]])
+  })
+
+  test('emptying the last saved game drops the empty slots at the end', () => {
+    expect(withGame([[11, 7], null, [11, 4]], 3, null)).toEqual([[11, 7]])
   })
 })
 
 describe('clearing a game', () => {
-  const games: Score[] = [
+  const games: Games = [
     [11, 7],
     [9, 11],
     [11, 5],
   ]
 
-  test('the highest saved game may be cleared', () => {
-    expect(mayClear(games, 3)).toBe(true)
-  })
-
-  test('a saved game below the highest may not be cleared', () => {
-    expect(mayClear(games, 2)).toBe(false)
+  test.each([1, 2, 3])('saved game %i may be cleared, the highest or not', (game) => {
+    expect(mayClear(games, game)).toBe(true)
   })
 
   test('a game not saved may not be cleared', () => {
     expect(mayClear(games, 4)).toBe(false)
+    expect(mayClear([[11, 7], null, [11, 5]], 2)).toBe(false)
     expect(mayClear([], 1)).toBe(false)
   })
+
+  test('a clear that undecides the match reopens its empty games', () => {
+    const decided: Games = [
+      [11, 7],
+      [11, 5],
+      [11, 9],
+    ]
+    const cleared = withGame(decided, 2, null)
+    expect(isDecided(cleared, 5)).toBe(false)
+    expect(nextGame(cleared, 5)).toBe(2)
+    expect(saveRefusal(cleared, 5, 4, [11, 3])).toBeNull()
+  })
 })
+

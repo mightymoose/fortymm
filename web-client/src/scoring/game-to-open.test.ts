@@ -1,8 +1,8 @@
 import { expect, test } from 'vitest'
-import type { BestOf, Score } from './scoring.ts'
+import type { BestOf, Games } from './scoring.ts'
 import { gameToOpen } from './game-to-open.ts'
 
-function match(bestOf: BestOf, games: Score[]) {
+function match(bestOf: BestOf, games: Games) {
   return { bestOf, games }
 }
 
@@ -27,12 +27,17 @@ test('a saved game opens', () => {
   expect(gameToOpen('1', match(5, [[11, 7], [9, 11]]))).toEqual({ status: 'open', game: 1 })
 })
 
-test('a game past the first unscored game gives the first unscored game', () => {
-  expect(gameToOpen('4', match(5, [[11, 7]]))).toEqual({ status: 'next', game: 2 })
+test('an empty game past the first empty one opens: game 4 with only game 1 saved', () => {
+  expect(gameToOpen('4', match(5, [[11, 7]]))).toEqual({ status: 'open', game: 4 })
 })
 
-test('an unscored game of a decided match gives no game: the dashboard', () => {
-  expect(gameToOpen('3', match(3, [[11, 1], [11, 2]]))).toEqual({ status: 'next', game: null })
+test('the empty game in a gap opens: game 2 with games 1 and 3 saved', () => {
+  expect(gameToOpen('2', match(5, [[11, 7], null, [11, 4]]))).toEqual({ status: 'open', game: 2 })
+})
+
+test('an unscored game of a decided match is decided: the dashboard', () => {
+  expect(gameToOpen('3', match(3, [[11, 1], [11, 2]]))).toEqual({ status: 'decided' })
+  expect(gameToOpen('2', match(3, [[11, 1], null, [11, 2]]))).toEqual({ status: 'decided' })
 })
 
 test('a saved game of a decided match opens', () => {

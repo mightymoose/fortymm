@@ -1,10 +1,9 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useBlocker } from '@tanstack/react-router'
+import { useBlocker, useRouter } from '@tanstack/react-router'
 import {
   useEffect,
   useId,
   useMemo,
-  useState,
   type FormEvent,
   type KeyboardEvent,
   type MouseEvent,
@@ -16,8 +15,10 @@ import { TextInput } from '../TextInput.tsx'
 import {
   gamesWon,
   isDecided,
-  mayClear,
+  savedScore,
+  withGame,
   type BestOf,
+  type Games,
   type Score,
 } from '../../scoring/scoring.ts'
 import { ConfirmDialog } from './scoring-screen/ConfirmDialog.tsx'
@@ -39,29 +40,32 @@ export type ScoringScreenProps = {
   // The opponent, by name, on the right of the pad.
   opponentName: string
   bestOf: BestOf
-  // The games saved so far, in game order: games[0] is game 1.
-  games: readonly Score[]
+  // The match's games, one slot per game number: games[0] is game 1, null
+  // for a game not saved (scoring.ts).
+  games: Games
   // The number of the game on screen, 1 to best of: a saved game (to
-  // correct) or the next one (to enter). Which games may be opened is the
-  // route's to decide, not the screen's.
+  // correct) or an empty one (to enter), in any order. Which games may be
+  // opened is the route's to decide, not the screen's.
   game: number
   // Where a scoreline cell links: the router's link options for game n.
+  // Their paths are this match's scoring pages: moving between them never
+  // asks to leave.
   gameLink: GameLink
   // A valid score for this game, called inside the submit event itself, so
   // the caller can move focus to the next game in the same tap. What
   // happens next (the next game, the dashboard) is the caller's.
   onSave: (game: number, score: Score) => void
-  // Clear game n's saved score, once the person has confirmed it. Only the
-  // highest saved game is offered.
+  // Clear game n's saved score, at once: Clear on a saved game's page, with
+  // nothing to confirm.
   onClear: (game: number) => void
 }
 
 // The scoring screen (fortymm-real's ScoreEntry): a person types one game's
 // final score. A fresh form for each game and each saved score: the caller
-// moving on to another game, or a game's score changing under it, opens it
-// as it would open from its link.
+// moving on to another game, or a game's score changing under it (a save,
+// a clear), opens it as it would open from its link.
 export function ScoringScreen(props: ScoringScreenProps) {
-  const saved = props.games[props.game - 1]
+  const saved = savedScore(props.games, props.game)
   return (
     <ScoringGame key={`${props.game}:${saved?.join('-') ?? 'new'}`} {...props} />
   )
@@ -71,7 +75,7 @@ export function ScoringScreen(props: ScoringScreenProps) {
 // "Edit game N score." for a saved game); the score pad, you on the left
 // with your field, VS and the games won so far (not for a single game), the
 // opponent on the right with theirs; one error line; the action row, what
-// saving does, Clear (on the highest saved game) and the submit; then the
+// saving does, Clear (on a saved game only) and the submit; then the
 // scoreline.
 //
 // A React Hook Form form whose rules are `scoreSchema` (web-client/
@@ -83,9 +87,15 @@ export function ScoringScreen(props: ScoringScreenProps) {
 // submit on, and saves nothing. The rules' reason is the form's one error,
 // marking both fields; "Enter both scores" is each empty field's own.
 //
-// Leaving with a score typed and not saved (the form not as it opened) asks
-// "Leave without saving?", whether by a scoreline cell, any other link or
-// the browser's back; closing or reloading the tab asks through the browser.
+// Clear empties a saved game at once, with nothing to confirm, and the
+// screen stays on that game, its fields empty. No other action asks.
+//
+// Leaving scoring altogether with a score typed and not saved (the form not
+// as it opened) asks "Leave without saving?": by any link or the browser's
+// back to a page that isn't one of this match's games; closing or reloading
+// the tab asks through the browser. Moving to another of the match's games
+// (a scoreline cell, the browser's back to one) never asks: what was typed
+// is dropped.
 function ScoringGame({
   opponentName,
   bestOf,
@@ -95,8 +105,9 @@ function ScoringGame({
   onSave,
   onClear,
 }: ScoringScreenProps) {
-  const saved = games[game - 1]
-  const editing = saved !== undefined
+  const saved = savedScore(games, game)
+  const editing = saved !== null
+  const router = useRouter()
   const schema = useMemo(
     () => scoreSchema({ bestOf, games, game }),
     [bestOf, games, game],
@@ -114,7 +125,6 @@ function ScoringGame({
     defaultValues: scoreDefaults(saved),
   })
   const [yours, theirs] = useWatch({ control, name: ['yours', 'theirs'] })
-  const [clearing, setClearing] = useState<number | null>(null)
   const errorId = useId()
 
   // Your field first, its score selected.
@@ -127,7 +137,12 @@ function ScoringGame({
   const decides =
     typed.success &&
     !isDecided(games, bestOf) &&
-    isDecided(editing ? games.with(game - 1, typed.data) : [...games, typed.data], bestOf)
+    isDecided(withGame(games, game, typed.data), bestOf)
+  // The game a save of this empty one moves on to, when it doesn't decide
+  // the match: the lowest other empty game (none: this is the last one left).
+  const following = Array.from({ length: bestOf }, (_, index) => index + 1).find(
+    (n) => n !== game && savedScore(games, n) === null,
+  )
 
   const [submitLabel, subtitle] = decides
     ? ['Finish match', 'This score finishes the match.']
@@ -135,8 +150,8 @@ function ScoringGame({
       ? ['Save changes', 'Save updates the score for this game.']
       : bestOf === 1
         ? ['Save game', 'Save this game to finish the match.']
-        : game < bestOf
-          ? ['Save game & next', `Save this game to continue to game ${game + 1}.`]
+        : following !== undefined
+          ? ['Save game & next', `Save this game to continue to game ${following}.`]
           : ['Save final game', 'Final game. Save it to finish the match.']
   const arrow = submitLabel !== 'Finish match' && submitLabel !== 'Save game'
 
@@ -157,9 +172,15 @@ function ScoringGame({
     else setError(refusalPath, { type: 'custom', message: reason })
   }
 
-  // The one leave guard: the form's own dirty state, against how it opened.
+  // The one leave guard: the form's own dirty state, against how it opened,
+  // for a move out of scoring; a move to one of the match's games (a path
+  // `gameLink` gives) drops what is typed and asks nothing.
   const blocker = useBlocker({
-    shouldBlockFn: () => isDirty,
+    shouldBlockFn: ({ next }) =>
+      isDirty &&
+      !Array.from({ length: bestOf }, (_, index) => index + 1).some(
+        (n) => router.buildLocation(gameLink(n)).pathname === next.pathname,
+      ),
     enableBeforeUnload: () => isDirty,
     withResolver: true,
   })
@@ -263,8 +284,8 @@ function ScoringGame({
           <div className="scoring__actions">
             <p className="scoring__sub">{subtitle}</p>
             <div className="scoring__buttons">
-              {editing && mayClear(games, game) && (
-                <Button variant="ghost" size="lg" onClick={() => setClearing(game)}>
+              {editing && (
+                <Button variant="ghost" size="lg" onClick={() => onClear(game)}>
                   Clear
                 </Button>
               )}
@@ -283,29 +304,9 @@ function ScoringGame({
           </div>
         </form>
 
-        <Scoreline
-          bestOf={bestOf}
-          games={games}
-          game={game}
-          gameLink={gameLink}
-          onClear={setClearing}
-        />
+        <Scoreline bestOf={bestOf} games={games} game={game} gameLink={gameLink} />
       </div>
 
-      {clearing !== null && (
-        <ConfirmDialog
-          title={`Clear game ${clearing}?`}
-          stayLabel="Keep score"
-          goLabel="Clear game"
-          onStay={() => setClearing(null)}
-          onGo={() => {
-            setClearing(null)
-            onClear(clearing)
-          }}
-        >
-          This deletes the saved score. You can enter it again afterwards.
-        </ConfirmDialog>
-      )}
       {blocker.status === 'blocked' && (
         <ConfirmDialog
           title="Leave without saving?"

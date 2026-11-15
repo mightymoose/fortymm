@@ -128,21 +128,36 @@ test('editing a game of a decided match, leaving it decided, goes to the dashboa
   ])
 })
 
-test('clearing the highest saved game removes it and stays on the page', async () => {
+test('saving a game scored out of order opens the lowest empty game', async () => {
+  const user = userEvent.setup()
+  const matchId = await createMatch(5, [[11, 7]])
+  const router = await renderScoring(matchId, 3)
+  expect(await page.heading()).toHaveTextContent('Enter game 3 score.')
+
+  await user.keyboard('11{Enter}4{Enter}')
+
+  expect(await page.heading()).toHaveTextContent('Enter game 2 score.')
+  expect(router.state.location.pathname).toBe(edit(matchId, 2))
+  expect(await gamesOf(matchId)).toEqual([[11, 7], null, [11, 4]])
+})
+
+test('clearing a game below the highest empties it at once and stays on its page, its fields empty', async () => {
   const user = userEvent.setup()
   const matchId = await createMatch(5, [
     [11, 7],
     [9, 11],
+    [11, 4],
   ])
-  const router = await renderScoring(matchId, 2)
-  await page.heading()
+  const router = await renderScoring(matchId, 1)
+  expect(await page.heading()).toHaveTextContent('Edit game 1 score.')
 
   await user.click(page.clear()!)
-  await user.click(await page.clearGame())
 
-  expect(await page.heading()).toHaveTextContent('Enter game 2 score.')
-  expect(router.state.location.pathname).toBe(edit(matchId, 2))
-  expect(await gamesOf(matchId)).toEqual([[11, 7]])
+  expect(await page.heading()).toHaveTextContent('Enter game 1 score.')
+  expect(await page.yours()).toHaveValue('')
+  expect(router.state.location.pathname).toBe(edit(matchId, 1))
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(await gamesOf(matchId)).toEqual([null, [9, 11], [11, 4]])
 })
 
 // The screen opens a fresh form whenever a game's saved score changes, so

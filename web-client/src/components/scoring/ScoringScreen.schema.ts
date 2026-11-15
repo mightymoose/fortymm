@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { saveRefusal, type BestOf, type Score } from '../../scoring/scoring.ts'
+import { saveRefusal, type BestOf, type Games, type Score } from '../../scoring/scoring.ts'
 
 // The score pad's rules, the one place they are written (web-client/
 // CLAUDE.md, "Forms"). The pad holds what is typed in each field, as text
@@ -25,12 +25,12 @@ export function refusalOf(
     .error?.issues.find(({ path }) => path[0] === refusalPath)?.message
 }
 
-// Where the game sits in its match: the games saved so far (in game order,
+// Where the game sits in its match: its games (one slot per game number,
 // each `[yours, theirs]`), the match's length, and the number of the game
 // being scored.
 export type ScoringContext = {
   bestOf: BestOf
-  games: readonly Score[]
+  games: Games
   game: number
 }
 
@@ -65,8 +65,8 @@ export type ScoreValues = z.input<ReturnType<typeof scoreSchema>>
 
 // The pad as it opens: empty for a game not yet saved, its saved score for
 // one that is. Anything else is a change that leaving would lose.
-export function scoreDefaults(saved: Score | undefined): ScoreValues {
-  return saved === undefined
+export function scoreDefaults(saved: Score | null): ScoreValues {
+  return saved === null
     ? { yours: '', theirs: '' }
     : { yours: String(saved[0]), theirs: String(saved[1]) }
 }

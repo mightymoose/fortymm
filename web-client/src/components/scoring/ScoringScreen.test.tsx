@@ -1,7 +1,7 @@
 import { fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { expect, test, vi } from 'vitest'
-import type { Score } from '../../scoring/scoring.ts'
+import type { Games, Score } from '../../scoring/scoring.ts'
 import { ScoringScreenPage } from './ScoringScreen.page.tsx'
 import type { ScoringScreenProps } from './ScoringScreen.tsx'
 
@@ -11,28 +11,40 @@ function props(overrides: Partial<ScoringScreenProps> = {}): ScoringScreenProps 
     bestOf: 5,
     games: [],
     game: 1,
-    gameLink: (n) => ({ to: '/', hash: `game-${n}` }),
+    gameLink: (n) => ({
+      to: '/matches/$matchId/games/$gameId/scores/edit',
+      params: { matchId: 'm', gameId: String(n) },
+    }),
     onSave: vi.fn(),
     onClear: vi.fn(),
     ...overrides,
   }
 }
 
+const edit = (n: number) => `/matches/m/games/${n}/scores/edit`
+
 const twoGames: Score[] = [
   [11, 7],
   [9, 11],
 ]
 
-test('the journey: game 1 typed by keyboard and saved, corrected from the scoreline, and a deuce score refused', async () => {
+test('the journey: game 3 scored first from the scoreline, then game 1, corrected, and a deuce score refused', async () => {
   const user = userEvent.setup()
   const page = new ScoringScreenPage()
   page.renderMatch({ opponentName: 'Ana', bestOf: 5, games: [] })
   expect(await page.heading()).toHaveTextContent('Enter game 1 score.')
 
+  await user.click((await page.cellLink(3))!)
+  expect(await page.heading()).toHaveTextContent('Enter game 3 score.')
+  await user.keyboard('11{Enter}4{Enter}')
+
+  // Saved game 3; on to the lowest empty game.
+  expect(await page.heading()).toHaveTextContent('Enter game 1 score.')
+  expect(await page.cellLink(3)).toHaveAccessibleName('Game 3, 11–4')
   await user.keyboard('11{Enter}7{Enter}')
 
   expect(await page.heading()).toHaveTextContent('Enter game 2 score.')
-  expect(page.tally()).toHaveTextContent('Games won: 1 – 0')
+  expect(page.tally()).toHaveTextContent('Games won: 2 – 0')
 
   await user.click((await page.cellLink(1))!)
   expect(await page.heading()).toHaveTextContent('Edit game 1 score.')
@@ -257,6 +269,13 @@ test.each([
     subtitle: 'Save this game to continue to game 4.',
   },
   {
+    state: 'a game after a gap',
+    overrides: { games: [[11, 7], null, [7, 11]] as Games, game: 4 },
+    typed: null,
+    label: 'Save game & next',
+    subtitle: 'Save this game to continue to game 2.',
+  },
+  {
     state: 'the last possible game',
     overrides: {
       games: [...twoGames, [11, 3], [4, 11]] as Score[],
@@ -316,7 +335,7 @@ test.each([
   },
 )
 
-test('the scoreline: a cell per game, saved ones linking with their score, the next one linking, the rest inert, the current one marked', async () => {
+test('the scoreline: a cell per game, every game of an undecided match linking, saved ones with their score, the current one marked', async () => {
   const page = new ScoringScreenPage()
   page.render(props({ games: twoGames, game: 1 }))
 
@@ -327,98 +346,131 @@ test('the scoreline: a cell per game, saved ones linking with their score, the n
   // The current game is open already: no link to itself.
   expect(await page.cellLink(1)).toBeNull()
   expect(await page.cellLink(2)).toHaveAccessibleName('Game 2, 9–11')
-  expect(await page.cellLink(2)).toHaveAttribute('href', '/#game-2')
-  expect(await page.cellLink(3)).toHaveAccessibleName('Game 3, not yet played')
-  expect(await page.cellLink(3)).toHaveAttribute('href', '/#game-3')
-  expect(await page.cellLink(4)).toBeNull()
-  expect(await page.cellLink(5)).toBeNull()
+  expect(await page.cellLink(2)).toHaveAttribute('href', edit(2))
+  // Every empty game links, not only the next: games are scored in any order.
+  for (const n of [3, 4, 5]) {
+    expect(await page.cellLink(n)).toHaveAccessibleName(`Game ${n}, not yet played`)
+    expect(await page.cellLink(n)).toHaveAttribute('href', edit(n))
+  }
 })
 
-test('Clear is offered only on the highest saved game, in the action row and as the ✕ on its cell', async () => {
+test('in a decided match, saved games link and empty games are inert', async () => {
   const page = new ScoringScreenPage()
-  const first = page.render(props({ games: twoGames, game: 1 }))
-  await page.heading()
-  expect(page.clear()).toBeNull()
-  expect(page.clearCell(1)).toBeNull()
-  expect(page.clearCell(2)).not.toBeNull()
-  first.unmount()
+  page.render(props({ bestOf: 3, games: [[11, 7], null, [11, 4]], game: 1 }))
 
-  const second = page.render(props({ games: twoGames, game: 3 }))
-  await page.heading()
-  expect(page.clear()).toBeNull()
-  expect(page.clearCell(2)).not.toBeNull()
-  second.unmount()
+  expect(await page.cellLink(3)).toHaveAccessibleName('Game 3, 11–4')
+  expect(await page.cellLink(2)).toBeNull()
+  expect(await page.cell(2)).toHaveTextContent('Game 2, not yet played')
+})
 
-  page.render(props({ games: twoGames, game: 2 }))
+test.each([1, 2])('Clear is in the action row of saved game %i, the highest or not; the scoreline has no ✕', async (game) => {
+  const page = new ScoringScreenPage()
+  page.render(props({ games: twoGames, game }))
   await page.heading()
   expect(page.clear()).not.toBeNull()
-  expect(page.clearCell(2)).not.toBeNull()
-  expect(page.clearCell(1)).toBeNull()
+  expect(screen.queryByRole('button', { name: /^Clear game/ })).toBeNull()
 })
 
-test('Clear asks “Clear game N?”: Keep score clears nothing, Clear game calls onClear with the game', async () => {
+test('an empty game has no Clear, and the scoreline no ✕', async () => {
+  const page = new ScoringScreenPage()
+  page.render(props({ games: twoGames, game: 3 }))
+  await page.heading()
+  expect(page.clear()).toBeNull()
+  expect(screen.queryByRole('button', { name: /^Clear game/ })).toBeNull()
+})
+
+test('Clear calls onClear with the game at once, asking nothing', async () => {
   const user = userEvent.setup()
   const onClear = vi.fn()
   const page = new ScoringScreenPage()
-  page.render(props({ games: twoGames, game: 2, onClear }))
+  page.render(props({ games: twoGames, game: 1, onClear }))
   await page.heading()
 
   await user.click(page.clear()!)
-  expect(await page.clearDialog(2)).toHaveAccessibleDescription(
-    'This deletes the saved score. You can enter it again afterwards.',
-  )
-  await user.click(await page.keepScore())
-  expect(onClear).not.toHaveBeenCalled()
 
-  await user.click(page.clearCell(2)!)
-  await page.clearDialog(2)
-  await user.click(await page.clearGame())
   expect(onClear).toHaveBeenCalledTimes(1)
-  expect(onClear).toHaveBeenCalledWith(2)
+  expect(onClear).toHaveBeenCalledWith(1)
+  expect(screen.queryByRole('dialog')).toBeNull()
 })
 
-test('leaving by a scoreline cell with a score typed and not saved asks “Leave without saving?”; Keep editing stays with it', async () => {
+test('in a match, Clear empties that game and stays on it, its fields empty', async () => {
   const user = userEvent.setup()
   const page = new ScoringScreenPage()
-  page.render(props({ games: twoGames, game: 3 }))
+  page.renderMatch({ opponentName: 'Ana', bestOf: 5, games: twoGames })
+  await user.click((await page.cellLink(1))!)
+  expect(await page.heading()).toHaveTextContent('Edit game 1 score.')
+
+  await user.click(page.clear()!)
+
+  expect(await page.heading()).toHaveTextContent('Enter game 1 score.')
+  expect(await page.yours()).toHaveValue('')
+  expect(await page.theirs('Ana')).toHaveValue('')
+  expect(page.tally()).toHaveTextContent('Games won: 0 – 1')
+  expect(screen.queryByRole('dialog')).toBeNull()
+})
+
+test('switching to another game with a score typed and not saved asks nothing and drops what was typed', async () => {
+  const user = userEvent.setup()
+  const page = new ScoringScreenPage()
+  page.renderMatch({ opponentName: 'Ana', bestOf: 5, games: twoGames })
+  await user.click((await page.cellLink(1))!)
+  await user.keyboard('5')
+
+  await user.click((await page.cellLink(2))!)
+
+  expect(page.queryLeaveDialog()).toBeNull()
+  expect(await page.heading()).toHaveTextContent('Edit game 2 score.')
+  await user.click((await page.cellLink(1))!)
+  expect(await page.yours()).toHaveValue('11')
+  expect(await page.theirs('Ana')).toHaveValue('7')
+})
+
+test('leaving scoring with a score typed and not saved asks “Leave without saving?”; Keep editing stays with it', async () => {
+  const user = userEvent.setup()
+  const page = new ScoringScreenPage()
+  page.renderMatch({ opponentName: 'Ana', bestOf: 5, games: twoGames })
   await user.type(await page.yours(), '11')
 
-  await user.click((await page.cellLink(1))!)
+  await user.click(await page.dashboardLink())
 
   expect(await page.leaveDialog()).toBeVisible()
   expect(await page.keepEditing()).toHaveFocus()
   await user.click(await page.keepEditing())
   expect(page.queryLeaveDialog()).toBeNull()
+  expect(await page.heading()).toHaveTextContent('Enter game 3 score.')
   expect(await page.yours()).toHaveValue('11')
 })
 
-test('in a match, Discard & leave opens the game clicked, without the score typed', async () => {
+test('leaving scoring, Discard & leave leaves', async () => {
   const user = userEvent.setup()
   const page = new ScoringScreenPage()
   page.renderMatch({ opponentName: 'Ana', bestOf: 5, games: twoGames })
   await user.type(await page.yours(), '11')
 
-  await user.click((await page.cellLink(1))!)
+  await user.click(await page.dashboardLink())
   await user.click(await page.discardAndLeave())
 
-  expect(await page.heading()).toHaveTextContent('Edit game 1 score.')
-  expect(await page.yours()).toHaveValue('11')
-  expect(await page.theirs('Ana')).toHaveValue('7')
+  expect(page.queryLeaveDialog()).toBeNull()
+  // The router's link to the page it is on is marked current.
+  expect(await page.dashboardLink()).toHaveAttribute('aria-current', 'page')
 })
 
-test('leaving with nothing typed, or a saved score typed again as it was, asks nothing', async () => {
+test('leaving scoring with nothing typed, or a saved score typed again as it was, asks nothing', async () => {
   const user = userEvent.setup()
   const page = new ScoringScreenPage()
+  const first = page.renderMatch({ opponentName: 'Ana', bestOf: 5, games: twoGames })
+  await page.heading()
+  await user.click(await page.dashboardLink())
+  expect(page.queryLeaveDialog()).toBeNull()
+  expect(await page.dashboardLink()).toHaveAttribute('aria-current', 'page')
+  first.unmount()
+
   page.renderMatch({ opponentName: 'Ana', bestOf: 5, games: twoGames })
-
   await user.click((await page.cellLink(1))!)
-  expect(page.queryLeaveDialog()).toBeNull()
-  expect(await page.heading()).toHaveTextContent('Edit game 1 score.')
-
   await user.keyboard('11')
-  await user.click((await page.cellLink(2))!)
+  await user.click(await page.dashboardLink())
   expect(page.queryLeaveDialog()).toBeNull()
-  expect(await page.heading()).toHaveTextContent('Edit game 2 score.')
+  expect(await page.dashboardLink()).toHaveAttribute('aria-current', 'page')
 })
 
 test('the games won so far sit under VS, yours first; a single game has none', async () => {
