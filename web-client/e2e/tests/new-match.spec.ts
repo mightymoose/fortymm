@@ -2,7 +2,7 @@ import { expect, test } from '../pages/test.ts'
 import { NewMatchPage } from '../pages/app.ts'
 
 // What only a real browser can show about the new match screen
-// (src/components/NewMatchScreen.tsx): closing or reloading the tab with a
+// (src/components/new-match/NewMatchScreen.tsx): closing or reloading the tab with a
 // changed form asks through the browser's own prompt. Leaving it by a link
 // asks in the app ("Discard changes?"), a component test. The screen asks
 // nothing of the network.

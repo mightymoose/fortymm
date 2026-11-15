@@ -1,5 +1,5 @@
 // A username's initials, for the avatar that stands for this device's user
-// in the phone top bar (src/components/UserMarkLink.tsx): the first letter
+// in the phone top bar (src/components/app-layout/user-mark/UserMarkLink.tsx): the first letter
 // of each of the first two words, the words split on "-", upper-cased.
 // agile-meerkat-4b8z gives AM; a one-word name gives its first letter; an
 // empty name gives "".

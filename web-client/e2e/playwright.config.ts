@@ -47,7 +47,7 @@ export default defineConfig({
       // Up to 0.01% of a picture's pixels may differ. Measured: none differ
       // between two runs, nor between the container on an arm64 laptop and
       // on CI's amd64 (with the select's chevron drawn off the pixel grid's
-      // ties, Select.css). So this is headroom of about one pixel in a
+      // ties, controls-tab/Select.css). So this is headroom of about one pixel in a
       // matrix cell and a dozen in a matrix row, well under the smallest
       // change seen to fail: a field's corners 2px rounder, 12 pixels in a
       // cell. A larger allowance would let a large picture hide a change:

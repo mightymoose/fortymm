@@ -7,7 +7,7 @@ import { NewMatchScreenPage } from '../../components/new-match/NewMatchScreen.pa
 import { renderRoute } from '../../test/render-route.tsx'
 
 // The route's wiring. What the screen shows and does is its own test
-// (src/components/NewMatchScreen.test.tsx).
+// (src/components/new-match/NewMatchScreen.test.tsx).
 test('/matches/new shows the new match screen in the layout’s one main landmark', async () => {
   renderRoute('/matches/new')
 

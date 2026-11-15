@@ -8,8 +8,8 @@ import { DashboardScreenPage } from '../components/DashboardScreen.page.tsx'
 import { renderRoute } from '../test/render-route.tsx'
 
 // The root route's wiring. What the layout and the not-found screen show are
-// their own tests (src/components/AppLayout.test.tsx, Sidebar.test.tsx,
-// TopBar.test.tsx, NotFoundScreen.test.tsx).
+// their own tests (src/components/AppLayout.test.tsx, app-layout/Sidebar.test.tsx,
+// app-layout/TopBar.test.tsx, NotFoundScreen.test.tsx).
 test('a screen shows inside the layout: the top bar, the sidebar, and the screen in the main landmark', async () => {
   renderRoute('/')
   const layout = new AppLayoutPage()
