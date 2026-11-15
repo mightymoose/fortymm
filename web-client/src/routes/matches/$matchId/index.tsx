@@ -1,10 +1,14 @@
-import { createFileRoute, notFound } from '@tanstack/react-router'
+import { createFileRoute } from '@tanstack/react-router'
+import { MatchDetails } from '../../../components/MatchDetails.tsx'
 
-// /matches/$matchId has no page of its own yet (the match's details page
-// comes later). Without this route the layout above ($matchId.tsx) would
-// match it and show an empty page; this keeps it the not-found page.
+// /matches/<id>: the match's details page. The layout above ($matchId.tsx)
+// reads the match into the match store, or gives not found for a match not
+// on this device, so this route has no loader of its own.
 export const Route = createFileRoute('/matches/$matchId/')({
-  beforeLoad: () => {
-    throw notFound()
-  },
+  component: MatchDetailsRoute,
 })
+
+function MatchDetailsRoute() {
+  const { matchId } = Route.useParams()
+  return <MatchDetails matchId={matchId} />
+}
