@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Icon, type IconName } from './Icon.tsx'
+import { Icon, type IconName } from '../Icon.tsx'
 import './Notice.css'
 
 export type NoticeTone = 'info' | 'rest' | 'success' | 'warning'

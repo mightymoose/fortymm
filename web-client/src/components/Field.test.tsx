@@ -1,8 +1,8 @@
 import { render, screen } from '@testing-library/react'
 import { expect, test } from 'vitest'
 import { Field } from './Field.tsx'
-import { Select } from './Select.tsx'
-import { TextArea } from './TextArea.tsx'
+import { Select } from './controls-tab/Select.tsx'
+import { TextArea } from './controls-tab/TextArea.tsx'
 import { TextInput } from './TextInput.tsx'
 
 test('a field’s label names its control, and its help describes it', () => {

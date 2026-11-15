@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes } from 'react'
-import type { ForcedState } from './forced-state.ts'
+import type { ForcedState } from '../forced-state.ts'
 import './FilterChip.css'
 
 // A filter chip (the design system's .fm-chip): a toggle button that narrows

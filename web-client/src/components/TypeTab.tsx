@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { tokenValue } from '../theme/token-value.ts'
 import { Board, BoardGrid, BoardSection, Spec, Stage } from './Board.tsx'
 import { lineHeights, textSizes } from './design-system-tokens.ts'
-import { typeSpec } from './type-spec.ts'
+import { typeSpec } from './type-tab/type-spec.ts'
 import './TypeTab.css'
 
 // The type styles (the role classes of tokens.css), in the board's order,

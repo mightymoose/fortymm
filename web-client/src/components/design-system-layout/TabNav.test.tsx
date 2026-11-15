@@ -1,7 +1,7 @@
 import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { expect, test } from 'vitest'
-import { renderScreen } from '../test/render-screen.tsx'
+import { renderScreen } from '../../test/render-screen.tsx'
 import { TabNav, type TabLink } from './TabNav.tsx'
 
 // Paths of the app's own: a link's `to` is typed by the router.

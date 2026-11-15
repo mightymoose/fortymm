@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Icon } from './Icon.tsx'
+import { Icon } from '../Icon.tsx'
 import './StatusMarker.css'
 
 export type Status = 'offline' | 'conflict' | 'danger'

@@ -1,6 +1,6 @@
 import type { TextareaHTMLAttributes } from 'react'
-import type { ForcedState } from './forced-state.ts'
-import './field-control.css'
+import type { ForcedState } from '../forced-state.ts'
+import '../field-control.css'
 import './TextArea.css'
 
 // A text area (the design system's .fm-textarea): several lines, resized

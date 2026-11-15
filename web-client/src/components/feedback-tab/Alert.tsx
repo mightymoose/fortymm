@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Icon } from './Icon.tsx'
+import { Icon } from '../Icon.tsx'
 import './Alert.css'
 
 export type AlertTone = 'warning' | 'error'

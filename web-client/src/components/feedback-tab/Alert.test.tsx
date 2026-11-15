@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import { expect, test } from 'vitest'
 import { Alert } from './Alert.tsx'
-import { Button } from './Button.tsx'
+import { Button } from '../Button.tsx'
 
 test('an error is an alert, announced with its title, its reason and its fix', () => {
   render(

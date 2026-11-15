@@ -1,4 +1,4 @@
-import { Icon } from './Icon.tsx'
+import { Icon } from '../Icon.tsx'
 import './Toast.css'
 
 // The design system's toast (.fm-toast): brief word that something

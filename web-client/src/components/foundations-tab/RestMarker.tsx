@@ -1,4 +1,4 @@
-import { Icon } from './Icon.tsx'
+import { Icon } from '../Icon.tsx'
 import './RestMarker.css'
 
 // The design system's rest marker (.fm-rest): a player resting until a time

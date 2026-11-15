@@ -1,5 +1,5 @@
 import { useRef, type KeyboardEvent } from 'react'
-import type { ForcedState } from './forced-state.ts'
+import type { ForcedState } from '../forced-state.ts'
 import './Menu.css'
 
 export type MenuItem =

@@ -1,5 +1,5 @@
 import type { InputHTMLAttributes, ReactNode } from 'react'
-import type { ForcedState } from './forced-state.ts'
+import type { ForcedState } from '../forced-state.ts'
 import './choice.css'
 import './Radio.css'
 

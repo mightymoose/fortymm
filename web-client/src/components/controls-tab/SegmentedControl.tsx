@@ -1,5 +1,5 @@
-import type { ForcedState } from './forced-state.ts'
-import { useSingleSelection } from './single-selection.ts'
+import type { ForcedState } from '../forced-state.ts'
+import { useSingleSelection } from '../single-selection.ts'
 import './SegmentedControl.css'
 
 export type Segment = {

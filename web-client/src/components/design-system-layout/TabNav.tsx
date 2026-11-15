@@ -1,5 +1,5 @@
 import { Link, type LinkProps } from '@tanstack/react-router'
-import './Tabs.css'
+import '../Tabs.css'
 
 export type TabLink = {
   // Where the tab goes: a path of the app.

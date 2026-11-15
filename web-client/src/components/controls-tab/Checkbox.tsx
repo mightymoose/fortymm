@@ -1,5 +1,5 @@
 import { useEffect, useRef, type InputHTMLAttributes, type ReactNode } from 'react'
-import type { ForcedState } from './forced-state.ts'
+import type { ForcedState } from '../forced-state.ts'
 import './choice.css'
 import './Checkbox.css'
 

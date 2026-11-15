@@ -5,9 +5,9 @@ import { radii, spaces } from './design-system-tokens.ts'
 import { Icon, type IconName } from './Icon.tsx'
 import { LiveMarker } from './LiveMarker.tsx'
 import { RatingChange } from './RatingChange.tsx'
-import { RestMarker } from './RestMarker.tsx'
-import { ServeMarker } from './ServeMarker.tsx'
-import { StatusMarker } from './StatusMarker.tsx'
+import { RestMarker } from './foundations-tab/RestMarker.tsx'
+import { ServeMarker } from './foundations-tab/ServeMarker.tsx'
+import { StatusMarker } from './foundations-tab/StatusMarker.tsx'
 import './FoundationsTab.css'
 
 // The icons, in the board's order: each at 20px, then three at 16px.

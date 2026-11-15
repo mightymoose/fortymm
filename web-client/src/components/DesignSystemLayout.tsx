@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { TabNav, type TabLink } from './TabNav.tsx'
+import { TabNav, type TabLink } from './design-system-layout/TabNav.tsx'
 import './DesignSystemLayout.css'
 
 // The design system page's tabs, one per board of the design system's
