@@ -21,7 +21,10 @@ import { Route as DesignSystemFeedbackRouteImport } from './routes/design-system
 import { Route as DesignSystemFoundationsRouteImport } from './routes/design-system/foundations'
 import { Route as DesignSystemTypeRouteImport } from './routes/design-system/type'
 import { Route as MatchesIndexRouteImport } from './routes/matches/index'
+import { Route as MatchesMatchIdRouteImport } from './routes/matches/$matchId'
 import { Route as MatchesNewRouteImport } from './routes/matches/new'
+import { Route as MatchesMatchIdIndexRouteImport } from './routes/matches/$matchId/index'
+import { Route as MatchesMatchIdGamesGameIdScoresEditRouteImport } from './routes/matches/$matchId/games/$gameId/scores/edit'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -83,11 +86,27 @@ const MatchesIndexRoute = MatchesIndexRouteImport.update({
   path: '/',
   getParentRoute: () => MatchesRoute,
 } as any)
+const MatchesMatchIdRoute = MatchesMatchIdRouteImport.update({
+  id: '/$matchId',
+  path: '/$matchId',
+  getParentRoute: () => MatchesRoute,
+} as any)
 const MatchesNewRoute = MatchesNewRouteImport.update({
   id: '/new',
   path: '/new',
   getParentRoute: () => MatchesRoute,
 } as any)
+const MatchesMatchIdIndexRoute = MatchesMatchIdIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => MatchesMatchIdRoute,
+} as any)
+const MatchesMatchIdGamesGameIdScoresEditRoute =
+  MatchesMatchIdGamesGameIdScoresEditRouteImport.update({
+    id: '/games/$gameId/scores/edit',
+    path: '/games/$gameId/scores/edit',
+    getParentRoute: () => MatchesMatchIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -100,9 +119,12 @@ export interface FileRoutesByFullPath {
   '/design-system/feedback': typeof DesignSystemFeedbackRoute
   '/design-system/foundations': typeof DesignSystemFoundationsRoute
   '/design-system/type': typeof DesignSystemTypeRoute
+  '/matches/$matchId': typeof MatchesMatchIdRouteWithChildren
   '/matches/new': typeof MatchesNewRoute
   '/design-system/': typeof DesignSystemIndexRoute
   '/matches/': typeof MatchesIndexRoute
+  '/matches/$matchId/': typeof MatchesMatchIdIndexRoute
+  '/matches/$matchId/games/$gameId/scores/edit': typeof MatchesMatchIdGamesGameIdScoresEditRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -116,6 +138,8 @@ export interface FileRoutesByTo {
   '/matches/new': typeof MatchesNewRoute
   '/design-system': typeof DesignSystemIndexRoute
   '/matches': typeof MatchesIndexRoute
+  '/matches/$matchId': typeof MatchesMatchIdIndexRoute
+  '/matches/$matchId/games/$gameId/scores/edit': typeof MatchesMatchIdGamesGameIdScoresEditRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -129,9 +153,12 @@ export interface FileRoutesById {
   '/design-system/feedback': typeof DesignSystemFeedbackRoute
   '/design-system/foundations': typeof DesignSystemFoundationsRoute
   '/design-system/type': typeof DesignSystemTypeRoute
+  '/matches/$matchId': typeof MatchesMatchIdRouteWithChildren
   '/matches/new': typeof MatchesNewRoute
   '/design-system/': typeof DesignSystemIndexRoute
   '/matches/': typeof MatchesIndexRoute
+  '/matches/$matchId/': typeof MatchesMatchIdIndexRoute
+  '/matches/$matchId/games/$gameId/scores/edit': typeof MatchesMatchIdGamesGameIdScoresEditRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -146,9 +173,12 @@ export interface FileRouteTypes {
     | '/design-system/feedback'
     | '/design-system/foundations'
     | '/design-system/type'
+    | '/matches/$matchId'
     | '/matches/new'
     | '/design-system/'
     | '/matches/'
+    | '/matches/$matchId/'
+    | '/matches/$matchId/games/$gameId/scores/edit'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -162,6 +192,8 @@ export interface FileRouteTypes {
     | '/matches/new'
     | '/design-system'
     | '/matches'
+    | '/matches/$matchId'
+    | '/matches/$matchId/games/$gameId/scores/edit'
   id:
     | '__root__'
     | '/'
@@ -174,9 +206,12 @@ export interface FileRouteTypes {
     | '/design-system/feedback'
     | '/design-system/foundations'
     | '/design-system/type'
+    | '/matches/$matchId'
     | '/matches/new'
     | '/design-system/'
     | '/matches/'
+    | '/matches/$matchId/'
+    | '/matches/$matchId/games/$gameId/scores/edit'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -273,12 +308,33 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MatchesIndexRouteImport
       parentRoute: typeof MatchesRoute
     }
+    '/matches/$matchId': {
+      id: '/matches/$matchId'
+      path: '/$matchId'
+      fullPath: '/matches/$matchId'
+      preLoaderRoute: typeof MatchesMatchIdRouteImport
+      parentRoute: typeof MatchesRoute
+    }
     '/matches/new': {
       id: '/matches/new'
       path: '/new'
       fullPath: '/matches/new'
       preLoaderRoute: typeof MatchesNewRouteImport
       parentRoute: typeof MatchesRoute
+    }
+    '/matches/$matchId/': {
+      id: '/matches/$matchId/'
+      path: '/'
+      fullPath: '/matches/$matchId/'
+      preLoaderRoute: typeof MatchesMatchIdIndexRouteImport
+      parentRoute: typeof MatchesMatchIdRoute
+    }
+    '/matches/$matchId/games/$gameId/scores/edit': {
+      id: '/matches/$matchId/games/$gameId/scores/edit'
+      path: '/games/$gameId/scores/edit'
+      fullPath: '/matches/$matchId/games/$gameId/scores/edit'
+      preLoaderRoute: typeof MatchesMatchIdGamesGameIdScoresEditRouteImport
+      parentRoute: typeof MatchesMatchIdRoute
     }
   }
 }
@@ -305,12 +361,29 @@ const DesignSystemRouteWithChildren = DesignSystemRoute._addFileChildren(
   DesignSystemRouteChildren,
 )
 
+interface MatchesMatchIdRouteChildren {
+  MatchesMatchIdIndexRoute: typeof MatchesMatchIdIndexRoute
+  MatchesMatchIdGamesGameIdScoresEditRoute: typeof MatchesMatchIdGamesGameIdScoresEditRoute
+}
+
+const MatchesMatchIdRouteChildren: MatchesMatchIdRouteChildren = {
+  MatchesMatchIdIndexRoute: MatchesMatchIdIndexRoute,
+  MatchesMatchIdGamesGameIdScoresEditRoute:
+    MatchesMatchIdGamesGameIdScoresEditRoute,
+}
+
+const MatchesMatchIdRouteWithChildren = MatchesMatchIdRoute._addFileChildren(
+  MatchesMatchIdRouteChildren,
+)
+
 interface MatchesRouteChildren {
+  MatchesMatchIdRoute: typeof MatchesMatchIdRouteWithChildren
   MatchesNewRoute: typeof MatchesNewRoute
   MatchesIndexRoute: typeof MatchesIndexRoute
 }
 
 const MatchesRouteChildren: MatchesRouteChildren = {
+  MatchesMatchIdRoute: MatchesMatchIdRouteWithChildren,
   MatchesNewRoute: MatchesNewRoute,
   MatchesIndexRoute: MatchesIndexRoute,
 }
