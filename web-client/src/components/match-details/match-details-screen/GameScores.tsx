@@ -1,5 +1,6 @@
 import { useId } from 'react'
 import type { Games } from '../../../scoring/scoring.ts'
+import { opponentLabel } from '../../opponent.ts'
 import './GameScores.css'
 
 // The match's games, after fortymm-real's per-game grid, turned into a table
@@ -8,14 +9,16 @@ import './GameScores.css'
 // any order, so a game before the last saved one can be empty: its row says
 // "Not played". Each row's header is the game ("Game 1"), so a screen reader
 // reads a row as one game. With no game saved, a line saying so instead.
+// The opponent is named "Anonymous" for a match with no opponent's name.
 export function GameScores({
-  opponentName,
+  opponentName: given,
   games,
 }: {
-  opponentName: string
+  opponentName: string | null
   games: Games
 }) {
   const headingId = useId()
+  const opponentName = opponentLabel(given)
   return (
     <section className="game-scores" aria-labelledby={headingId}>
       <h2 id={headingId} className="game-scores__heading">

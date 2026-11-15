@@ -153,3 +153,34 @@ test('the way back is a link to /matches', async () => {
 
   expect(await page.back()).toHaveAttribute('href', '/matches')
 })
+
+// A match recorded with no opponent's name, which the opponent won.
+const anonymousWon: MatchState = {
+  opponentName: null,
+  bestOf: 3,
+  rated: false,
+  games: [
+    [11, 7],
+    [9, 11],
+    [5, 11],
+  ],
+}
+
+test('a match with no opponent’s name names the opponent Anonymous: the title, the winner and the scoreboard', async () => {
+  const page = new MatchDetailsScreenPage()
+  page.render({ match: anonymousWon, scoreLink })
+
+  expect(await page.heading()).toHaveTextContent('You vs Anonymous')
+  expect(await page.scoreboard()).toHaveAccessibleName('Final · Anonymous won')
+  expect(await page.player('Anonymous')).toBeVisible()
+})
+
+test('a match with no opponent’s name heads the opponent’s column Anonymous, and a game they won says Anonymous won it', async () => {
+  const page = new MatchDetailsScreenPage()
+  page.render({ match: anonymousWon, scoreLink })
+
+  expect(await page.columnHeaders()).toHaveLength(4)
+  expect((await page.columnHeaders())[2]).toHaveTextContent(/^Anonymous$/)
+  expect(await page.game(1)).toHaveAccessibleName('Game 1 11 7 You')
+  expect(await page.game(2)).toHaveAccessibleName('Game 2 9 11 Anonymous')
+})

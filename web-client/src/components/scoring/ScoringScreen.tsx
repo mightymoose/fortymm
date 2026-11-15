@@ -11,6 +11,7 @@ import {
 import { Controller, useForm, useWatch } from 'react-hook-form'
 import { Button } from '../Button.tsx'
 import { Icon } from '../Icon.tsx'
+import { opponentLabel } from '../opponent.ts'
 import { TextInput } from '../TextInput.tsx'
 import {
   gamesWon,
@@ -37,8 +38,9 @@ export type { GameLink }
 // What the scoring screen takes. Every score is `[yours, theirs]`: this
 // device's player first, then the opponent.
 export type ScoringScreenProps = {
-  // The opponent, by name, on the right of the pad.
-  opponentName: string
+  // The opponent, by name, on the right of the pad; null for a match with
+  // no opponent's name ("Anonymous", its field "Opponent’s score").
+  opponentName: string | null
   bestOf: BestOf
   // The match's games, one slot per game number: games[0] is game 1, null
   // for a game not saved (scoring.ts).
@@ -226,7 +228,7 @@ function ScoringGame({
             {(['yours', 'theirs'] as const).map((side) => (
               <div key={side} className={`scoring__side scoring__side--${side}`}>
                 <span className="scoring__name" aria-hidden="true">
-                  {side === 'yours' ? 'You' : opponentName}
+                  {side === 'yours' ? 'You' : opponentLabel(opponentName)}
                 </span>
                 <Controller
                   control={control}
@@ -247,7 +249,9 @@ function ScoringGame({
                       onMouseDown={focusBeforeCaret}
                       onKeyDown={(event) => keyDown(side, event)}
                       aria-label={
-                        side === 'yours' ? 'Your score' : `${opponentName}’s score`
+                        side === 'yours'
+                          ? 'Your score'
+                          : `${opponentName ?? 'Opponent'}’s score`
                       }
                       aria-invalid={
                         refused || errors[side] !== undefined ? true : undefined

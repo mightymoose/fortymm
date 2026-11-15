@@ -12,7 +12,9 @@ import type { BestOf, Games } from '../scoring/scoring.ts'
 
 export type StoredMatch = {
   readonly matchId: string
-  readonly opponentName: string
+  // The name typed for the opponent, or null for a match recorded with none
+  // (never an empty string).
+  readonly opponentName: string | null
   readonly bestOf: BestOf
   readonly rated: boolean
   // The games, one slot per game number: games[0] is game 1 (scoring.ts).

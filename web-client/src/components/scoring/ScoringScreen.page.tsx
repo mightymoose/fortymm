@@ -17,9 +17,13 @@ export class ScoringScreenPage {
     return renderScreen(<Match {...match} />, { path: '/scoring' })
   }
 
-  // "Enter game N score." or "Edit game N score."
+  // "Enter game N score." or "Edit game N score." Found by that name, so
+  // after a link to this screen it waits for it, not the page left behind.
   heading() {
-    return screen.findByRole('heading', { level: 1 })
+    return screen.findByRole('heading', {
+      level: 1,
+      name: /^(Enter|Edit) game \d+ score\.$/,
+    })
   }
 
   yours() {
@@ -29,6 +33,11 @@ export class ScoringScreenPage {
   // The opponent's field, by their name ("Ana’s score").
   theirs(opponentName: string) {
     return screen.findByRole('textbox', { name: `${opponentName}’s score` })
+  }
+
+  // The opponent's field when the match has no opponent's name.
+  theirsAnonymous() {
+    return screen.findByRole('textbox', { name: 'Opponent’s score' })
   }
 
   // The games won so far, under VS ("Games won: 1 – 0"), or null.

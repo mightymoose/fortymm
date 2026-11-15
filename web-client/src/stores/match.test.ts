@@ -71,6 +71,20 @@ test('a match is scored in any order, cleared in the middle and corrected', asyn
   expect(await gamesOf(match, matchId)).toEqual([null, [9, 11], [12, 10]])
 })
 
+test('a match created with no opponent’s name loads with opponentName null', async () => {
+  const memory = createMatchMemory()
+  const store = createMatchStore(memory)
+  const created = await createMatchesStore(memory)
+    .getState()
+    .createMatch({ opponentName: null, format: { bestOf: 5 }, rated: false })
+  if (!created.ok) throw new Error('not created')
+
+  expect(await store.getState().load(created.matchId)).toEqual({
+    status: 'ready',
+    match: { opponentName: null, bestOf: 5, rated: false, games: [] },
+  })
+})
+
 test('load of an id nobody created is missing', async () => {
   const store = createMatchStore(createMatchMemory())
 

@@ -495,3 +495,12 @@ test('the opponent is named on the right, and you on the left', async () => {
   expect(screen.getByText('Bea Okafor')).toBeVisible()
   expect(screen.getByText('You')).toBeVisible()
 })
+
+test('with no opponent’s name, "Anonymous" stands over their field, which is named "Opponent’s score"', async () => {
+  const page = new ScoringScreenPage()
+  page.render(props({ opponentName: null }))
+
+  expect(await page.theirsAnonymous()).toBeVisible()
+  expect(screen.getByText('Anonymous')).toBeVisible()
+  expect(screen.queryByRole('textbox', { name: /Anonymous/ })).toBeNull()
+})

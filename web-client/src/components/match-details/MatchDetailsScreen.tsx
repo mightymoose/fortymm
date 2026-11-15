@@ -4,6 +4,7 @@ import { gamesWon, isDecided, nextGame } from '../../scoring/scoring.ts'
 import type { MatchState } from '../../stores/match.ts'
 import { Avatar } from '../Avatar.tsx'
 import { buttonClassName } from '../button-class.ts'
+import { opponentInitials, opponentLabel } from '../opponent.ts'
 import { GameScores } from './match-details-screen/GameScores.tsx'
 import '../Button.css'
 import './MatchDetailsScreen.css'
@@ -12,15 +13,6 @@ import './MatchDetailsScreen.css'
 // game `game`'s scoring screen. The caller gives them, so the screen knows
 // nothing of the route that shows it (as the scoring screen's GameLink).
 export type ScoreLink = (game: number) => LinkOptions
-
-function initials(name: string) {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((word) => word[0].toUpperCase())
-    .join('')
-}
 
 // The match details screen, at /matches/<id>, after fortymm-real's match
 // page: a link back to the matches, the title ("You vs Ana") with, while the
@@ -43,7 +35,9 @@ export function MatchDetailsScreen({
   scoreLink: ScoreLink
 }) {
   const stateId = useId()
-  const { opponentName: name, bestOf, rated, games } = match
+  const { opponentName, bestOf, rated, games } = match
+  // "Anonymous" for a match recorded with no opponent's name.
+  const name = opponentLabel(opponentName)
   const [you, opponent] = gamesWon(games)
   const finished = isDecided(games, bestOf)
   const winner = finished ? (you > opponent ? 'you' : 'opponent') : undefined
@@ -110,13 +104,13 @@ export function MatchDetailsScreen({
           <p
             className={`match-details__player match-details__player--opponent${winner === 'opponent' ? ' match-details__player--won' : ''}`}
           >
-            <Avatar initials={initials(name)} />
+            <Avatar initials={opponentInitials(opponentName)} />
             <span className="match-details__name">{name}</span>
           </p>
         </div>
       </section>
 
-      <GameScores opponentName={name} games={games} />
+      <GameScores opponentName={opponentName} games={games} />
     </div>
   )
 }

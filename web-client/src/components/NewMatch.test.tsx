@@ -34,3 +34,16 @@ test('Start match keeps a match with the form’s opponent, length and rating', 
   await expect.poll(newestMatch).toMatchObject({ opponentName: 'Bea', bestOf: 7, rated: true })
 })
 
+test('Start match with no opponent’s name keeps an unrated match with no opponent', async () => {
+  const user = userEvent.setup()
+  renderScreen(<NewMatch />, { path: '/matches/new' })
+
+  await user.click(await page.startMatch())
+
+  await expect.poll(newestMatch).toMatchObject({
+    opponentName: null,
+    bestOf: 5,
+    rated: false,
+  })
+})
+

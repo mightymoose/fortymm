@@ -24,6 +24,16 @@ test('each match is a row of its opponent and its format, in the order given', a
   ])
 })
 
+test('a match with no opponent’s name is the row “You vs Anonymous”, linking to its own page', async () => {
+  const page = new MatchListScreenPage()
+  const anonymous: MatchSummary = { matchId: 'm-anon', opponentName: null, bestOf: 3, rated: false }
+  page.render({ matches: [anonymous] })
+
+  const [row] = await page.rows()
+  expect(page.cells(row!)).toEqual(['You vs Anonymous', 'Best of 3 · Unrated'])
+  expect(await page.matchLink('You vs Anonymous')).toHaveAttribute('href', '/matches/m-anon')
+})
+
 test('a match’s row links to its own page, /matches/<matchId>, and following it goes there', async () => {
   const user = userEvent.setup()
   const page = new MatchListScreenPage()

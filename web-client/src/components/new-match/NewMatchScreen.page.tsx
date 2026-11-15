@@ -36,10 +36,11 @@ export class NewMatchScreenPage {
     return screen.findByRole('switch', { name: 'Rated match' })
   }
 
-  // The summary's first line ("Ready: You vs Ana").
+  // The summary's first line ("Ready: You vs Ana", "Ready: You vs
+  // Anonymous").
   async summary() {
     const form = await this.form()
-    return within(form).getByText(/^Ready:|^Name your opponent/)
+    return within(form).getByText(/^Ready:/)
   }
 
   startMatch() {
@@ -48,11 +49,6 @@ export class NewMatchScreenPage {
 
   cancel() {
     return screen.findByRole('link', { name: 'Cancel' })
-  }
-
-  // The error under the opponent's field, by its text, or null.
-  opponentError() {
-    return screen.queryByText('Enter your opponent’s name.')
   }
 
   // "Discard changes?", when leaving a changed form, and its answers.
