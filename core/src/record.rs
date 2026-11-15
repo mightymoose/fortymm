@@ -1297,6 +1297,39 @@ impl Record {
     pub fn introduced_key(&self) -> Option<PublicKey> {
         matches!(self.content, Content::Hello).then_some(self.header.signer)
     }
+
+    /// The match a `score` record is about. A `match` record's own id is
+    /// [`Record::match_id`].
+    pub fn scored_match(&self) -> Option<MatchId> {
+        match &self.content {
+            Content::Score { match_id, .. } => Some(*match_id),
+            _ => None,
+        }
+    }
+
+    /// A `score` record's slot: 0 for the whole match, n for game n.
+    pub fn slot(&self) -> Option<u64> {
+        match &self.content {
+            Content::Score { slot, .. } => Some(*slot),
+            _ => None,
+        }
+    }
+
+    /// A `score` record's value, as the opaque bytes it is.
+    pub fn value(&self) -> Option<&[u8]> {
+        match &self.content {
+            Content::Score { value, .. } => Some(value),
+            _ => None,
+        }
+    }
+
+    /// The `score` records a `score` record replaces.
+    pub fn replaces(&self) -> Option<&[RecordId]> {
+        match &self.content {
+            Content::Score { replaces, .. } => Some(replaces),
+            _ => None,
+        }
+    }
 }
 
 /// Why [`Record::assemble_verified`] failed.

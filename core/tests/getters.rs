@@ -135,6 +135,37 @@ fn a_record_not_interpreted_gives_its_signer_and_nothing_else() {
     }
 }
 
+#[test]
+fn a_score_gives_its_match_slot_value_and_the_ids_it_replaces() {
+    let fixtures = fixtures();
+    let match_id = fixtures.get("match").match_id(&CRYPTO).unwrap();
+    let first = fixtures.get("score");
+    assert_eq!(first.scored_match(), Some(match_id));
+    assert_eq!(first.slot(), Some(1));
+    assert_eq!(first.value(), Some([11, 9].as_slice()));
+    assert_eq!(first.replaces(), Some([].as_slice()));
+
+    let second = fixtures.get("score-replacing");
+    assert_eq!(second.scored_match(), Some(match_id));
+    assert_eq!(second.value(), Some([11, 8].as_slice()));
+    assert_eq!(second.replaces(), Some([first.id(&CRYPTO)].as_slice()));
+    // A score is about a match; it is not one.
+    assert_eq!(second.match_id(&CRYPTO), None);
+}
+
+#[test]
+fn only_a_score_gives_score_facts() {
+    for (name, record) in &fixtures().records {
+        if record.scored_match().is_some() {
+            assert!(name.starts_with("score"), "{name}");
+            continue;
+        }
+        assert_eq!(record.slot(), None, "{name}");
+        assert_eq!(record.value(), None, "{name}");
+        assert_eq!(record.replaces(), None, "{name}");
+    }
+}
+
 fn ids() -> Vec<PlayerId> {
     let fixtures = fixtures();
     let mut ids: Vec<PlayerId> = fixtures.keys.iter().map(|k| k.own_player()).collect();

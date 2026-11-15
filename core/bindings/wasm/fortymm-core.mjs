@@ -109,6 +109,64 @@ export class Core {
     return out;
   }
 
+  // ---- Making a `player`, a `match` and a `score`, and reading a score ----
+  //
+  // Each body is made as a hello's is: sign it, then `assemble`. Every one
+  // takes the environment, the signer's key (33 bytes, compressed), the
+  // 8-byte `random` value and, last and optional, the clock. A key or a
+  // random value of the wrong length throws, as in `helloBody`; so does an
+  // id that is not 32 bytes.
+  //
+  // The body of a `player`: a new extra player, created by the signer. Its
+  // id is the record's (`extraPlayerId`), so each random value is one player.
+  playerBody(environment, publicKey, random, clock = null) {
+    const head = bodyHead("playerBody", environment, clock);
+    return this.call("fmm_player_body", concat([head, frame([publicKey, random])])).out;
+  }
+  // The body of a `match` between two sides, each a list of one or more
+  // 32-byte player ids, on `terms` (bytes the core carries and does not
+  // read).
+  matchBody(environment, publicKey, random, sides, terms, clock = null) {
+    const head = bodyHead("matchBody", environment, clock);
+    const items = [publicKey, random, terms, ...sides.map(frame)];
+    return this.call("fmm_match_body", concat([head, frame(items)])).out;
+  }
+  // The body of a `score` about the match `matchId` (32 bytes): `slot` is 0
+  // for the whole match or n for game n, `value` is bytes the core carries
+  // and does not read, and `replaces` lists the ids of the `score` records
+  // this one replaces.
+  scoreBody(environment, publicKey, random, matchId, slot, value, replaces, clock = null) {
+    const head = bodyHead("scoreBody", environment, clock);
+    const slotBytes = new Uint8Array(8);
+    new DataView(slotBytes.buffer).setBigUint64(0, uint64(slot, "scoreBody: slot"));
+    const items = [publicKey, random, matchId, slotBytes, value, frame(replaces)];
+    return this.call("fmm_score_body", concat([head, frame(items)])).out;
+  }
+
+  // The record's kind by name ("hello", "player", "match", "score", ...), or
+  // null for a kind number the design does not name. A named kind is not
+  // always one this library read the fields of.
+  kind(record) {
+    const out = this.optional("fmm_record_kind", record);
+    return out === null ? null : new TextDecoder().decode(out);
+  }
+  // What a `score` record says; null for a record of any other kind.
+  // `scoredMatch` is the match the score is about (`matchId` is a `match`
+  // record's own id). A slot past 2^53 - 1 comes back rounded.
+  scoredMatch(record) { return this.optional("fmm_record_scored_match", record); }
+  slot(record) {
+    const out = this.optional("fmm_record_slot", record);
+    return out === null ? null : Number(new DataView(out.buffer).getBigUint64(0));
+  }
+  value(record) { return this.optional("fmm_record_value", record); }
+  replaces(record) {
+    const out = this.optional("fmm_record_replaces", record);
+    if (out === null) return null;
+    const ids = [];
+    for (let at = 0; at < out.length; at += 32) ids.push(out.slice(at, at + 32));
+    return ids;
+  }
+
   // Keys: the 33 bytes a record stores.
   accountId(publicKey) { return this.call("fmm_account_id", publicKey).out; }
   ownPlayerId(publicKey) { return this.call("fmm_own_player_id", publicKey).out; }
@@ -197,6 +255,19 @@ function uint64(value, what) {
     throw new Error(`${what} ${value} is not a whole number from 0`);
   }
   return BigInt(value);
+}
+
+// What every body's input starts with: the environment, whether there is a
+// clock reading, and the reading.
+function bodyHead(method, environment, clock) {
+  const head = new Uint8Array(17);
+  const view = new DataView(head.buffer);
+  view.setBigUint64(0, uint64(environment, `${method}: environment`));
+  if (clock !== null) {
+    view.setUint8(8, 1);
+    view.setBigUint64(9, uint64(clock, `${method}: clock`));
+  }
+  return head;
 }
 
 function frame(items) {

@@ -137,6 +137,35 @@ impl PyRecord {
         self.0.introduced_key().map(|key| bytes(py, key.as_bytes()))
     }
 
+    // What a `score` record says. None for every other record.
+
+    /// The match a `score` record is about (`match_id()` is a `match`
+    /// record's own id).
+    #[getter]
+    fn scored_match<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyBytes>> {
+        self.0.scored_match().map(|id| bytes(py, id.as_bytes()))
+    }
+
+    /// A `score` record's slot: 0 for the whole match, n for game n.
+    #[getter]
+    fn slot(&self) -> Option<u64> {
+        self.0.slot()
+    }
+
+    /// A `score` record's value (opaque bytes).
+    #[getter]
+    fn value<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyBytes>> {
+        self.0.value().map(|value| bytes(py, value))
+    }
+
+    /// The ids of the `score` records a `score` record replaces.
+    #[getter]
+    fn replaces<'py>(&self, py: Python<'py>) -> Option<Vec<Bound<'py, PyBytes>>> {
+        self.0
+            .replaces()
+            .map(|ids| ids.iter().map(|id| bytes(py, id.as_bytes())).collect())
+    }
+
     fn id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         bytes(py, self.0.id(&Software).as_bytes())
     }
@@ -316,6 +345,116 @@ fn hello_body<'py>(
         .map_err(malformed)
 }
 
+// ---- Making a `player`, a `match` and a `score` ----
+//
+// Each body is made as a `hello`'s is: sign it, assemble the record with
+// `Record.from_parts` and check it with `verify()`. Each raises Malformed for
+// a key not in the stored form, a random value not 8 bytes long, or an id
+// not 32 bytes long.
+
+/// The signer and the random value, refused as `hello_body` refuses them.
+fn signer_and_random(public_key: &[u8], random: &[u8]) -> PyResult<(PublicKey, [u8; 8])> {
+    let signer = key(public_key)?;
+    let random = random
+        .try_into()
+        .map_err(|_| malformed("the random value is 8 bytes"))?;
+    Ok((signer, random))
+}
+
+fn id_of(id: &Bound<'_, PyBytes>, what: &str) -> PyResult<[u8; 32]> {
+    id.as_bytes()
+        .try_into()
+        .map_err(|_| malformed(format!("{what} is 32 bytes")))
+}
+
+fn body_of<'py>(
+    py: Python<'py>,
+    draft: &Draft,
+    environment: u64,
+    (signer, random): (PublicKey, [u8; 8]),
+    clock: Option<u64>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    draft
+        .body(
+            Environment(environment),
+            signer,
+            random,
+            clock.map(ClockReading::from_unix_millis),
+        )
+        .map(|body| bytes(py, &body))
+        .map_err(malformed)
+}
+
+/// The body of a `player`, to sign: a new extra player, created by the
+/// signer. Its id is the record's (`extra_player_id()`), so each random value
+/// is one player.
+#[pyfunction]
+#[pyo3(signature = (environment, public_key, random, clock=None))]
+fn player_body<'py>(
+    py: Python<'py>,
+    environment: u64,
+    public_key: &[u8],
+    random: &[u8],
+    clock: Option<u64>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let signer = signer_and_random(public_key, random)?;
+    body_of(py, &Draft::player(), environment, signer, clock)
+}
+
+/// The body of a `match`, to sign: two sides, each a list of one or more
+/// 32-byte player ids, on terms the core carries and does not read.
+#[pyfunction]
+#[pyo3(signature = (environment, public_key, random, sides, terms, clock=None))]
+fn match_body<'py>(
+    py: Python<'py>,
+    environment: u64,
+    public_key: &[u8],
+    random: &[u8],
+    sides: Vec<Vec<Bound<'py, PyBytes>>>,
+    terms: &[u8],
+    clock: Option<u64>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let signer = signer_and_random(public_key, random)?;
+    let side = |side: &Vec<Bound<'py, PyBytes>>| -> PyResult<Vec<PlayerId>> {
+        side.iter()
+            .map(|id| Ok(PlayerId::from_bytes(id_of(id, "a player id")?)))
+            .collect()
+    };
+    let [first, second] = sides.as_slice() else {
+        return Err(malformed("a match has two sides"));
+    };
+    let draft = Draft::match_([side(first)?, side(second)?], terms.to_vec()).map_err(malformed)?;
+    body_of(py, &draft, environment, signer, clock)
+}
+
+/// The body of a `score`, to sign, about the match with the 32-byte id
+/// `match_id`. The slot is 0 for the whole match or n for game n; the value
+/// is bytes the core carries and does not read; `replaces` lists the ids of
+/// the `score` records this one replaces.
+#[pyfunction]
+#[pyo3(signature = (environment, public_key, random, match_id, slot, value, replaces, clock=None))]
+#[allow(clippy::too_many_arguments)]
+fn score_body<'py>(
+    py: Python<'py>,
+    environment: u64,
+    public_key: &[u8],
+    random: &[u8],
+    match_id: &Bound<'py, PyBytes>,
+    slot: u64,
+    value: &[u8],
+    replaces: Vec<Bound<'py, PyBytes>>,
+    clock: Option<u64>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let signer = signer_and_random(public_key, random)?;
+    let match_id = fmm::MatchId::from_bytes(id_of(match_id, "a match id")?);
+    let replaces = replaces
+        .iter()
+        .map(|id| Ok(fmm::RecordId::from_bytes(id_of(id, "a record id")?)))
+        .collect::<PyResult<Vec<_>>>()?;
+    let draft = Draft::score(match_id, slot, value.to_vec(), replaces);
+    body_of(py, &draft, environment, signer, clock)
+}
+
 /// The parcel checksum of some bytes.
 #[pyfunction]
 fn checksum(data: &[u8]) -> u32 {
@@ -436,6 +575,9 @@ fn fortymm_core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(own_player_id, module)?)?;
     module.add_function(wrap_pyfunction!(checksum, module)?)?;
     module.add_function(wrap_pyfunction!(hello_body, module)?)?;
+    module.add_function(wrap_pyfunction!(player_body, module)?)?;
+    module.add_function(wrap_pyfunction!(match_body, module)?)?;
+    module.add_function(wrap_pyfunction!(score_body, module)?)?;
     module.add_function(wrap_pyfunction!(username, module)?)?;
     module.add("FORMAT_VERSION", fmm::layout::FORMAT_VERSION)?;
     // The product layouts.
