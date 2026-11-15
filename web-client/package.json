@@ -12,10 +12,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@hookform/resolvers": "^7.0.6",
     "@tanstack/react-router": "^1.170.46",
     "openapi-fetch": "^0.17.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "react-hook-form": "^7.92.0",
     "zod": "^4.6.7",
     "zustand": "^5.1.0"
   },
