@@ -8,7 +8,8 @@
 // `saveRefusal` keeps that list contiguous and every game in it legal, and the
 // match functions take it to be so.
 
-// How long a match is: the most games it can take.
+// Every length a match can be, shortest first: the most games it can take.
+// The new match form's schema and its BestOfField take them from here.
 export const bestOfs = [1, 3, 5, 7] as const
 export type BestOf = (typeof bestOfs)[number]
 
