@@ -17,9 +17,13 @@ export class ScoringScreenPage {
     return renderScreen(<Match {...match} />, { path: '/scoring' })
   }
 
-  // "Enter game N score." or "Edit game N score."
+  // "Enter game N score." or "Edit game N score." Found by that name, so
+  // after a link to this screen it waits for it, not the page left behind.
   heading() {
-    return screen.findByRole('heading', { level: 1 })
+    return screen.findByRole('heading', {
+      level: 1,
+      name: /^(Enter|Edit) game \d+ score\.$/,
+    })
   }
 
   yours() {
