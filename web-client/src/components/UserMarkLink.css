@@ -1,0 +1,26 @@
+/* The user's mark: the avatar, then, where the layout's breakpoint shows it
+   (non-phone widths), the username on one line, cut with an ellipsis only
+   when the bar is too narrow for it. No underline, and fg-1 on hover like
+   the sidebar's links, not the theme's link colour. The focus ring
+   (theme.css) is round on the avatar alone, rounded around both. */
+.user-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+  max-width: 100%;
+  border-radius: var(--app-layout-user-radius, var(--r-md));
+  color: var(--fg-2);
+  text-decoration: none;
+}
+.user-mark:hover {
+  color: var(--fg-1);
+}
+.user-mark__name {
+  display: var(--app-layout-user-name-display, inline);
+  min-width: 0;
+  overflow: hidden;
+  font: 500 var(--text-sm) var(--font-ui);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

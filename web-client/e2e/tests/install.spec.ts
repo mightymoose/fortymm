@@ -1,5 +1,5 @@
 import { expect, test } from '../pages/test.ts'
-import { App, StartPage } from '../pages/app.ts'
+import { App, DashboardPage } from '../pages/app.ts'
 
 type InstallabilityError = { errorId: string }
 
@@ -12,7 +12,7 @@ test('the app meets what a browser needs to offer installing it, and carries the
   page,
 }) => {
   const app = new App(page)
-  await new StartPage(page).goto()
+  await new DashboardPage(page).goto()
   await app.waitUntilKept()
   const devtools = await page.context().newCDPSession(page)
 

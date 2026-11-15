@@ -9,7 +9,7 @@ const sidebar = {
   onToggleSidebar: () => {},
 }
 
-test('the top bar’s FortyMM brand links to the start page', async () => {
+test('the top bar’s FortyMM brand links to the dashboard, at /', async () => {
   const page = new AppLayoutPage()
   page.renderTopBar(sidebar)
 

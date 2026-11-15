@@ -2,8 +2,11 @@ import { Link } from '@tanstack/react-router'
 import { Icon, type IconName } from './Icon.tsx'
 import './Sidebar.css'
 
-// The pages the sidebar links to, in order.
+// The pages the sidebar links to, in order. The router marks a link current
+// at its path and below it (the design system's tabs, under
+// /design-system), and the dashboard's, at /, only at / itself.
 const links = [
+  { to: '/', label: 'Dashboard', icon: 'layout-dashboard' },
   { to: '/health', label: 'Health', icon: 'heart-pulse' },
   { to: '/settings', label: 'Settings', icon: 'settings' },
   { to: '/design-system', label: 'Design system', icon: 'palette' },

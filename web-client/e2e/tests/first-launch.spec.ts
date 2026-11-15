@@ -1,5 +1,5 @@
 import { expect, test } from '../pages/test.ts'
-import { App, SettingsPage, StartPage } from '../pages/app.ts'
+import { App, SettingsPage, DashboardPage } from '../pages/app.ts'
 import { blockedSiteData } from '../pages/blocked-site-data.ts'
 import { DeviceKeyHarness } from '../pages/device-key.ts'
 import { StorageHarness } from '../pages/storage.ts'
@@ -19,7 +19,7 @@ test('on a fresh device, the app’s start stores one key, one hello and one use
   page,
 }) => {
   const app = new App(page)
-  await new StartPage(page).goto()
+  await new DashboardPage(page).goto()
 
   expect(await app.firstLaunch()).toEqual({ ok: true, outcome: 'made' })
   const keys = new DeviceKeyHarness(await context.newPage())
@@ -40,7 +40,7 @@ test('after the first launch, loadMe gives this device’s user: the user the co
   page,
 }) => {
   const app = new App(page)
-  await new StartPage(page).goto()
+  await new DashboardPage(page).goto()
   expect(await app.firstLaunch()).toEqual({ ok: true, outcome: 'made' })
 
   const storage = new StorageHarness(await context.newPage())
@@ -57,7 +57,7 @@ test('two tabs opening the app at once on a fresh device end up with one key, on
 }) => {
   const tabs = [await context.newPage(), await context.newPage()]
 
-  await Promise.all(tabs.map((tab) => new StartPage(tab).goto()))
+  await Promise.all(tabs.map((tab) => new DashboardPage(tab).goto()))
   const outcomes = await Promise.all(tabs.map((tab) => new App(tab).firstLaunch()))
 
   expect(outcomes).toEqual(
@@ -87,7 +87,7 @@ test('a key kept with no user (a launch that stopped between steps) gets its hel
 
   const opened = await context.newPage()
   const app = new App(opened)
-  await new StartPage(opened).goto()
+  await new DashboardPage(opened).goto()
 
   expect(await app.firstLaunch()).toEqual({ ok: true, outcome: 'made' })
   expect(await keys.keysKept()).toBe(1)
@@ -105,12 +105,12 @@ test('a start on a device that already has its user stores nothing new', async (
   page,
 }) => {
   const first = new App(page)
-  await new StartPage(page).goto()
+  await new DashboardPage(page).goto()
   expect(await first.firstLaunch()).toEqual({ ok: true, outcome: 'made' })
 
   const laterPage = await context.newPage()
   const later = new App(laterPage)
-  await new StartPage(laterPage).goto()
+  await new DashboardPage(laterPage).goto()
 
   expect(await later.firstLaunch()).toEqual({ ok: true, outcome: 'kept' })
   const storage = new StorageHarness(await context.newPage())
@@ -129,9 +129,9 @@ test('the app renders while its launch is held back, and the launch finishes onc
 
   const opened = await context.newPage()
   const app = new App(opened)
-  await new StartPage(opened).goto()
+  await new DashboardPage(opened).goto()
 
-  await expect(new StartPage(opened).heading).toBeVisible()
+  await expect(new DashboardPage(opened).heading).toBeVisible()
   await expect.poll(() => holder.appendLocks()).toEqual({ held: 1, pending: 1 })
   const storage = new StorageHarness(await context.newPage())
   await storage.open()
@@ -143,7 +143,7 @@ test('the app renders while its launch is held back, and the launch finishes onc
   expect(await storage.kept()).toEqual({ records: 1, users: 1 })
 })
 
-test('the start page appears while the shared core is still loading', async ({
+test('the dashboard appears while the shared core is still loading', async ({
   context,
   page,
 }) => {
@@ -153,9 +153,9 @@ test('the start page appears while the shared core is still loading', async ({
     await route.continue().catch(() => {})
   })
 
-  await new StartPage(page).goto()
+  await new DashboardPage(page).goto()
 
-  await expect(new StartPage(page).heading).toBeVisible({ timeout: 3_000 })
+  await expect(new DashboardPage(page).heading).toBeVisible({ timeout: 3_000 })
 })
 
 test('when the browser blocks site data, the app keeps running, and the launch is storage-unavailable', async ({
@@ -165,10 +165,10 @@ test('when the browser blocks site data, the app keeps running, and the launch i
   try {
     const page = await blocked.context.newPage()
     const app = new App(page)
-    await new StartPage(page).goto()
+    await new DashboardPage(page).goto()
 
     expect(await app.firstLaunch()).toEqual({ ok: false, reason: 'storage-unavailable' })
-    await expect(new StartPage(page).heading).toBeVisible()
+    await expect(new DashboardPage(page).heading).toBeVisible()
   } finally {
     await blocked.close()
   }
@@ -185,10 +185,10 @@ test('when IndexedDB refuses to store the user, the app keeps running, no hello 
     }
   })
   const app = new App(page)
-  await new StartPage(page).goto()
+  await new DashboardPage(page).goto()
 
   expect(await app.firstLaunch()).toEqual({ ok: false, reason: 'storage-unavailable' })
-  await expect(new StartPage(page).heading).toBeVisible()
+  await expect(new DashboardPage(page).heading).toBeVisible()
   await new SettingsPage(page).goto()
   await expect(new SettingsPage(page).noAccount).toBeVisible()
   const storage = new StorageHarness(page)
@@ -203,10 +203,10 @@ test('when the shared core doesn’t load, the app keeps running, no key, hello 
   // Through the context, so the service worker can't fetch it either.
   await context.route('**/*.wasm', (route) => route.abort())
   const app = new App(page)
-  await new StartPage(page).goto()
+  await new DashboardPage(page).goto()
 
   expect(await app.firstLaunch()).toEqual({ ok: false, reason: 'core-unavailable' })
-  await expect(new StartPage(page).heading).toBeVisible()
+  await expect(new DashboardPage(page).heading).toBeVisible()
   await new SettingsPage(page).goto()
   await expect(new SettingsPage(page).noAccount).toBeVisible()
   const keys = new DeviceKeyHarness(page)

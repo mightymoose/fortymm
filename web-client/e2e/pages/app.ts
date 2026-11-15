@@ -158,6 +158,22 @@ export class AppLayout {
   link(name: string): Locator {
     return this.navigation.getByRole('link', { name })
   }
+
+  // This device's user's mark in the top bar: a link named with the
+  // username, showing the initials and, at non-phone widths, the username.
+  userMark(username: string): Locator {
+    return this.banner.getByRole('link', { name: username, exact: true })
+  }
+
+  // The bottom bar's navigation (phones only).
+  get bottomBar(): Locator {
+    return this.banner.page().getByRole('navigation', { name: 'Bottom bar' })
+  }
+
+  // The username written out in the user's mark.
+  userMarkName(username: string): Locator {
+    return this.userMark(username).getByText(username, { exact: true })
+  }
 }
 
 // Each screen's page object below opens its page with goto(): by loading its
@@ -166,14 +182,14 @@ export class AppLayout {
 // in a page that is already open. goto() only navigates; a test waits for what
 // it expects to see.
 
-// The start page is blank; its one element is a heading for screen readers.
-export class StartPage {
+// The dashboard, at /: its heading and, so far, nothing else.
+export class DashboardPage {
   readonly heading: Locator
   private readonly page: Page
 
   constructor(page: Page) {
     this.page = page
-    this.heading = page.getByRole('heading', { level: 1, name: 'FortyMM' })
+    this.heading = page.getByRole('heading', { level: 1, name: 'Dashboard' })
   }
 
   async goto() {

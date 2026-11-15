@@ -4,7 +4,7 @@ import { expect, test } from 'vitest'
 import { AppLayoutPage } from '../components/AppLayout.page.tsx'
 import { DesignSystemPage } from '../components/DesignSystemLayout.page.tsx'
 import { NotFoundScreenPage } from '../components/NotFoundScreen.page.tsx'
-import { StartScreenPage } from '../components/StartScreen.page.tsx'
+import { DashboardScreenPage } from '../components/DashboardScreen.page.tsx'
 import { renderRoute } from '../test/render-route.tsx'
 
 // The root route's wiring. What the layout and the not-found screen show are
@@ -19,9 +19,9 @@ test('a screen shows inside the layout: the top bar, the sidebar, and the screen
   expect(
     within(await layout.main()).getByRole('heading', {
       level: 1,
-      name: 'FortyMM',
+      name: 'Dashboard',
     }),
-  ).toBe(await new StartScreenPage().heading())
+  ).toBe(await new DashboardScreenPage().heading())
 })
 
 test('the sidebar stays collapsed when a link in it opens another page', async () => {

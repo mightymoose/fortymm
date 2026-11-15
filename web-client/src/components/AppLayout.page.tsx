@@ -2,6 +2,7 @@ import { screen, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { renderScreen } from '../test/render-screen.tsx'
 import { AppLayout } from './AppLayout.tsx'
+import { BottomBar } from './BottomBar.tsx'
 import { Sidebar } from './Sidebar.tsx'
 import { TopBar } from './TopBar.tsx'
 
@@ -16,9 +17,13 @@ export class AppLayoutPage {
   }
 
   // The top bar, its toggle saying whether the sidebar (`sidebarId`) is
-  // expanded, and calling `onToggleSidebar` when pressed.
-  renderTopBar(props: Parameters<typeof TopBar>[0]) {
-    return renderScreen(<TopBar {...props} />)
+  // expanded, and calling `onToggleSidebar` when pressed, at `path` (`/`
+  // unless given).
+  renderTopBar(
+    props: Parameters<typeof TopBar>[0],
+    options?: { path?: string },
+  ) {
+    return renderScreen(<TopBar {...props} />, options)
   }
 
   // The sidebar, expanded unless given, with `path` the current page (`/`
@@ -30,14 +35,42 @@ export class AppLayoutPage {
     )
   }
 
+  // The bottom bar, at `path` (`/` unless given).
+  renderBottomBar(options?: { path?: string }) {
+    return renderScreen(<BottomBar />, options)
+  }
+
+  // The bottom bar's navigation (phones only in a browser; jsdom applies no
+  // breakpoint, so both navs are there).
+  bottomBar() {
+    return screen.findByRole('navigation', { name: 'Bottom bar' })
+  }
+
+  // The links in the bottom bar, in order.
+  async bottomBarLinks() {
+    return within(await this.bottomBar()).findAllByRole('link')
+  }
+
   // The top bar.
   banner() {
     return screen.findByRole('banner')
   }
 
-  // The FortyMM brand in the top bar, a link to the start page.
+  // The FortyMM brand in the top bar, a link to the dashboard, at /.
   async brand() {
     return within(await this.banner()).findByRole('link', { name: 'FortyMM' })
+  }
+
+  // This device's user's mark in the top bar, a link named with the
+  // username (`agile-meerkat-4b8z`).
+  async userMark(username: string) {
+    return within(await this.banner()).findByRole('link', { name: username })
+  }
+
+  // Every link in the top bar, in order: the brand, then the user's mark
+  // when there is one.
+  async bannerLinks() {
+    return within(await this.banner()).queryAllByRole('link')
   }
 
   // The sidebar's navigation.

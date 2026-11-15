@@ -1,0 +1,54 @@
+/* The bottom bar: a panel like the top bar and the sidebar (bg-panel, flat),
+   with a border-subtle divider where it meets the page above it. Fixed to
+   the bottom of the viewport, --app-layout-bottom-bar-height (56px) high,
+   plus the device's bottom safe area (the home indicator), which it pads
+   below its links. Shown only on phones (AppLayout.css decides its display
+   and keeps the page's content and the update notice clear of it).
+
+   The design system has no bottom bar. Its item is the sidebar's (the kit's
+   .fm-nav a), stacked: the icon over the label, at least 44px each way to
+   tap; hover lifts it to bg-hover and fg-1; the current page is the
+   selected item, accent-soft with accent-text. */
+.bottom-bar {
+  position: fixed;
+  z-index: 1;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: var(--app-layout-bottom-bar-display, none);
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: calc(
+    var(--app-layout-bottom-bar-height, 56px) + env(safe-area-inset-bottom, 0px)
+  );
+  padding: 0 var(--s-2) env(safe-area-inset-bottom, 0px);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+}
+.bottom-bar__item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  box-sizing: border-box;
+  min-width: 64px;
+  min-height: 48px;
+  padding: 0 var(--s-4);
+  border-radius: var(--r-md);
+  color: var(--fg-2);
+  font: 500 var(--text-xs) / 1 var(--font-ui);
+  text-decoration: none;
+  transition:
+    background-color var(--dur-change) var(--ease-out),
+    color var(--dur-change) var(--ease-out);
+}
+.bottom-bar__item:hover {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+.bottom-bar__item[aria-current='page'] {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}

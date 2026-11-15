@@ -1,5 +1,5 @@
 import { expect, test } from '../pages/test.ts'
-import { App, SettingsPage, StartPage } from '../pages/app.ts'
+import { App, SettingsPage, DashboardPage } from '../pages/app.ts'
 import { DeviceKeyHarness } from '../pages/device-key.ts'
 import { StorageHarness } from '../pages/storage.ts'
 
@@ -18,7 +18,7 @@ test('after the app’s first start, /settings shows the username the core gives
   page,
 }) => {
   const app = new App(page)
-  await new StartPage(page).goto()
+  await new DashboardPage(page).goto()
   await app.firstLaunch()
 
   await new SettingsPage(page).goto()
@@ -36,7 +36,7 @@ test('after a reload, and opened with no connection after one visit, /settings s
   page,
 }) => {
   const app = new App(page)
-  await new StartPage(page).goto()
+  await new DashboardPage(page).goto()
   expect(await app.firstLaunch()).toEqual({ ok: true, outcome: 'made' })
   await app.waitUntilKept()
   await new SettingsPage(page).goto()
@@ -147,7 +147,7 @@ test.describe('with this tab’s own launch failing', () => {
     })
 
     const other = await context.newPage()
-    await new StartPage(other).goto()
+    await new DashboardPage(other).goto()
     expect(await new App(other).firstLaunch()).toEqual({ ok: true, outcome: 'made' })
 
     const storage = new StorageHarness(await context.newPage())
@@ -170,7 +170,7 @@ test.describe('with the shared core held back', () => {
     page,
   }) => {
     const app = new App(page)
-    await new StartPage(page).goto()
+    await new DashboardPage(page).goto()
     expect(await app.firstLaunch()).toEqual({ ok: true, outcome: 'made' })
     const storage = new StorageHarness(await context.newPage())
     await storage.open()

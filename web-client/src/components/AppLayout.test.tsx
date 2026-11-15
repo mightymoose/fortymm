@@ -4,12 +4,13 @@ import { expect, test, vi } from 'vitest'
 import { showNewVersionOf } from '../new-version.ts'
 import { AppLayoutPage } from './AppLayout.page.tsx'
 
-test('the layout shows the top bar and the sidebar, and its content in the page’s one main landmark', async () => {
+test('the layout shows the top bar, the sidebar and the bottom bar, and its content in the page’s one main landmark', async () => {
   const page = new AppLayoutPage()
   page.render(<h1>A screen</h1>)
 
   expect(await page.brand()).toBeVisible()
   expect(await page.navigation()).toBeVisible()
+  expect(await page.bottomBar()).toBeVisible()
   const main = await page.main()
   expect(screen.getAllByRole('main')).toEqual([main])
   expect(
@@ -28,7 +29,7 @@ test('the sidebar starts expanded, and the toggle in the top bar collapses it an
 
   await user.click(toggle)
   expect(toggle).toHaveAttribute('aria-expanded', 'false')
-  for (const name of ['Health', 'Settings', 'Design system']) {
+  for (const name of ['Dashboard', 'Health', 'Settings', 'Design system']) {
     expect(await page.link(name)).toBeInTheDocument()
   }
 

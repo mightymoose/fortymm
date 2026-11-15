@@ -2,14 +2,30 @@
 
    The phone/non-phone breakpoint is 768px, written here and nowhere else (a
    media query can't read a custom property). Narrower is a phone: no
-   sidebar and no toggle for it, the brand centred. At 768px and wider, the
-   sidebar and its toggle show, and the brand sits on the left after the
-   toggle. The top bar and the sidebar read what the breakpoint decides from
-   the two custom properties set here, so no other file has a media query
-   for it. */
+   sidebar and no toggle for it, the brand centred, and this device's user's
+   mark at the top bar's right end, out of the flow, its initials only. At
+   768px and wider, the sidebar and its toggle show, the brand sits on the
+   left after the toggle, and the user's mark, at the right end in the flow,
+   shows the username beside the initials. On phones the bottom bar is the
+   navigation, fixed to the bottom; wider, it is not displayed. The top bar,
+   the sidebar, the bottom bar and the user's mark read what the breakpoint
+   decides from the custom properties set here, so no other file has a media
+   query for it. */
 .app-layout {
   --app-layout-sidebar-display: none;
   --app-layout-brand-justify: center;
+  --app-layout-user-position: absolute;
+  --app-layout-user-width: 36px;
+  --app-layout-user-name-display: none;
+  --app-layout-user-radius: 50%;
+  --app-layout-bottom-bar-display: flex;
+  /* How far from the viewport's bottom the fixed update notice and the end
+     of the page's content stay: on phones, above the bottom bar (its height
+     and the safe area); wider, above the safe area alone. */
+  --app-layout-bottom-bar-height: 56px;
+  --app-layout-bottom-clear: calc(
+    var(--app-layout-bottom-bar-height) + env(safe-area-inset-bottom, 0px)
+  );
 
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -23,6 +39,12 @@
   .app-layout {
     --app-layout-sidebar-display: flex;
     --app-layout-brand-justify: flex-start;
+    --app-layout-user-position: static;
+    --app-layout-user-width: auto;
+    --app-layout-user-name-display: inline;
+    --app-layout-user-radius: var(--r-md);
+    --app-layout-bottom-bar-display: none;
+    --app-layout-bottom-clear: env(safe-area-inset-bottom, 0px);
 
     grid-template-columns: auto minmax(0, 1fr);
     grid-template-areas:
@@ -44,17 +66,19 @@
   grid-area: content;
   min-width: 0;
   border-top: 1px solid var(--border-subtle);
-  padding: var(--s-6) var(--s-4);
+  padding: var(--s-6) var(--s-4)
+    calc(var(--s-6) + var(--app-layout-bottom-clear, 0px));
 }
 /* The notice that a new version is ready (UpdateNotice): over every screen,
    bottom centre, where the design system puts a toast, out of the flow so
    nothing on the screen moves when it appears. Above the phone's home
-   indicator where there is one. */
+   indicator where there is one, and on phones above the bottom bar, so
+   neither covers the other. */
 .app-layout > .update-notice {
   position: fixed;
   z-index: 1;
   right: 0;
-  bottom: calc(var(--s-4) + env(safe-area-inset-bottom, 0px));
+  bottom: calc(var(--s-4) + var(--app-layout-bottom-clear, 0px));
   left: 0;
   display: flex;
   justify-content: center;

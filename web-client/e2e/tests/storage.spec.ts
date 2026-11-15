@@ -1,5 +1,5 @@
 import { expect, test } from '../pages/test.ts'
-import { App, StartPage } from '../pages/app.ts'
+import { App, DashboardPage } from '../pages/app.ts'
 import { DeviceKeyHarness } from '../pages/device-key.ts'
 import { StorageHarness } from '../pages/storage.ts'
 
@@ -46,7 +46,7 @@ test('opened with no connection after one visit with one, the stored user is the
   page,
 }) => {
   const app = new App(page)
-  await new StartPage(page).goto()
+  await new DashboardPage(page).goto()
   await app.waitUntilKept()
   const online = new StorageHarness(page)
   await online.open()

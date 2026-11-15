@@ -1,7 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest'
 import { announce } from '../changes.ts'
 import { withDeviceKey } from '../device-key.ts'
-import { startupLaunchSettled } from '../first-launch.ts'
+import { launchAtStartup, startupLaunchSettled } from '../first-launch.ts'
 import { loadMe, storeRecord, type User } from '../storage.ts'
 import { createUserStore } from './user.ts'
 
@@ -16,23 +16,23 @@ vi.mock('../device-key.ts', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../device-key.ts')>()),
   withDeviceKey: vi.fn(),
 }))
-// The wait for the launch at startup, so a test can hold it; no launch is
-// started here, so by default it resolves at once, as the real one does.
+// The launch at startup, and the wait for it, so a test can hold them; by
+// default both resolve at once, as when no launch was started.
 vi.mock('../first-launch.ts', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../first-launch.ts')>()),
   startupLaunchSettled: vi.fn(() => Promise.resolve()),
+  launchAtStartup: vi.fn(() => Promise.resolve()),
 }))
 
-// What each test's stores watch, stopped after it, so an earlier test's
-// store doesn't read when a later test announces.
-const watching: (() => void)[] = []
-
+// Each test's store keeps listening after it; the stores of earlier tests
+// read again only on an account change, and get the same answers as the
+// test's own.
 afterEach(() => {
-  for (const unwatch of watching.splice(0)) unwatch()
   for (const replaced of [withDeviceKey, loadMe, storeRecord]) {
     vi.mocked(replaced).mockReset()
   }
   vi.mocked(startupLaunchSettled).mockImplementation(() => Promise.resolve())
+  vi.mocked(launchAtStartup).mockImplementation(() => Promise.resolve())
 })
 
 const user: User = {
@@ -95,11 +95,10 @@ test('with no user stored yet, load waits for the launch at startup, then reads 
   expect(storeRecord).not.toHaveBeenCalled()
 })
 
-test('after a change to this device’s account, a watched user is read again', async () => {
+test('after a change to this device’s account, the user is read again', async () => {
   vi.mocked(loadMe).mockResolvedValue({ ok: true, user: null })
   const store = createUserStore()
   await store.getState().load()
-  watching.push(store.getState().watchUser())
   vi.mocked(loadMe).mockResolvedValue({ ok: true, user })
 
   announce(accountChanged)
@@ -107,41 +106,44 @@ test('after a change to this device’s account, a watched user is read again', 
   await vi.waitFor(() => expect(store.getState().user).toEqual({ state: 'user', user }))
 })
 
-test('after a change to this device’s account, a user no page watches is forgotten, and not read', async () => {
+test('a change that is not to this device’s account is ignored: the user is not read again', async () => {
   vi.mocked(loadMe).mockResolvedValue({ ok: true, user })
   const store = createUserStore()
   await store.getState().load()
-  store.getState().watchUser()()
-  vi.mocked(loadMe).mockClear()
-
-  announce(accountChanged)
-
-  await vi.waitFor(() => expect(store.getState().user).toEqual({ state: 'unread' }))
-  expect(loadMe).not.toHaveBeenCalled()
-})
-
-test('a change that is not to this device’s account leaves a watched user as it is, without reading it', async () => {
-  vi.mocked(loadMe).mockResolvedValue({ ok: true, user })
-  const store = createUserStore()
-  await store.getState().load()
-  watching.push(store.getState().watchUser())
   vi.mocked(loadMe).mockClear()
 
   announce({ account: false, matches: ['01'.repeat(32)], revision: 0 })
-  await Promise.resolve()
+  await new Promise((resolve) => setTimeout(resolve, 0))
 
   expect(loadMe).not.toHaveBeenCalled()
   expect(store.getState().user).toEqual({ state: 'user', user })
 })
 
-test('a page that starts watching a forgotten user has it read again', async () => {
+test('with a user kept on this device, launch gives the store the user before the launch at startup settles', async () => {
   vi.mocked(loadMe).mockResolvedValue({ ok: true, user })
+  let settle!: () => void
+  vi.mocked(launchAtStartup).mockReturnValue(new Promise((done) => (settle = done)))
   const store = createUserStore()
-  await store.getState().load()
-  announce(accountChanged)
-  await vi.waitFor(() => expect(store.getState().user).toEqual({ state: 'unread' }))
 
-  watching.push(store.getState().watchUser())
+  const launching = store.getState().launch()
 
   await vi.waitFor(() => expect(store.getState().user).toEqual({ state: 'user', user }))
+  expect(launchAtStartup).toHaveBeenCalled()
+  settle()
+  await launching
+})
+
+test('once the launch at startup has settled, launch reads the user again', async () => {
+  vi.mocked(loadMe).mockResolvedValue({ ok: true, user: null })
+  let settle!: () => void
+  vi.mocked(launchAtStartup).mockReturnValue(new Promise((done) => (settle = done)))
+  const store = createUserStore()
+  const launching = store.getState().launch()
+  await vi.waitFor(() => expect(store.getState().user).toEqual({ state: 'none' }))
+  vi.mocked(loadMe).mockResolvedValue({ ok: true, user })
+
+  settle()
+  await launching
+
+  expect(store.getState().user).toEqual({ state: 'user', user })
 })
