@@ -11,8 +11,12 @@ test('the schema trims the opponent’s name and gives the match’s format', ()
   })
 })
 
-for (const opponentName of ['', '   ']) {
-  test(`the schema refuses the name ${JSON.stringify(opponentName)}, with the field’s message`, () => {
+test.each([
+  { name: 'empty', opponentName: '' },
+  { name: 'only spaces', opponentName: '   ' },
+])(
+  'the schema refuses a name that is $name, with the field’s message',
+  ({ opponentName }) => {
     const result = newMatchSchema.safeParse({
       opponentName,
       bestOf: 5,
@@ -26,12 +30,15 @@ for (const opponentName of ['', '   ']) {
         message: 'Enter your opponent’s name.',
       }),
     ])
-  })
-}
+  },
+)
 
-test('the schema refuses a length that isn’t best of 1, 3, 5 or 7', () => {
-  expect(
-    newMatchSchema.safeParse({ opponentName: 'Ana', bestOf: 4, rated: false })
-      .success,
-  ).toBe(false)
-})
+test.each([0, 2, 4, 9])(
+  'the schema refuses best of %i: a match is best of 1, 3, 5 or 7',
+  (bestOf) => {
+    expect(
+      newMatchSchema.safeParse({ opponentName: 'Ana', bestOf, rated: false })
+        .success,
+    ).toBe(false)
+  },
+)

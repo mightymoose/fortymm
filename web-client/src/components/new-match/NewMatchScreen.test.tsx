@@ -194,19 +194,22 @@ test('Cancel on a form changed and changed back to how it opened leaves with no 
   expect(page.queryDiscardDialog()).toBeNull()
 })
 
-for (const [change, make] of [
-  [
-    'a name typed',
-    async (user: ReturnType<typeof userEvent.setup>, page: NewMatchScreenPage) =>
+type User = ReturnType<typeof userEvent.setup>
+
+test.each([
+  {
+    change: 'a name typed',
+    make: async (user: User, page: NewMatchScreenPage) =>
       user.type(await page.opponent(), 'Ana'),
-  ],
-  [
-    'the length changed',
-    async (user: ReturnType<typeof userEvent.setup>, page: NewMatchScreenPage) =>
+  },
+  {
+    change: 'the length changed',
+    make: async (user: User, page: NewMatchScreenPage) =>
       user.click(await page.bestOf(7)),
-  ],
-] as const) {
-  test(`Cancel with ${change} asks “Discard changes?”, its focus on Keep editing`, async () => {
+  },
+])(
+  'Cancel with $change asks “Discard changes?”, its focus on Keep editing',
+  async ({ make }) => {
     const user = userEvent.setup()
     const page = new NewMatchScreenPage()
     page.render({ onSubmit: vi.fn() })
@@ -216,8 +219,8 @@ for (const [change, make] of [
 
     expect(await page.discardDialog()).toBeVisible()
     expect(await page.keepEditing()).toHaveFocus()
-  })
-}
+  },
+)
 
 test('Keep editing, or Escape, closes the question and keeps what was entered', async () => {
   const user = userEvent.setup()
