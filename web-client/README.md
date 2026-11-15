@@ -158,7 +158,7 @@ await loadMe()               // this device's user: the same answer as loadUser
 
 ### The stores
 
-Data kept on this device reaches pages through small zustand stores in `src/stores/`, one per concern, each with its own actions. Today there is one, `user` (`src/stores/user.ts`): this device's user.
+Data kept on this device reaches pages through small zustand stores in `src/stores/`, one per concern, each with its own actions: `user` (`src/stores/user.ts`), this device's user, and the two match stores, `matches` and `match` (below), which hold matches in memory for now.
 
 ```ts
 import { userStore, useUser } from '../stores/user.ts'
@@ -173,7 +173,19 @@ userStore.getState().launch()       // main.tsx: a read, the first launch, then 
 - **The user store is always on.** Every page shows the user (the layout does), so it has no watcher: on every change to the account it reads the user again, and ignores changes that aren't about the account. It is `unread` only until its first read: `launch()` reads once before the first launch starts, so a device that already has its user shows it on every page without waiting for the launch (and the core's module it loads), then reads again once the launch has settled; a loader's `load()` reads too. While it reads, the store keeps what it had, so nothing flashes. **Only the user store works this way.** A store keyed by something a page opens (the plan's match stores, one entry per match) reads again only what a mounted page watches, through a watcher, and drops the rest; don't copy "no watcher" onto those.
 - **One queue per store** (`src/stores/queue.ts`): every job that sets the store's state runs one at a time, in order, so a read that began before a write never lands after it.
 - **Who uses them.** A route's loader awaits the store's `load` and returns nothing; the route's component is a connected component (`Settings.tsx`) that reads the store with its hook (and calls the store's watcher while mounted, for a store that has one; the user store has none) and hands the screen plain props. A screen never reads a store, and no component, route or loader calls `storage.ts`, the core or the device key (`CLAUDE.md`).
-- **Tests.** The announcement with a stand-in channel, `src/changes.test.ts`; the queue, `src/stores/queue.test.ts`; the user store's logic, on a fresh store (`createUserStore()`) with `loadMe` replaced, `src/stores/user.test.ts`; the connected page once against the real store, `src/components/Settings.test.tsx`; between real tabs, `e2e/tests/settings.spec.ts`.
+- **The match stores are in memory until the device's storage holds matches** (tasks D to G of the plan). They have the plan's interface, so those tasks change only their insides and no caller:
+
+  ```ts
+  await matchesStore.getState().createMatch(newMatch)               // { ok: true, matchId } (a fresh UUID)
+  await matchesStore.getState().load(); useMatches()                // { status: 'ready', matches } newest first
+  await matchStore.getState().load(matchId)                         // { status: 'ready', match } | { status: 'missing' }
+  useMatch(matchId); matchStore.getState().watchMatch(matchId)      // the entry; watch while mounted, call what it gives to stop
+  await matchStore.getState().setGameScore(matchId, game, [11, 7])  // { ok: true } | { ok: false, reason, message }
+  await matchStore.getState().clearGameScore(matchId, game)         // the highest saved game only
+  ```
+
+  Both read one memory of this tab's matches, `src/stores/match-memory.ts`, which stands where `storage.ts` will: the one source of truth, and the one place that says which match a write changed. Nothing is written to IndexedDB, `localStorage` or `sessionStorage`, so a reload loses every match and its page is not found (the user's decision). Each scoring action first asks the scoring rules (`saveRefusal`, `mayClear`, `src/scoring/scoring.ts`); when they refuse, nothing changes and the answer carries the rules' reason and message. Every action returns a promise, as the real ones will. After a write, as the plan says, a match a mounted page watches is read again, so the page shows it, and one nobody watches is dropped and read fresh by the next `load`; the list is read again if watched and goes back to `unread` if not. `unavailable` (and `Failure`) are in the types for the real store; memory never gives them.
+- **Tests.** The announcement with a stand-in channel, `src/changes.test.ts`; the queue, `src/stores/queue.test.ts`; the match stores' logic on fresh stores over a fresh memory (`createMatchStore(memory)`, `createMatchesStore(memory)`), and a page's hook following a watched match, `src/stores/match.test.ts` and `src/stores/matches.test.ts`; the user store's logic, on a fresh store (`createUserStore()`) with `loadMe` replaced, `src/stores/user.test.ts`; the connected page once against the real store, `src/components/Settings.test.tsx`; between real tabs, `e2e/tests/settings.spec.ts`.
 
 ### The account settings page
 
