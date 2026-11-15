@@ -1,16 +1,18 @@
 import { useSingleSelection } from '../../single-selection.ts'
+import { bestOfs, type BestOf } from '../NewMatchScreen.schema.ts'
 import './BestOfField.css'
 
-// How long a match is: the most games it can take, each with fortymm-real's
-// name for it. The winner is first to more than half of them.
-const options = [
-  { n: 1, label: 'Single' },
-  { n: 3, label: 'Short' },
-  { n: 5, label: 'Std' },
-  { n: 7, label: 'Long' },
-] as const
+// How long a match is: the most games it can take (the form's schema says
+// which), each with fortymm-real's name for it. The winner is first to more
+// than half of them.
+const names: Record<BestOf, string> = {
+  1: 'Single',
+  3: 'Short',
+  5: 'Std',
+  7: 'Long',
+}
 
-export type BestOf = (typeof options)[number]['n']
+const options = bestOfs.map((n) => ({ n, label: names[n] }))
 
 function help(bestOf: BestOf) {
   return bestOf === 1

@@ -164,6 +164,21 @@ test('Cancel on a form left as it opened leaves with no question', async () => {
   expect(page.queryDiscardDialog()).toBeNull()
 })
 
+test('Cancel on a form changed and changed back to how it opened leaves with no question', async () => {
+  const user = userEvent.setup()
+  const page = new NewMatchScreenPage()
+  page.render({ onSubmit: vi.fn() })
+  await user.type(await page.opponent(), 'Ana')
+  await user.click(await page.rated())
+  await user.click(await page.bestOf(7))
+
+  await user.clear(await page.opponent())
+  await user.click(await page.bestOf(5))
+  await user.click(await page.cancel())
+
+  expect(page.queryDiscardDialog()).toBeNull()
+})
+
 for (const [change, make] of [
   [
     'a name typed',
