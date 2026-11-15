@@ -1,8 +1,7 @@
 /* The scoreline (fortymm-real's .scoreline): a small uppercase label, then
    one cell per game in a row, each "G1" over its score in the number font.
    A saved cell's winning number is the winner colour; the current cell's
-   edge is the accent; blank cells are dimmer. The ✕ sits in a cell's top
-   right corner. */
+   edge is the accent; blank cells are dimmer. */
 .scoreline {
   margin-top: var(--s-6);
 }
@@ -21,9 +20,6 @@
   margin: 0;
   padding: 0;
   list-style: none;
-}
-.scoreline__cell {
-  position: relative;
 }
 .scoreline__body {
   display: flex;
@@ -69,30 +65,4 @@ a.scoreline__body:focus-visible {
 }
 .scoreline__dash {
   color: var(--fg-3);
-}
-.scoreline__clear {
-  position: absolute;
-  top: -8px;
-  right: -8px;
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 1px solid var(--border-control);
-  border-radius: var(--r-pill);
-  background: var(--bg-panel);
-  color: var(--fg-2);
-  cursor: pointer;
-}
-.scoreline__clear:hover {
-  color: var(--danger);
-}
-.scoreline__clear:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.scoreline__clear .icon {
-  width: 14px;
-  height: 14px;
 }

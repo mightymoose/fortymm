@@ -1,6 +1,6 @@
 import { screen, within } from '@testing-library/react'
 import { renderScreen } from '../../test/render-screen.tsx'
-import type { BestOf, Score } from '../../scoring/scoring.ts'
+import type { BestOf, Games } from '../../scoring/scoring.ts'
 import { Match } from './ScoringScreen.match.tsx'
 import { ScoringScreen, type ScoringScreenProps } from './ScoringScreen.tsx'
 
@@ -13,7 +13,7 @@ export class ScoringScreenPage {
 
   // The screen with a stand-in caller around it (ScoringScreen.match.tsx),
   // for a journey across games.
-  renderMatch(match: { opponentName: string; bestOf: BestOf; games: Score[] }) {
+  renderMatch(match: { opponentName: string; bestOf: BestOf; games: Games }) {
     return renderScreen(<Match {...match} />, { path: '/scoring' })
   }
 
@@ -70,22 +70,10 @@ export class ScoringScreenPage {
     return within(await this.cell(n)).queryByRole('link')
   }
 
-  // The ✕ on a scoreline cell, "Clear game N", or null.
-  clearCell(n: number) {
-    return screen.queryByRole('button', { name: `Clear game ${n}` })
-  }
-
-  // "Clear game N?", and its answers.
-  clearDialog(n: number) {
-    return screen.findByRole('dialog', { name: `Clear game ${n}?` })
-  }
-
-  keepScore() {
-    return screen.findByRole('button', { name: 'Keep score' })
-  }
-
-  clearGame() {
-    return screen.findByRole('button', { name: 'Clear game' })
+  // The stand-in caller's way out of scoring (renderMatch only): its
+  // "Dashboard" link, to `/`.
+  dashboardLink() {
+    return screen.findByRole('link', { name: 'Dashboard' })
   }
 
   // "Leave without saving?", and its answers.

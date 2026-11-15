@@ -1,6 +1,5 @@
 import { Link, type LinkOptions } from '@tanstack/react-router'
-import { Icon } from '../../Icon.tsx'
-import { mayClear, type BestOf, type Score } from '../../../scoring/scoring.ts'
+import { isDecided, savedScore, type BestOf, type Games } from '../../../scoring/scoring.ts'
 import './Scoreline.css'
 
 // Where a scoreline cell links: the options of the router's <Link> that open
@@ -12,40 +11,35 @@ export type GameLink = (game: number) => LinkOptions
 // SCORELINE strip): one cell per game up to the best of, "G1" over its score
 // (yours first, the winner's number marked), or "– –" for a game not saved.
 //
-// - Every saved game's cell is a link to it, at any time, so any saved game
-//   can be corrected.
-// - The next game to score (the one after the last saved) is a link too;
-//   every other blank cell is inert: a game can only be saved after the ones
-//   before it.
+// - Every game that opens is a link to it: every saved game, at any time, and
+//   every empty game while the match is undecided, in any order. An empty
+//   game of a decided match is inert: nothing is played past the decider.
 // - The game on screen is marked (aria-current="step") and is no link: it is
 //   already open.
-// - The highest saved game, the only one that may be cleared, has a ✕,
-//   "Clear game N", which asks the screen to confirm (`onClear`).
+// - Clearing is on the game's own page, not here.
 export function Scoreline({
   bestOf,
   games,
   game,
   gameLink,
-  onClear,
 }: {
   bestOf: BestOf
-  games: readonly Score[]
+  games: Games
   game: number
   gameLink: GameLink
-  onClear: (game: number) => void
 }) {
-  const nextUnsaved = games.length + 1
+  const decided = isDecided(games, bestOf)
   return (
     <nav className="scoreline" aria-label="Scoreline">
       <h2 className="scoreline__label">Scoreline</h2>
       <ol className="scoreline__cells">
         {Array.from({ length: bestOf }, (_, index) => index + 1).map((n) => {
-          const score = games[n - 1]
+          const score = savedScore(games, n)
           const current = n === game
-          const linked = !current && (score !== undefined || n === nextUnsaved)
-          const won = score === undefined ? null : score[0] > score[1]
+          const linked = !current && (score !== null || !decided)
+          const won = score === null ? null : score[0] > score[1]
           const label =
-            score === undefined
+            score === null
               ? `Game ${n}, not yet played`
               : `Game ${n}, ${score[0]}–${score[1]}`
           const inner = (
@@ -64,7 +58,7 @@ export function Scoreline({
             <li
               key={n}
               className="scoreline__cell"
-              data-saved={score !== undefined || undefined}
+              data-saved={score !== null || undefined}
               aria-current={current ? 'step' : undefined}
             >
               {linked ? (
@@ -78,16 +72,6 @@ export function Scoreline({
                     {inner}
                   </span>
                 </div>
-              )}
-              {mayClear(games, n) && (
-                <button
-                  type="button"
-                  className="scoreline__clear"
-                  aria-label={`Clear game ${n}`}
-                  onClick={() => onClear(n)}
-                >
-                  <Icon name="x" />
-                </button>
               )}
             </li>
           )
