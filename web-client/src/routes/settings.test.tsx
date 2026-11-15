@@ -1,12 +1,12 @@
 import { expect, test, vi } from 'vitest'
-import { SettingsScreenPage } from '../components/SettingsScreen.page.tsx'
+import { SettingsScreenPage } from '../components/settings/SettingsScreen.page.tsx'
 import { loadMe, type User } from '../storage.ts'
 import { renderRoute } from '../test/render-route.tsx'
 
 // The route's wiring: the user its loader has the store read reaches the
 // screen, and its pending view shows while the loader runs. Only the storage
 // the store reads is replaced (loadMe; jsdom has no IndexedDB). What each
-// account shows is the screen's test (src/components/SettingsScreen.test.tsx);
+// account shows is the screen's test (src/components/settings/SettingsScreen.test.tsx);
 // how the user is read is the store's (src/stores/user.test.ts); following
 // the store once mounted, the connected component's
 // (src/components/Settings.test.tsx); the page over real storage is the

@@ -1,5 +1,5 @@
-import type { User } from '../storage.ts'
-import type { Account } from '../stores/user.ts'
+import type { User } from '../../storage.ts'
+import type { Account } from '../../stores/user.ts'
 
 // The account settings page, at /settings: this device's account, as the
 // user store read it (src/stores/user.ts), handed over by Settings.tsx. It

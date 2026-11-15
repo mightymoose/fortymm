@@ -1,6 +1,6 @@
 import { screen } from '@testing-library/react'
 import { expect, test } from 'vitest'
-import type { User } from '../storage.ts'
+import type { User } from '../../storage.ts'
 import { SettingsScreenPage } from './SettingsScreen.page.tsx'
 
 // What the screen shows for each account it is handed. How the account is
