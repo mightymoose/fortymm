@@ -76,6 +76,18 @@ Every conversion at the api boundary is done with zod, in the schema: telling a 
 
 `src/api/health.ts` is the example to copy.
 
+## Forms
+
+"let's use zod and react hook form, converting the new match form to this along the way" (the user, 2026-11-14)
+
+A form is a React Hook Form form whose rules are one zod schema. The new match form (`src/components/new-match/NewMatchScreen.tsx`, with `NewMatchScreen.schema.ts`) is the example to copy.
+
+- **The schema is the one place a form's rules are written**: what is required, trimming, the choices a field allows, and the error messages, word for word. It sits beside the screen whose form it is, named for it (`<Name>Screen.schema.ts`), until a second form uses it; then it moves by the component tree's rule. Its input type (`z.input`) is what the form holds, and its output (`z.output`, made by `.transform(...)`) is what the screen hands its `onSubmit`. Never write a rule again in a component: where a screen needs to know whether a value passes (the summary's name, rated needing an opponent), it asks a part of the schema (`opponentNameSchema.safeParse(...)`).
+- **React Hook Form holds the state**: `useForm<Input, unknown, Output>({ resolver: zodResolver(schema), defaultValues })`, with the defaults beside the schema. No `useState` for a field's value, its error or whether it changed. A text input is `register`ed (its `ref` reaches the `<input>`: `TextInput` takes one); a design-system control that isn't a native input (`BestOfField`, `RatedField`, `Switch`) goes through `Controller`. Read values for display with `useWatch`, not `watch` (the React Compiler skips a component that calls `watch`). A field that follows another (rated off when the name is cleared) is set with `setValue` in the other's `onChange`.
+- **Errors show after the first submit**, then follow what is typed: React Hook Form's default modes (`mode: 'onSubmit'`, `reValidateMode: 'onChange'`), and the default focus on the first invalid field. The error goes to the `Field` as `error={errors.<field>?.message}`; the form has `noValidate`. Submit with `handleSubmit((output) => onSubmit(output))`, so the handler gets the parsed output and nothing else.
+- **Dirty is the form's own**: `formState.isDirty`, against `defaultValues`, so a form changed back to how it opened is not dirty. A screen that asks before leaving has one guard, `useBlocker({ shouldBlockFn: () => isDirty, enableBeforeUnload: () => isDirty, withResolver: true })`, and nothing else decides it. A submitted form is still dirty: whatever navigates after a submit must get past that one guard (leave it to the task that navigates).
+- **Tests.** The schema's rules are its own test, `<Name>Screen.schema.test.ts`, called directly: every variant once (`NewMatchScreen.schema.test.ts`). The screen's test proves through the page object, by role, that it uses them: one case per outcome (the error shown and focused, the handler's match, the leave guard asking or not).
+
 ## This device's signing key
 
 `src/device-key.ts` (README "This device's signing key") is the only place the web client makes, keeps or signs with a key.
