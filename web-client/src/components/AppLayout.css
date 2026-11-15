@@ -8,7 +8,9 @@
    left after the toggle, and the user's mark, at the right end in the flow,
    shows the username beside the initials. On phones the bottom bar is the
    navigation, fixed to the bottom; wider, it is not displayed, and a
-   screen's wide-only parts show instead (the dashboard's "New match"). The
+   screen's wide-only parts show instead (the dashboard's "New match"), and
+   a part drawn differently on phones is drawn the wide way (the matches
+   list, a table rather than cards). The
    top bar, the sidebar, the bottom bar, the user's mark and those parts read what the breakpoint
    decides from the custom properties set here, so no other file has a media
    query for it. */
@@ -24,6 +26,14 @@
      bar doesn't (the dashboard's "New match", which the bottom bar has on
      phones): not displayed here, an inline-flex box wider. */
   --app-layout-wide-only-display: none;
+  /* A value that holds on phones only, for a part drawn differently there
+     (the matches list's table, as cards). Read with the wider value as the
+     fallback, `display: var(--app-layout-phone-block, table-row)`: wider,
+     these are `initial`, which a var() takes as unset, so its fallback
+     applies. */
+  --app-layout-phone-block: block;
+  --app-layout-phone-grid: grid;
+  --app-layout-phone-none: none;
   /* How far from the viewport's bottom the fixed update notice and the end
      of the page's content stay: on phones, above the bottom bar (its height
      and the safe area); wider, above the safe area alone. */
@@ -50,6 +60,9 @@
     --app-layout-user-radius: var(--r-md);
     --app-layout-bottom-bar-display: none;
     --app-layout-wide-only-display: inline-flex;
+    --app-layout-phone-block: initial;
+    --app-layout-phone-grid: initial;
+    --app-layout-phone-none: initial;
     --app-layout-bottom-clear: env(safe-area-inset-bottom, 0px);
 
     grid-template-columns: auto minmax(0, 1fr);

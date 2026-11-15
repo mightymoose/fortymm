@@ -4,9 +4,10 @@ import './BottomBar.css'
 
 // The bottom bar, on phones only (AppLayout.css's breakpoint), where there is
 // no sidebar: the app's navigation on a phone, fixed to the bottom of the
-// screen. Its pages' links sit at its start, today one, to the dashboard,
-// with its icon and its label; the router's <Link> marks it
-// aria-current="page" there. At its end, apart from them, is "New match", a
+// screen. Its pages' links sit at its start, the dashboard's then the
+// matches list's, each with its icon and its label; the router's <Link>
+// marks the current one aria-current="page" (Matches on /matches and the
+// pages under it, as the sidebar's does). At its end, apart from them, is "New match", a
 // link to the new match screen (/matches/new), drawn as the bar's one primary
 // action, in the accent, where a right thumb rests: on a phone it is the way
 // there, as the dashboard's own button is wider. Its <nav> is named "Bottom
@@ -18,6 +19,10 @@ export function BottomBar() {
       <Link to="/" className="bottom-bar__item">
         <Icon name="layout-dashboard" />
         <span>Dashboard</span>
+      </Link>
+      <Link to="/matches" className="bottom-bar__item">
+        <Icon name="list" />
+        <span>Matches</span>
       </Link>
       <Link
         to="/matches/new"

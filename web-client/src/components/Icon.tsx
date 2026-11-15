@@ -145,6 +145,17 @@ const paths = {
       <rect width="7" height="5" x="3" y="16" rx="1" />
     </>
   ),
+  // Lucide "list": the matches list, in the sidebar and the bottom bar.
+  list: (
+    <>
+      <path d="M3 12h.01" />
+      <path d="M3 18h.01" />
+      <path d="M3 6h.01" />
+      <path d="M8 12h13" />
+      <path d="M8 18h13" />
+      <path d="M8 6h13" />
+    </>
+  ),
   // Lucide "settings": the account settings page, in the sidebar.
   settings: (
     <>

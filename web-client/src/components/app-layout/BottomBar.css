@@ -5,7 +5,9 @@
    below its links. Shown only on phones (AppLayout.css decides its display
    and keeps the page's content and the update notice clear of it).
 
-   The pages' links sit at the bar's start, "New match" at its end.
+   The pages' links (Dashboard, Matches) sit at the bar's start, "New
+   match" at its end. At 320px the three, at 64px or more each and a
+   --s-1 gap, fit with room to spare.
 
    The design system has no bottom bar. Its item is the sidebar's (the kit's
    .fm-nav a), stacked: the icon over the label, at least 44px each way to
@@ -19,7 +21,7 @@
   left: 0;
   display: var(--app-layout-bottom-bar-display, none);
   align-items: center;
-  justify-content: space-between;
+  gap: var(--s-1);
   box-sizing: border-box;
   height: calc(
     var(--app-layout-bottom-bar-height, 56px) + env(safe-area-inset-bottom, 0px)
@@ -56,7 +58,11 @@
 }
 /* "New match", at the bar's end: its one primary action, the primary
    button's colours (accent, on-accent; accent-hover under the pointer),
-   the same on its own page. */
+   the same on its own page. Its auto start margin pushes it to the bar's
+   end, apart from the pages' links. */
+.bottom-bar__item--action {
+  margin-inline-start: auto;
+}
 .bottom-bar__item--action,
 .bottom-bar__item--action[aria-current='page'] {
   background: var(--accent);

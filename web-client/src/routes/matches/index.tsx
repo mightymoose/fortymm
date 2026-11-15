@@ -1,10 +1,10 @@
-import { createFileRoute, notFound } from '@tanstack/react-router'
+import { createFileRoute } from '@tanstack/react-router'
+import { MatchList } from '../../components/MatchList.tsx'
+import { MatchListScreenPending } from '../../components/match-list/MatchListScreen.tsx'
+import { matchesStore } from '../../stores/matches.ts'
 
-// /matches has no page of its own yet. Without this route the layout above
-// (matches.tsx) would match it and show an empty page; this keeps it the
-// not-found page it was before the layout.
 export const Route = createFileRoute('/matches/')({
-  beforeLoad: () => {
-    throw notFound()
-  },
+  loader: () => matchesStore.getState().load(),
+  pendingComponent: MatchListScreenPending,
+  component: MatchList,
 })

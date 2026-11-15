@@ -3,6 +3,7 @@ import { screen, within } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import { AppLayoutPage } from '../../../components/AppLayout.page.tsx'
 import { MatchDetailsScreenPage } from '../../../components/match-details/MatchDetailsScreen.page.tsx'
+import { MatchListScreenPage } from '../../../components/match-list/MatchListScreen.page.tsx'
 import { NotFoundScreenPage } from '../../../components/NotFoundScreen.page.tsx'
 import { ScoringScreenPage } from '../../../components/scoring/ScoringScreen.page.tsx'
 import { createMatch } from '../../../test/match.ts'
@@ -47,7 +48,10 @@ test('Score opens the next game’s scoring screen', async () => {
 
   await user.click(await new MatchDetailsScreenPage().score())
 
-  expect(await new ScoringScreenPage().heading()).toHaveTextContent('Enter game 2 score.')
+  // Until the navigation lands, the only h1 is still the details page's.
+  await vi.waitFor(async () =>
+    expect(await new ScoringScreenPage().heading()).toHaveTextContent('Enter game 2 score.'),
+  )
   expect(router.state.location.pathname).toBe(`/matches/${matchId}/games/2/scores/edit`)
 })
 
@@ -58,9 +62,9 @@ test('the way back reaches /matches', async () => {
 
   await user.click(await new MatchDetailsScreenPage().back())
 
-  // Whatever /matches shows (today the not-found page, later the list).
   await vi.waitFor(() =>
     expect(router.state.location.pathname).toBe('/matches'),
   )
+  expect(await new MatchListScreenPage().heading()).toBeVisible()
   expect(screen.queryByRole('heading', { name: /^You vs / })).toBeNull()
 })

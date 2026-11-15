@@ -17,9 +17,14 @@ export class MatchDetailsScreenPage {
     return screen.findByRole('heading', { level: 1, name: /^You vs / })
   }
 
-  // The link back to the matches.
-  back() {
-    return screen.findByRole('link', { name: 'Matches' })
+  // The link back to the matches: the one outside a navigation (where the
+  // layout is mounted, the sidebar and the bottom bar have a Matches link of
+  // their own).
+  async back() {
+    const links = await screen.findAllByRole('link', { name: 'Matches' })
+    const back = links.filter((link) => link.closest('nav') === null)
+    if (back.length !== 1) throw new Error(`${back.length} ways back`)
+    return back[0]!
   }
 
   score() {
