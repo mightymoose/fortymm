@@ -122,6 +122,9 @@ test('the screen opens with your field focused; Enter there moves to the opponen
 
   await user.keyboard('11{Enter}')
   expect(await page.theirs('Ana')).toHaveFocus()
+  // It moved, and didn't submit (a refused submit would focus the empty
+  // field too, and show the error).
+  expect(page.error()).toBeNull()
   expect(onSave).not.toHaveBeenCalled()
 
   await user.keyboard('{ArrowLeft}')
