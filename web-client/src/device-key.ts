@@ -9,8 +9,8 @@ import { appendLock, heldStore, type Store } from './storage.ts'
 // signatures, in the forms records store.
 //
 // Only what makes records (the first launch's hello, src/first-launch.ts;
-// the journal, later) signs with it; feature code never does (design
-// section 4.3).
+// every other record, commit in src/journal.ts) signs with it; feature code
+// never does (design section 4.3).
 //
 // The browser can delete the key with the rest of the site's storage (a
 // cleared site, a private window closing, Safari's eviction): the next call

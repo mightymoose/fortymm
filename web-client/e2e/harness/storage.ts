@@ -1,7 +1,9 @@
 import { type Change, onChange } from '../../src/changes.ts'
 import { loadCore } from '../../src/core/load.ts'
-import { storedSignature, withDeviceKey } from '../../src/device-key.ts'
+import { compressedPublicKey, storedSignature, withDeviceKey } from '../../src/device-key.ts'
 import { environment } from '../../src/first-launch.ts'
+import { commit, type Draft } from '../../src/journal.ts'
+import type { Refusal } from '../../src/stores/match-source.ts'
 import {
   appendLock,
   loadMatch,
@@ -11,6 +13,7 @@ import {
   rebuildViews,
   recordStore,
   storageDatabase,
+  type Store,
   storeRecord,
   userStore,
 } from '../../src/storage.ts'
@@ -273,8 +276,260 @@ function failIfFailing(
   return written
 }
 
+// A fault in the device key's signing (design 4.5, "injected faults in the
+// signing adapter"), on the second signature of a commit: WebCrypto's sign
+// throws, gives a truncated signature, or signs with another key.
+export type SignFault = 'throws' | 'truncated' | 'wrong-key'
+let signFault: { how: SignFault; calls: number } | null = null
+const sign = SubtleCrypto.prototype.sign
+SubtleCrypto.prototype.sign = async function (
+  this: SubtleCrypto,
+  ...args: Parameters<SubtleCrypto['sign']>
+) {
+  if (signFault === null || ++signFault.calls !== 2) return sign.apply(this, args)
+  const [algorithm, , data] = args
+  if (signFault.how === 'throws') throw new DOMException('Refused', 'OperationError')
+  if (signFault.how === 'truncated') return (await sign.apply(this, args)).slice(0, 63)
+  const other = await crypto.subtle.generateKey(
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['sign'],
+  )
+  return sign.call(this, algorithm, other.privateKey, data)
+}
+
+// A draft for commit (src/journal.ts) to run, by name, since a function
+// can't cross to the page:
+// - create: a fresh player, then a match of this device's own player
+//   against it, with terms termsBytes(bestOf, rated). With `fault`, the
+//   second signature (the match's) fails that way; with `swallow`, the
+//   draft catches that failure and gives the player record alone to keep.
+// - score: reads `match` with the held store, and makes a score record for
+//   game `game` replacing the entries current for it; a match not kept is
+//   refused.
+// - refuse: makes a player record, then refuses with `refusal`.
+// - write-then-refuse: makes a player record, then, if its store lets it,
+//   writes through it (`append`: the player; `me`: another key's hello as
+//   this device's own), then refuses with `refusal`.
+// - foreign: makes a player record, and gives it to keep with one make
+//   didn't make in this commit: another key's player record
+//   (`another-key`), or the first record kept on disk (`kept`).
+// - builder-throws: makes a player record, then a make whose body builder
+//   throws; the draft catches that and gives the player alone to keep.
+// - throws: makes a player record, then throws.
+export type CommitSpec =
+  | { kind: 'create'; bestOf: number; rated: boolean; fault?: SignFault; swallow?: boolean }
+  | { kind: 'score'; match: string; game: number; score: [number, number] | null }
+  | { kind: 'refuse'; refusal: Refusal }
+  | { kind: 'write-then-refuse'; write: 'append' | 'me'; refusal: Refusal }
+  | { kind: 'foreign'; from: 'another-key' | 'kept' }
+  | { kind: 'builder-throws' }
+  | { kind: 'throws' }
+
+// A record of the given body signed by a new key, not this device's, built
+// as make builds one: the core's body, a WebCrypto signature, the core's
+// assembly.
+async function signedByAnotherKey(
+  body: (signer: [number, Uint8Array, Uint8Array]) => Uint8Array,
+): Promise<Uint8Array> {
+  const core = await loadCore()
+  const other = await crypto.subtle.generateKey(
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['sign'],
+  )
+  const publicKey = compressedPublicKey(
+    new Uint8Array(await crypto.subtle.exportKey('raw', other.publicKey)),
+  )
+  const bytes = body([environment, publicKey, crypto.getRandomValues(new Uint8Array(8))])
+  const raw = new Uint8Array(
+    await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, other.privateKey, bytes as BufferSource),
+  )
+  return core.assemble(bytes, storedSignature(core, raw))
+}
+
+// The first record kept on disk, read straight from IndexedDB.
+async function firstKept(): Promise<Uint8Array> {
+  const database = await request(indexedDB.open(storageDatabase))
+  try {
+    const [record] = (await request(
+      database.transaction(recordStore).objectStore(recordStore).getAll(),
+    )) as Uint8Array[]
+    return record
+  } finally {
+    database.close()
+  }
+}
+
+// What a draft made (record ids, hex, in order), and for a score, the
+// entries it read as current for its game.
+type Committed = { made: string[]; read?: string[] }
+
+const notKept: Refusal = { reason: 'missing', message: 'This match isn’t on this device.' }
+
+function draftOf(spec: CommitSpec): Draft<Committed> {
+  if (spec.kind === 'create') {
+    return async ({ core, me, make }) => {
+      const player = await make((signer) => core.playerBody(...signer))
+      const opponent = core.extraPlayerId(player)!
+      const terms = core.termsBytes(spec.bestOf, spec.rated)
+      let match: Uint8Array
+      try {
+        match = await make((signer) => core.matchBody(...signer, [[me], [opponent]], terms))
+      } catch (error) {
+        if (!spec.swallow) throw error
+        return { records: [player], value: { made: [hex(core.id(player))] } }
+      }
+      return {
+        records: [player, match],
+        value: { made: [hex(core.id(player)), hex(core.id(match))] },
+      }
+    }
+  }
+  if (spec.kind === 'score') {
+    return async ({ core, store, make }) => {
+      const loaded = await store.loadMatch(spec.match)
+      if (!loaded.ok) return loaded
+      if (loaded.match === null) return { refused: notKept }
+      const read = loaded.match.current[spec.game - 1] ?? []
+      const value = core.scoreValue(spec.score)
+      const score = await make((signer) =>
+        core.scoreBody(...signer, bytes(spec.match), spec.game, value, read.map(bytes)),
+      )
+      return { records: [score], value: { made: [hex(core.id(score))], read } }
+    }
+  }
+  if (spec.kind === 'write-then-refuse') {
+    return async ({ core, store, make }) => {
+      const player = await make((signer) => core.playerBody(...signer))
+      const writable = store as Partial<Store>
+      if (spec.write === 'append') await writable.append?.([player])
+      if (spec.write === 'me') {
+        const hello = await signedByAnotherKey((signer) => core.helloBody(...signer))
+        await writable.storeRecord?.(hello, { me: true })
+      }
+      return { refused: spec.refusal }
+    }
+  }
+  if (spec.kind === 'foreign') {
+    return async ({ core, make }) => {
+      const player = await make((signer) => core.playerBody(...signer))
+      const other =
+        spec.from === 'kept'
+          ? await firstKept()
+          : await signedByAnotherKey((signer) => core.playerBody(...signer))
+      return {
+        records: [player, other],
+        value: { made: [hex(core.id(player)), hex(core.id(other))] },
+      }
+    }
+  }
+  if (spec.kind === 'builder-throws') {
+    return async ({ core, make }) => {
+      const player = await make((signer) => core.playerBody(...signer))
+      try {
+        await make(() => {
+          throw new Error('A bug in the body builder')
+        })
+      } catch {
+        return { records: [player], value: { made: [hex(core.id(player))] } }
+      }
+      throw new Error('The body builder was expected to throw')
+    }
+  }
+  if (spec.kind === 'throws') {
+    return async ({ core, make }) => {
+      await make((signer) => core.playerBody(...signer))
+      throw new Error('A bug in the draft')
+    }
+  }
+  return async ({ core, make }) => {
+    await make((signer) => core.playerBody(...signer))
+    return { refused: spec.refusal }
+  }
+}
+
+// Commits the draft spec names: what commit answered, or 'threw: …'.
+async function commitDraft(spec: CommitSpec) {
+  signFault = spec.kind === 'create' && spec.fault ? { how: spec.fault, calls: 0 } : null
+  try {
+    return await commit(draftOf(spec))
+  } catch (error) {
+    return `threw: ${String(error)}`
+  } finally {
+    signFault = null
+  }
+}
+
+// The append lock, held by this page between holdLock and releaseLock, so
+// commits started meanwhile, here or in another tab, queue for it.
+let releaseHeld: (() => void) | null = null
+
 const harness = {
   makeRecords,
+
+  commit: commitDraft,
+
+  // Each spec committed at once, while this page holds the append lock, so
+  // all queue for it in the order given before any runs: what each answered.
+  async commitTogether(specs: CommitSpec[]) {
+    await harness.holdLock()
+    const committing: Promise<unknown>[] = []
+    for (const [i, spec] of specs.entries()) {
+      committing.push(commit(draftOf(spec)))
+      await harness.waitForQueued(i + 1)
+    }
+    harness.releaseLock()
+    return Promise.all(committing)
+  },
+
+  // Takes the append lock and keeps it until releaseLock.
+  async holdLock() {
+    await new Promise<void>((granted) => {
+      void navigator.locks.request(appendLock, () => {
+        granted()
+        return new Promise<void>((release) => (releaseHeld = release))
+      })
+    })
+  },
+
+  releaseLock() {
+    releaseHeld?.()
+    releaseHeld = null
+  },
+
+  // Resolves once this many requests for the append lock wait for it, in
+  // any tab of the origin.
+  async waitForQueued(count: number) {
+    while (
+      ((await navigator.locks.query()).pending ?? []).filter(({ name }) => name === appendLock)
+        .length < count
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+  },
+
+  // Every record kept, read by the core: its id, kind, whether it verifies
+  // and the key that signed it (hex).
+  async keptRecords() {
+    const core = await loadCore()
+    const database = await openExisting()
+    if (database === null) return []
+    let kept: Uint8Array[]
+    try {
+      kept = (await request(
+        database.transaction(recordStore).objectStore(recordStore).getAll(),
+      )) as Uint8Array[]
+    } finally {
+      database.close()
+    }
+    return kept.map((record) => ({
+      id: hex(core.id(record)),
+      kind: core.kind(record),
+      verifies: core.verify(record),
+      signer: hex(core.signer(record)),
+    }))
+  },
 
   // This device's own player id (hex), made from its key.
   async ownPlayerId() {
