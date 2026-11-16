@@ -70,6 +70,19 @@ export function createMatchStore(source: MatchSource = matchMemory) {
     return entry
   }
 
+  // Reads a match the store already holds again, after a write or a change.
+  // A read the device refuses leaves an entry already read as it is, so a
+  // page showing it stays, with whatever is typed on it (the user's
+  // decision, 2026-11-16); only a loader's read (load) records the refusal.
+  const readAgain = async (matchId: string) => {
+    const entry = entryOf(await source.read(matchId))
+    store.setState((state) =>
+      entry.status === 'unavailable' && state.matches[matchId]?.status === 'ready'
+        ? state
+        : { matches: { ...state.matches, [matchId]: entry } },
+    )
+  }
+
   // Has the source save what `decide` says game `game` becomes, then reads
   // the match again; or answers why not, changing nothing.
   const save = (
@@ -79,7 +92,7 @@ export function createMatchStore(source: MatchSource = matchMemory) {
   ): Promise<ActionResult> =>
     queue(async () => {
       const saved = await source.saveGame(matchId, game, decide)
-      if (saved.ok) await read(matchId)
+      if (saved.ok) await readAgain(matchId)
       return saved
     })
 
@@ -121,7 +134,7 @@ export function createMatchStore(source: MatchSource = matchMemory) {
         ? [...new Set([...Object.keys(store.getState().matches), ...watching.keys()])]
         : changed
     for (const matchId of ids) {
-      if (watching.has(matchId)) void queue(() => read(matchId))
+      if (watching.has(matchId)) void queue(() => readAgain(matchId))
     }
     const dropped = ids.filter((matchId) => !watching.has(matchId))
     store.setState((state) => {

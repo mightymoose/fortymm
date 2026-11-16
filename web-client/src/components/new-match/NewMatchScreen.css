@@ -60,6 +60,13 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 
+/* What the device refused of the last Start match, between the settings and
+   the summary, right above the button. */
+.new-match__refused {
+  padding: var(--s-5) var(--s-5) 0;
+  background: var(--bg-panel);
+}
+
 /* The summary: what the match is, then Cancel and Start match. */
 .new-match__summary {
   display: flex;

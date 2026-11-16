@@ -26,7 +26,9 @@ export type { MatchSummary, MatchToCreate } from './match-source.ts'
 // and leaves the list as it was.
 //
 // As in the plan, after a write to any match the list is read again if a
-// mounted page watches it (watchMatches), and goes back to unread if not.
+// mounted page watches it (watchMatches), and goes back to unread if not. A
+// watched list the device wouldn't read is also read again when the page is
+// shown again.
 
 // - unread: not read since the last change (or ever).
 // - ready: every match, newest first.
@@ -64,16 +66,26 @@ export function createMatchesStore(source: MatchSource = matchMemory) {
     })
   }
 
+  // While the list is watched: a list the device wouldn't read is read again
+  // when the page is shown again (the person coming back to the tab), with no
+  // timer. A list read is kept current by the changes it hears of.
+  const shown = () => {
+    if (document.visibilityState !== 'visible') return
+    if (store.getState().matches.status === 'unavailable') void queue(read)
+  }
+
   const store = createStore<MatchesStore>()(() => ({
     matches: { status: 'unread' },
     load: () => queue(read),
     watchMatches() {
       watchers += 1
+      if (watchers === 1) document.addEventListener('visibilitychange', shown)
       let stopped = false
       return () => {
         if (stopped) return
         stopped = true
         watchers -= 1
+        if (watchers === 0) document.removeEventListener('visibilitychange', shown)
       }
     },
     createMatch: (match) =>

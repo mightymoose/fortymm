@@ -1,5 +1,11 @@
-import { createMemoryHistory, RouterProvider } from '@tanstack/react-router'
+import {
+  createBrowserHistory,
+  createMemoryHistory,
+  RouterProvider,
+  type RouterHistory,
+} from '@tanstack/react-router'
 import { render } from '@testing-library/react'
+import { onTestFinished } from 'vitest'
 import { createAppRouter } from '../router.ts'
 
 // Mounts the whole app, router included, at `path`, the way a person opening
@@ -12,9 +18,21 @@ import { createAppRouter } from '../router.ts'
 //
 // It gives the router too, for a test of where a redirect ends:
 // router.state.location.pathname.
-export function renderRoute(path: string) {
-  const router = createAppRouter({
-    history: createMemoryHistory({ initialEntries: [path] }),
-  })
+//
+// With `browserHistory`, the router keeps its address in jsdom's own
+// window.history, as in the app: the browser's Back goes through popstate
+// and the screens' leave guards, as in a browser. It stops listening when
+// the test ends.
+export function renderRoute(path: string, { browserHistory = false } = {}) {
+  let history: RouterHistory
+  if (browserHistory) {
+    window.history.replaceState(null, '', path)
+    const browser = createBrowserHistory()
+    onTestFinished(() => browser.destroy())
+    history = browser
+  } else {
+    history = createMemoryHistory({ initialEntries: [path] })
+  }
+  const router = createAppRouter({ history })
   return { ...render(<RouterProvider router={router} />), router }
 }

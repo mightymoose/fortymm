@@ -5,6 +5,7 @@ import { AppLayoutPage } from '../../components/AppLayout.page.tsx'
 import { DashboardScreenPage } from '../../components/DashboardScreen.page.tsx'
 import { NewMatchScreenPage } from '../../components/new-match/NewMatchScreen.page.tsx'
 import { ScoringScreenPage } from '../../components/scoring/ScoringScreen.page.tsx'
+import { matchMemory } from '../../stores/match-memory.ts'
 import { matchesStore } from '../../stores/matches.ts'
 import { renderRoute } from '../../test/render-route.tsx'
 
@@ -56,33 +57,20 @@ test('Back from the scoring page Start match opened goes where the person was be
   expect(router.state.location.pathname).toBe('/')
 })
 
-// Only the device's storage can refuse a create, and the matches are in
-// memory until it exists: the store's action is replaced for this one test.
-test('a create the store refuses stays on the form, as filled, asking nothing', async () => {
+test('a create the device refused stays on the form, as filled, with its alert, asking nothing', async () => {
   const user = userEvent.setup()
-  const { createMatch } = matchesStore.getState()
-  let refused = false
-  matchesStore.setState({
-    createMatch: async () => {
-      refused = true
-      return { ok: false, reason: 'storage-unavailable' }
-    },
-  })
-  try {
-    const { router } = renderRoute('/matches/new')
-    const page = new NewMatchScreenPage()
-    await user.click(await page.bestOf(7))
-    await user.click(await page.startMatch())
+  const { router } = renderRoute('/matches/new')
+  const page = new NewMatchScreenPage()
+  matchMemory.failNextWrite('storage-unavailable')
+  await user.click(await page.bestOf(7))
+  await user.click(await page.startMatch())
 
-    await expect.poll(() => refused).toBe(true)
-    // Past the answer, and past any navigation it would have started.
-    await new Promise((settled) => setTimeout(settled, 50))
-    expect(router.state.location.pathname).toBe('/matches/new')
-    expect(await page.bestOf(7)).toBeChecked()
-    expect(page.queryDiscardDialog()).toBeNull()
-  } finally {
-    matchesStore.setState({ createMatch })
-  }
+  expect(await page.alert()).toHaveTextContent('That wasn’t saved.')
+  // Past any navigation the answer would have started.
+  await new Promise((settled) => setTimeout(settled, 50))
+  expect(router.state.location.pathname).toBe('/matches/new')
+  expect(await page.bestOf(7)).toBeChecked()
+  expect(page.queryDiscardDialog()).toBeNull()
 })
 
 test('Cancel on a form left as it opened goes back to the dashboard', async () => {

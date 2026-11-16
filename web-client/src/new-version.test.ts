@@ -193,6 +193,16 @@ test('dismissed, the notice hides, and comes back when yet another deployment is
   expect(newVersion.ready()).toBe(true)
 })
 
+test('a new version waits, dismissed or not, and nothing waits on the newest build', () => {
+  expect(openPage().newVersion.waiting()).toBe(false)
+  const { newVersion } = openPage({ waiting: true })
+  expect(newVersion.waiting()).toBe(true)
+
+  newVersion.dismiss()
+
+  expect(newVersion.waiting()).toBe(true)
+})
+
 test('nothing reloads the page by itself: a new version installed and waiting leaves it as it is', () => {
   const { registration, reloadPage } = openPage()
 

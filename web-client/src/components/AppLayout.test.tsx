@@ -42,6 +42,7 @@ test('when a new version is ready, the layout shows the notice over the screen, 
   const reload = vi.fn()
   showNewVersionOf({
     ready: () => true,
+    waiting: () => true,
     subscribe: () => () => {},
     reload,
     dismiss: () => {},

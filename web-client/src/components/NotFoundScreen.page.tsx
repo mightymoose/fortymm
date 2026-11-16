@@ -13,4 +13,9 @@ export class NotFoundScreenPage {
   heading() {
     return screen.findByRole('heading', { name: 'Page not found' })
   }
+
+  // The heading, or null if it isn't shown now.
+  headingNow() {
+    return screen.queryByRole('heading', { name: 'Page not found' })
+  }
 }

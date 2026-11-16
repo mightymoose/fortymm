@@ -3,6 +3,8 @@ import { expect, test } from 'vitest'
 import { DashboardScreenPage } from '../../../../../../components/DashboardScreen.page.tsx'
 import { NotFoundScreenPage } from '../../../../../../components/NotFoundScreen.page.tsx'
 import { ScoringScreenPage } from '../../../../../../components/scoring/ScoringScreen.page.tsx'
+import { matchStore } from '../../../../../../stores/match.ts'
+import { matchMemory } from '../../../../../../stores/match-memory.ts'
 import { createMatch } from '../../../../../../test/match.ts'
 import { renderRoute } from '../../../../../../test/render-route.tsx'
 
@@ -116,3 +118,68 @@ test('a saved game of a decided match opens for editing', async () => {
 
   expect(await new ScoringScreenPage().heading()).toHaveTextContent('Edit game 1 score.')
 })
+
+// Back from match B's game 1 lands on match A's game 1 (New match replaces
+// its form with B's game 1): the same screen at a path that differs only in
+// the match.
+test('Back from another match’s game, discarding, opens this match’s game fresh: no score typed there, no alert of its own, and Save writes nothing of it here', async () => {
+  const user = userEvent.setup()
+  const a = await createMatch(5)
+  const b = await createMatch(5)
+  const { router } = renderRoute(edit(a, 1), { browserHistory: true })
+  const page = new ScoringScreenPage()
+  await page.heading()
+  await router.navigate({ to: edit(b, 1) })
+  await expect.poll(() => router.state.location.pathname).toBe(edit(b, 1))
+  matchMemory.failNextWrite('storage-unavailable')
+  await user.click(await page.yours())
+  await user.keyboard('11{Enter}7{Enter}')
+  await page.alert()
+
+  router.history.back()
+  await user.click(await page.discardAndLeave())
+  await expect.poll(() => router.state.location.pathname).toBe(edit(a, 1))
+
+  expect(page.queryAlert()).toBeNull()
+  expect(await page.yours()).toHaveValue('')
+  expect(await page.theirs()).toHaveValue('')
+  await user.click(await page.submit())
+  expect(await gamesOf(a)).toEqual([])
+})
+
+test('Back from another match’s game with its refusal showing and nothing typed opens this match’s game with no alert', async () => {
+  const user = userEvent.setup()
+  // The same game 1 saved in both: only the match differs.
+  const a = await createMatch(5, [[11, 7]])
+  const b = await createMatch(5, [[11, 7]])
+  const { router } = renderRoute(edit(a, 1), { browserHistory: true })
+  const page = new ScoringScreenPage()
+  await page.heading()
+  await router.navigate({ to: edit(b, 1) })
+  expect(await page.heading()).toHaveTextContent('Edit game 1 score.')
+  matchMemory.failNextWrite('storage-unavailable')
+  await user.click(page.clear()!)
+  await page.alert()
+
+  // Nothing typed: Back asks nothing.
+  router.history.back()
+  await expect.poll(() => router.state.location.pathname).toBe(edit(a, 1))
+
+  expect(await page.heading()).toHaveTextContent('Edit game 1 score.')
+  expect(page.queryAlert()).toBeNull()
+})
+
+// The layout's read and this page's are two reads: whichever says the match
+// isn't on this device makes the page not found.
+test('a match not on this device is not found even when one of its reads is refused', async () => {
+  matchMemory.failNextRead('storage-unavailable')
+  renderRoute(edit('not-a-match', 1))
+
+  expect(await new NotFoundScreenPage().heading()).toBeVisible()
+})
+
+async function gamesOf(matchId: string) {
+  const entry = await matchStore.getState().load(matchId)
+  if (entry.status !== 'ready') throw new Error(`match ${entry.status}`)
+  return entry.match.games
+}

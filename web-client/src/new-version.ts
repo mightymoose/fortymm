@@ -59,6 +59,10 @@ export interface Container extends EventTarget {
 export interface NewVersion {
   // Whether to show that a new version is ready.
   ready(): boolean
+  // Whether a new version is on the device to switch to, whether or not the
+  // notice was dismissed: what a refusal of the core asks (DeviceAlert),
+  // since the old build's files are then likely gone.
+  waiting(): boolean
   subscribe(listener: () => void): () => void
   // The person pressed Reload.
   reload(): void
@@ -76,16 +80,30 @@ export function watchForNewVersion(
 ): NewVersion & { stop(): void } {
   const listeners = new Set<() => void>()
   let ready = false
+  let waiting = false
   let asked = false
   let reloaded = false
   // A page that has no controller is on its first visit: the first worker
   // takes control of it (clients.claim) and that is no new version.
   let controlled = container.controller !== null
 
-  function show(value: boolean) {
-    if (ready === value) return
-    ready = value
+  const notify = () => {
     for (const listener of listeners) listener()
+  }
+
+  // A new version is on the device: it waits, and the notice shows.
+  function offer() {
+    if (ready && waiting) return
+    ready = true
+    waiting = true
+    notify()
+  }
+
+  // The notice hides; the new version still waits.
+  function dismiss() {
+    if (!ready) return
+    ready = false
+    notify()
   }
 
   function reloadOnce() {
@@ -98,7 +116,7 @@ export function watchForNewVersion(
   // becomes redundant, and nothing shows.
   function follow(worker: KeptWorker) {
     const settle = () => {
-      if (worker.state === 'installed' && controlled) show(true)
+      if (worker.state === 'installed' && controlled) offer()
       if (worker.state !== 'installing') {
         worker.removeEventListener('statechange', settle)
       }
@@ -107,7 +125,7 @@ export function watchForNewVersion(
     settle()
   }
 
-  if (registration.waiting !== null && controlled) show(true)
+  if (registration.waiting !== null && controlled) offer()
   if (registration.installing !== null) follow(registration.installing)
   registration.addEventListener('updatefound', () => {
     if (registration.installing !== null) follow(registration.installing)
@@ -119,7 +137,7 @@ export function watchForNewVersion(
     } else if (controlled) {
       // Another tab's Reload: the new version controls this page too, and
       // this page still runs the old one.
-      show(true)
+      offer()
     }
     controlled = true
   })
@@ -137,21 +155,22 @@ export function watchForNewVersion(
 
   return {
     ready: () => ready,
+    waiting: () => waiting,
     subscribe(listener) {
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
     reload() {
-      const waiting = registration.waiting
-      if (waiting === null) {
+      const next = registration.waiting
+      if (next === null) {
         // Another tab already made the new version take over.
         reloadOnce()
         return
       }
       asked = true
-      waiting.postMessage(takeOverMessage)
+      next.postMessage(takeOverMessage)
     },
-    dismiss: () => show(false),
+    dismiss,
     stop() {
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('online', check)
@@ -164,6 +183,7 @@ export function watchForNewVersion(
 // development (no service worker), and where there is none: nothing.
 const nothing: NewVersion = {
   ready: () => false,
+  waiting: () => false,
   subscribe: () => () => {},
   reload: () => {},
   dismiss: () => {},
@@ -185,18 +205,20 @@ export function showNewVersionOf(newVersion: NewVersion) {
   notify()
 }
 
-// For the layout: whether a new version is ready, and the person's two
-// answers.
+const subscribe = (listener: () => void) => {
+  listeners.add(listener)
+  return () => listeners.delete(listener)
+}
+
+// For the layout: whether a new version is ready (the notice), and the
+// person's two answers. For a screen's refusal of the core: whether one is
+// waiting, dismissed or not.
 export function useNewVersion() {
-  const ready = useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
-    },
-    () => current.ready(),
-  )
+  const ready = useSyncExternalStore(subscribe, () => current.ready())
+  const waiting = useSyncExternalStore(subscribe, () => current.waiting())
   return {
     ready,
+    waiting,
     reload: () => current.reload(),
     dismiss: () => current.dismiss(),
   }

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Alert } from './feedback-tab/Alert.tsx'
+import { Alert } from './Alert.tsx'
 import { Avatar } from './Avatar.tsx'
 import { Board, BoardGrid, BoardSection, Spec, Stage } from './Board.tsx'
 import { Breadcrumbs } from './feedback-tab/Breadcrumbs.tsx'

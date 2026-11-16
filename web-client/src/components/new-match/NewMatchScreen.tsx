@@ -1,9 +1,12 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useBlocker } from '@tanstack/react-router'
+import { useRef, useState } from 'react'
 import { Controller, useForm, useWatch } from 'react-hook-form'
+import type { Failure } from '../../stores/match-source.ts'
 import { BestOfField } from './new-match-screen/BestOfField.tsx'
 import { Button } from '../Button.tsx'
 import { ButtonLink } from '../ButtonLink.tsx'
+import { DeviceAlert, type NewVersionOffer } from '../DeviceAlert.tsx'
 import { DiscardChangesDialog } from './new-match-screen/DiscardChangesDialog.tsx'
 import { Icon } from '../Icon.tsx'
 import { opponentLabel } from '../opponent.ts'
@@ -27,16 +30,24 @@ export type { NewMatch }
 //
 // A React Hook Form form whose rules are `newMatchSchema` (web-client/
 // CLAUDE.md, "Forms"). Start match hands what the schema makes of the form
-// to `onSubmit`.
+// to `onSubmit`, and waits for its answer. One the device refused (its
+// storage, its locks, signing, or the core not loaded) shows an error alert
+// above the summary, read out at once ("That wasn't saved.", DeviceAlert),
+// with the form as chosen. The next Start match takes it away the moment it
+// is pressed; a refusal again shows it anew. Where a kept match goes is the
+// caller's.
 //
 // Leaving a changed form (one that isn't as it opened) asks first, "Discard
 // changes?", whether by Cancel, any other link, or the browser's back;
-// closing or reloading the tab asks through the browser.
+// closing or reloading the tab asks through the browser, except the reload
+// to a new version the alert offers.
 // It renders in the layout's <main> (AppLayout).
 export function NewMatchScreen({
   onSubmit,
+  newVersion,
 }: {
-  onSubmit: (match: NewMatch) => void
+  onSubmit: (match: NewMatch) => Promise<{ ok: true } | ({ ok: false } & Failure)>
+  newVersion: NewVersionOffer
 }) {
   const {
     control,
@@ -47,11 +58,18 @@ export function NewMatchScreen({
     defaultValues: newMatchDefaults,
   })
   const bestOf = useWatch({ control, name: 'bestOf' })
+  // What the device refused of the last Start match, if it did, and which
+  // answer that was: each refusal is a new alert, read out again, even when
+  // its words are the same.
+  const [refused, setRefused] = useState<Failure['reason'] | null>(null)
+  const [answers, setAnswers] = useState(0)
+  // Set once the person asked for the new version: that reload doesn't ask.
+  const reloading = useRef(false)
 
   // The one leave guard: the form's own dirty state, against its defaults.
   const blocker = useBlocker({
     shouldBlockFn: () => isDirty,
-    enableBeforeUnload: () => isDirty,
+    enableBeforeUnload: () => isDirty && !reloading.current,
     withResolver: true,
   })
 
@@ -69,7 +87,13 @@ export function NewMatchScreen({
         className="new-match__card"
         aria-label="New match"
         noValidate
-        onSubmit={handleSubmit((match) => onSubmit(match))}
+        onSubmit={handleSubmit(async (match) => {
+          setRefused(null)
+          const result = await onSubmit(match)
+          if (result.ok) return
+          setAnswers((n) => n + 1)
+          setRefused(result.reason)
+        })}
       >
         <div className="new-match__settings">
           <Controller
@@ -80,6 +104,19 @@ export function NewMatchScreen({
             )}
           />
         </div>
+
+        {refused !== null && (
+          <div key={answers} className="new-match__refused">
+            <DeviceAlert
+              title="That wasn’t saved."
+              refusal={{ action: 'write', reason: refused }}
+              newVersion={newVersion}
+              onReload={() => {
+                reloading.current = true
+              }}
+            />
+          </div>
+        )}
 
         <div className="new-match__summary">
           <div className="new-match__read">
