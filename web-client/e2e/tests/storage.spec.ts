@@ -63,7 +63,7 @@ test('opened with no connection after one visit with one, the stored user is the
   })
 })
 
-test('storing the same hello twice keeps one record and one user, with no error', async ({
+test('storing the same hello twice keeps one record, one journal row and one user, with no error', async ({
   page,
 }) => {
   const harness = new StorageHarness(page)
@@ -73,6 +73,10 @@ test('storing the same hello twice keeps one record and one user, with no error'
 
   expect(results).toEqual([{ ok: true }, { ok: true }])
   expect(await harness.kept()).toEqual({ records: 1, users: 1 })
+  const journal = (await harness.readStore('journal')) as [number, unknown][]
+  expect(journal.map(([, row]) => row)).toEqual([
+    { id: expect.any(String), kind: 'hello', match: null, state: 'held', seq: journal[0][0] },
+  ])
 })
 
 test('storeRecord keeps the bytes it verified, even when the caller changes its array while the store waits for the lock', async ({
@@ -135,6 +139,22 @@ test('when writing the user fails, the hello isn’t kept either: storing is sto
   await fresh.open()
   expect(await fresh.kept()).toEqual({ records: 0, users: 0 })
 })
+
+for (const how of ['refused', 'aborted'] as const) {
+  test(`when writing the hello’s journal row fails (${how}), neither the hello nor its user is kept: storing is storage-unavailable`, async ({
+    page,
+  }) => {
+    const harness = new StorageHarness(page)
+    await harness.open()
+
+    await harness.failWrites('journal', null, how)
+    const { results } = await harness.storeHello()
+    await harness.stopFailing()
+
+    expect(results).toEqual([{ ok: false, reason: 'storage-unavailable' }])
+    expect(await harness.counts()).toMatchObject({ records: 0, journal: 0, users: 0 })
+  })
+}
 
 test('a hello stored as this device’s own is what loadMe gives: the user the core gives for its key', async ({
   page,
