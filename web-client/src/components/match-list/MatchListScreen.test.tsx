@@ -7,51 +7,44 @@ import { MatchListScreenPage } from './MatchListScreen.page.tsx'
 // list store gives them. That the page shows the store's matches is
 // MatchList.test.tsx and the route's test (src/routes/matches.test.tsx).
 
-const ana: MatchSummary = { matchId: 'm-ana', opponentName: 'Ana', bestOf: 5, rated: false }
-const ben: MatchSummary = { matchId: 'm-ben', opponentName: 'Ben', bestOf: 3, rated: true }
-const chen: MatchSummary = { matchId: 'm-chen', opponentName: 'Chen', bestOf: 7, rated: true }
+const first: MatchSummary = { matchId: 'm-1', bestOf: 5, rated: false }
+const second: MatchSummary = { matchId: 'm-2', bestOf: 3, rated: true }
+const third: MatchSummary = { matchId: 'm-3', bestOf: 7, rated: true }
 
-test('each match is a row of its opponent and its format, in the order given', async () => {
+test('each match is a row of its opponent, Anonymous, and its format, in the order given', async () => {
   const page = new MatchListScreenPage()
-  page.render({ matches: [chen, ana, ben] })
+  page.render({ matches: [third, first, second] })
 
   expect(await page.heading()).toBeVisible()
   const rows = await page.rows()
   expect(rows.map((row) => page.cells(row))).toEqual([
-    ['You vs Chen', 'Best of 7 · Rated'],
-    ['You vs Ana', 'Best of 5 · Unrated'],
-    ['You vs Ben', 'Best of 3 · Rated'],
+    ['You vs Anonymous', 'Best of 7 · Rated'],
+    ['You vs Anonymous', 'Best of 5 · Unrated'],
+    ['You vs Anonymous', 'Best of 3 · Rated'],
   ])
-})
-
-test('a match with no opponent’s name is the row “You vs Anonymous”, linking to its own page', async () => {
-  const page = new MatchListScreenPage()
-  const anonymous: MatchSummary = { matchId: 'm-anon', opponentName: null, bestOf: 3, rated: false }
-  page.render({ matches: [anonymous] })
-
-  const [row] = await page.rows()
-  expect(page.cells(row!)).toEqual(['You vs Anonymous', 'Best of 3 · Unrated'])
-  expect(await page.matchLink('You vs Anonymous')).toHaveAttribute('href', '/matches/m-anon')
 })
 
 test('a match’s row links to its own page, /matches/<matchId>, and following it goes there', async () => {
   const user = userEvent.setup()
   const page = new MatchListScreenPage()
-  page.render({ matches: [ana, ben] })
+  page.render({ matches: [first, second] })
 
-  const link = await page.matchLink('You vs Ben')
-  expect(link).toHaveAttribute('href', '/matches/m-ben')
-  expect(await page.matchLink('You vs Ana')).toHaveAttribute('href', '/matches/m-ana')
+  const [firstRow, secondRow] = await page.rows()
+  const link = page.matchLink(secondRow!)
+  expect(link).toHaveAccessibleName('You vs Anonymous')
+  expect(link).toHaveAttribute('href', '/matches/m-2')
+  expect(page.matchLink(firstRow!)).toHaveAttribute('href', '/matches/m-1')
   await user.click(link)
 
   // The bare router follows it and the screen stays (render-screen.tsx):
   // the link it followed is now the current page.
-  expect(await page.matchLink('You vs Ben')).toHaveAttribute('aria-current', 'page')
+  const [, followed] = await page.rows()
+  expect(page.matchLink(followed!)).toHaveAttribute('aria-current', 'page')
 })
 
 test('with matches, New match beside the heading links to the new match screen, and there is no empty state', async () => {
   const page = new MatchListScreenPage()
-  page.render({ matches: [ana] })
+  page.render({ matches: [first] })
   await page.table()
 
   const links = page.newMatchLinks()

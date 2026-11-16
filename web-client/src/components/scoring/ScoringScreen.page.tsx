@@ -13,7 +13,7 @@ export class ScoringScreenPage {
 
   // The screen with a stand-in caller around it (ScoringScreen.match.tsx),
   // for a journey across games.
-  renderMatch(match: { opponentName: string; bestOf: BestOf; games: Games }) {
+  renderMatch(match: { bestOf: BestOf; games: Games }) {
     return renderScreen(<Match {...match} />, { path: '/scoring' })
   }
 
@@ -30,13 +30,8 @@ export class ScoringScreenPage {
     return screen.findByRole('textbox', { name: 'Your score' })
   }
 
-  // The opponent's field, by their name ("Ana’s score").
-  theirs(opponentName: string) {
-    return screen.findByRole('textbox', { name: `${opponentName}’s score` })
-  }
-
-  // The opponent's field when the match has no opponent's name.
-  theirsAnonymous() {
+  // The opponent's field.
+  theirs() {
     return screen.findByRole('textbox', { name: 'Opponent’s score' })
   }
 

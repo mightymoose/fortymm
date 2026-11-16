@@ -13,11 +13,9 @@ import { ScoringScreen } from './ScoringScreen.tsx'
 // `/` is a way out of scoring. The routes and the match store take its place
 // in the app; the screen is the same.
 export function Match({
-  opponentName,
   bestOf,
   games: saved,
 }: {
-  opponentName: string
   bestOf: BestOf
   games: Games
 }) {
@@ -30,7 +28,6 @@ export function Match({
     <>
       <Link to="/">Dashboard</Link>
       <ScoringScreen
-        opponentName={opponentName}
         bestOf={bestOf}
         games={games}
         game={game}

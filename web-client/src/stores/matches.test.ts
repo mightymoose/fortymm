@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest'
-import type { NewMatch } from '../components/new-match/NewMatchScreen.schema.ts'
+import type { MatchToCreate } from './match-source.ts'
 import { createMatchMemory } from './match-memory.ts'
 import { createMatchStore } from './match.ts'
 import { createMatchesStore } from './matches.ts'
@@ -11,35 +11,33 @@ function fresh() {
   return { matches: createMatchesStore(memory), match: createMatchStore(memory) }
 }
 
-const againstAna: NewMatch = {
-  opponentName: 'Ana',
+const ratedBestOf5: MatchToCreate = {
   format: { bestOf: 5 },
   rated: true,
 }
-const againstBo: NewMatch = {
-  opponentName: 'Bo',
+const unratedBestOf3: MatchToCreate = {
   format: { bestOf: 3 },
   rated: false,
 }
 
-test('createMatch gives an id, and the match loads with its name, length and rated, and no games', async () => {
+test('createMatch gives an id, and the match loads with its length and rated, and no games', async () => {
   const { matches, match } = fresh()
 
-  const created = await matches.getState().createMatch(againstAna)
+  const created = await matches.getState().createMatch(ratedBestOf5)
 
   expect(created).toEqual({ ok: true, matchId: expect.any(String) })
   if (!created.ok) throw new Error('not created')
   expect(await match.getState().load(created.matchId)).toEqual({
     status: 'ready',
-    match: { opponentName: 'Ana', bestOf: 5, rated: true, games: [] },
+    match: { bestOf: 5, rated: true, games: [] },
   })
 })
 
 test('two matches get different ids, and the list has both, newest first', async () => {
   const { matches } = fresh()
 
-  const first = await matches.getState().createMatch(againstAna)
-  const second = await matches.getState().createMatch(againstBo)
+  const first = await matches.getState().createMatch(ratedBestOf5)
+  const second = await matches.getState().createMatch(unratedBestOf3)
   await matches.getState().load()
 
   if (!first.ok || !second.ok) throw new Error('not created')
@@ -47,24 +45,9 @@ test('two matches get different ids, and the list has both, newest first', async
   expect(matches.getState().matches).toEqual({
     status: 'ready',
     matches: [
-      { matchId: second.matchId, opponentName: 'Bo', bestOf: 3, rated: false },
-      { matchId: first.matchId, opponentName: 'Ana', bestOf: 5, rated: true },
+      { matchId: second.matchId, bestOf: 3, rated: false },
+      { matchId: first.matchId, bestOf: 5, rated: true },
     ],
-  })
-})
-
-test('a match created with no opponent’s name is listed with opponentName null', async () => {
-  const { matches } = fresh()
-
-  const created = await matches
-    .getState()
-    .createMatch({ opponentName: null, format: { bestOf: 3 }, rated: false })
-  await matches.getState().load()
-
-  if (!created.ok) throw new Error('not created')
-  expect(matches.getState().matches).toEqual({
-    status: 'ready',
-    matches: [{ matchId: created.matchId, opponentName: null, bestOf: 3, rated: false }],
   })
 })
 
@@ -81,13 +64,13 @@ test('a watched list is read again after another store writes a match', async ()
   await watched.getState().load()
   watched.getState().watchMatches()
 
-  const created = await other.getState().createMatch(againstAna)
+  const created = await other.getState().createMatch(ratedBestOf5)
 
   if (!created.ok) throw new Error('not created')
   await vi.waitFor(() =>
     expect(watched.getState().matches).toEqual({
       status: 'ready',
-      matches: [{ matchId: created.matchId, opponentName: 'Ana', bestOf: 5, rated: true }],
+      matches: [{ matchId: created.matchId, bestOf: 5, rated: true }],
     }),
   )
 })
@@ -100,7 +83,7 @@ test('a list nobody watches goes back to unread after another store writes a mat
   const stop = unwatched.getState().watchMatches()
   stop()
 
-  await other.getState().createMatch(againstAna)
+  await other.getState().createMatch(ratedBestOf5)
 
   expect(unwatched.getState().matches).toEqual({ status: 'unread' })
 })
@@ -111,18 +94,18 @@ test('a list nobody watches goes back to unread after another store writes a mat
 test('a create the device refuses is returned, and the list stays as it was', async () => {
   const memory = createMatchMemory()
   const matches = createMatchesStore(memory)
-  await matches.getState().createMatch(againstAna)
+  await matches.getState().createMatch(ratedBestOf5)
   const before = matches.getState().matches
   memory.failNextWrite('signing-unavailable')
 
-  expect(await matches.getState().createMatch(againstBo)).toEqual({
+  expect(await matches.getState().createMatch(unratedBestOf3)).toEqual({
     ok: false,
     reason: 'signing-unavailable',
   })
 
   expect(before).toEqual({
     status: 'ready',
-    matches: [{ matchId: expect.any(String), opponentName: 'Ana', bestOf: 5, rated: true }],
+    matches: [{ matchId: expect.any(String), bestOf: 5, rated: true }],
   })
   expect(matches.getState().matches).toBe(before)
 })
@@ -152,7 +135,7 @@ test('a watched list is read again after a change of ‘all’', async () => {
   })
   await watched.getState().load()
   watched.getState().watchMatches()
-  const created = await memory.create(againstAna)
+  const created = await memory.create(ratedBestOf5)
   if (!created.ok) throw new Error('not created')
 
   memory.announceAll()
@@ -160,7 +143,7 @@ test('a watched list is read again after a change of ‘all’', async () => {
   await vi.waitFor(() =>
     expect(watched.getState().matches).toEqual({
       status: 'ready',
-      matches: [{ matchId: created.matchId, opponentName: 'Ana', bestOf: 5, rated: true }],
+      matches: [{ matchId: created.matchId, bestOf: 5, rated: true }],
     }),
   )
 })

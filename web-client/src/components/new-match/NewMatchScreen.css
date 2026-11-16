@@ -6,9 +6,9 @@
    scroll sideways. At most 980px wide, centred.
 
    The card is a size container: where it is at least 640px wide (a desktop,
-   not a phone or the 768px layout with its sidebar), the match's length and
-   rated sit side by side, and the summary beside its buttons; narrower,
-   each takes the card's width, one under the other. That is the card's
+   not a phone or the 768px layout with its sidebar), the summary sits
+   beside its buttons; narrower, the buttons go under it, the card's width.
+   That is the card's
    width, not the viewport's, so the layout's one breakpoint stays the only
    media query. */
 .new-match {
@@ -55,20 +55,9 @@
   background: var(--bg-group);
   box-shadow: var(--shadow-overlay);
 }
-.new-match__opponent,
 .new-match__settings {
+  padding: var(--s-5);
   border-bottom: 1px solid var(--border-subtle);
-}
-
-.new-match__opponent {
-  padding: var(--s-5);
-}
-
-.new-match__settings {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--s-6);
-  padding: var(--s-5);
 }
 
 /* The summary: what the match is, then Cancel and Start match. */
@@ -97,10 +86,6 @@
   letter-spacing: 0.02em;
   color: var(--fg-3);
 }
-.new-match__rated {
-  font-weight: 700;
-  color: var(--accent);
-}
 /* On the narrowest card (a 320px phone), Start match over Cancel, each the
    card's width; from a 390px phone up, Cancel its own width and Start match
    the rest, side by side. Labels never wrap. */
@@ -123,9 +108,6 @@
 }
 
 @container (min-width: 640px) {
-  .new-match__settings {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
   .new-match__summary {
     flex-direction: row;
     align-items: center;

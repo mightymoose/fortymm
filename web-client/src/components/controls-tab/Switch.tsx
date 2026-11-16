@@ -1,5 +1,5 @@
 import { useState, type ButtonHTMLAttributes, type ReactNode } from 'react'
-import type { ForcedState } from './forced-state.ts'
+import type { ForcedState } from '../forced-state.ts'
 import './Switch.css'
 
 // A switch (the design system's .fm-switch): a setting that applies at once,

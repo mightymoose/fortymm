@@ -7,13 +7,12 @@ import { NewMatchPage } from '../pages/app.ts'
 // asks in the app ("Discard changes?"), a component test. The screen asks
 // nothing of the network.
 
-test('closing the tab with a name typed asks before leaving', async ({
+test('closing the tab with the length changed asks before leaving', async ({
   page,
 }) => {
   const newMatch = new NewMatchPage(page)
   await newMatch.goto()
-  await newMatch.opponent.click()
-  await page.keyboard.type('Ana')
+  await newMatch.bestOf(7).click()
 
   const asked = page.waitForEvent('dialog')
   await page.close({ runBeforeUnload: true })
@@ -28,7 +27,9 @@ test('closing the tab with the form as it opened asks nothing', async ({
 }) => {
   const newMatch = new NewMatchPage(page)
   await newMatch.goto()
-  await newMatch.opponent.click()
+  // A click that changes nothing: the browser asks only on a page someone
+  // has used.
+  await newMatch.bestOf(5).click()
   let asked = false
   page.on('dialog', async (dialog) => {
     asked = true

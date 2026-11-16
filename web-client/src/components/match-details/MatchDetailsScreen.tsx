@@ -15,7 +15,7 @@ import './MatchDetailsScreen.css'
 export type ScoreLink = (game: number) => LinkOptions
 
 // The match details screen, at /matches/<id>, after fortymm-real's match
-// page: a link back to the matches, the title ("You vs Ana") with, while the
+// page: a link back to the matches, the title ("You vs Anonymous") with, while the
 // match is undecided, a Score button to the next game's scoring screen; then
 // the scoreboard: the match's state (in progress, with the next game, or the
 // winner), its format, both players and the tally in games; then each game
@@ -35,9 +35,9 @@ export function MatchDetailsScreen({
   scoreLink: ScoreLink
 }) {
   const stateId = useId()
-  const { opponentName, bestOf, rated, games } = match
-  // "Anonymous" for a match recorded with no opponent's name.
-  const name = opponentLabel(opponentName)
+  const { bestOf, rated, games } = match
+  // "Anonymous": a match keeps no opponent's name (components/opponent.ts).
+  const name = opponentLabel
   const [you, opponent] = gamesWon(games)
   const finished = isDecided(games, bestOf)
   const winner = finished ? (you > opponent ? 'you' : 'opponent') : undefined
@@ -104,13 +104,13 @@ export function MatchDetailsScreen({
           <p
             className={`match-details__player match-details__player--opponent${winner === 'opponent' ? ' match-details__player--won' : ''}`}
           >
-            <Avatar initials={opponentInitials(opponentName)} />
+            <Avatar initials={opponentInitials} />
             <span className="match-details__name">{name}</span>
           </p>
         </div>
       </section>
 
-      <GameScores opponentName={opponentName} games={games} />
+      <GameScores games={games} />
     </div>
   )
 }

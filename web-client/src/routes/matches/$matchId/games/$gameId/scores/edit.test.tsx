@@ -23,7 +23,7 @@ test('a known match’s game shows the scoring screen with the store’s games',
   const page = new ScoringScreenPage()
 
   expect(await page.heading()).toHaveTextContent('Enter game 2 score.')
-  expect(await page.theirs('Ana')).toBeVisible()
+  expect(await page.theirs()).toBeVisible()
   expect(page.tally()).toHaveTextContent('Games won: 1 – 0')
 })
 

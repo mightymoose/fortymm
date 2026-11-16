@@ -36,11 +36,9 @@ import './ScoringScreen.css'
 export type { GameLink }
 
 // What the scoring screen takes. Every score is `[yours, theirs]`: this
-// device's player first, then the opponent.
+// device's player first, then the opponent, who is "Anonymous" on the right
+// of the pad (components/opponent.ts), their field "Opponent’s score".
 export type ScoringScreenProps = {
-  // The opponent, by name, on the right of the pad; null for a match with
-  // no opponent's name ("Anonymous", its field "Opponent’s score").
-  opponentName: string | null
   bestOf: BestOf
   // The match's games, one slot per game number: games[0] is game 1, null
   // for a game not saved (scoring.ts).
@@ -99,7 +97,6 @@ export function ScoringScreen(props: ScoringScreenProps) {
 // (a scoreline cell, the browser's back to one) never asks: what was typed
 // is dropped.
 function ScoringGame({
-  opponentName,
   bestOf,
   games,
   game,
@@ -228,7 +225,7 @@ function ScoringGame({
             {(['yours', 'theirs'] as const).map((side) => (
               <div key={side} className={`scoring__side scoring__side--${side}`}>
                 <span className="scoring__name" aria-hidden="true">
-                  {side === 'yours' ? 'You' : opponentLabel(opponentName)}
+                  {side === 'yours' ? 'You' : opponentLabel}
                 </span>
                 <Controller
                   control={control}
@@ -249,9 +246,7 @@ function ScoringGame({
                       onMouseDown={focusBeforeCaret}
                       onKeyDown={(event) => keyDown(side, event)}
                       aria-label={
-                        side === 'yours'
-                          ? 'Your score'
-                          : `${opponentName ?? 'Opponent'}’s score`
+                        side === 'yours' ? 'Your score' : 'Opponent’s score'
                       }
                       aria-invalid={
                         refused || errors[side] !== undefined ? true : undefined

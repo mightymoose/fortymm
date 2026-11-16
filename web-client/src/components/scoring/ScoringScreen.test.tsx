@@ -7,7 +7,6 @@ import type { ScoringScreenProps } from './ScoringScreen.tsx'
 
 function props(overrides: Partial<ScoringScreenProps> = {}): ScoringScreenProps {
   return {
-    opponentName: 'Ana',
     bestOf: 5,
     games: [],
     game: 1,
@@ -31,7 +30,7 @@ const twoGames: Score[] = [
 test('the journey: game 3 scored first from the scoreline, then game 1, corrected, and a deuce score refused', async () => {
   const user = userEvent.setup()
   const page = new ScoringScreenPage()
-  page.renderMatch({ opponentName: 'Ana', bestOf: 5, games: [] })
+  page.renderMatch({ bestOf: 5, games: [] })
   expect(await page.heading()).toHaveTextContent('Enter game 1 score.')
 
   await user.click((await page.cellLink(3))!)
@@ -49,7 +48,7 @@ test('the journey: game 3 scored first from the scoreline, then game 1, correcte
   await user.click((await page.cellLink(1))!)
   expect(await page.heading()).toHaveTextContent('Edit game 1 score.')
   expect(await page.yours()).toHaveValue('11')
-  expect(await page.theirs('Ana')).toHaveValue('7')
+  expect(await page.theirs()).toHaveValue('7')
   await user.keyboard('11{Enter}9{Enter}')
 
   expect(await page.heading()).toHaveTextContent('Enter game 2 score.')
@@ -67,7 +66,7 @@ test('a valid score calls onSave once with the game and the score, inside the su
   const page = new ScoringScreenPage()
   page.render(props({ games: twoGames, game: 3, onSave }))
   await user.type(await page.yours(), '11')
-  await user.type(await page.theirs('Ana'), '8')
+  await user.type(await page.theirs(), '8')
 
   // No await between the submit and the check: a save that waits for
   // anything (React Hook Form's async handleSubmit) is not called yet.
@@ -118,7 +117,7 @@ test.each([
   const page = new ScoringScreenPage()
   page.render(props({ onSave }))
   if (yours) await user.type(await page.yours(), yours)
-  if (theirs) await user.type(await page.theirs('Ana'), theirs)
+  if (theirs) await user.type(await page.theirs(), theirs)
   expect(page.error()).toBeNull()
 
   await user.click(await page.submit())
@@ -137,7 +136,7 @@ test('the submit is never disabled, and after a refused submit the error follows
   await user.click(await page.submit())
   expect(page.error()).not.toBeNull()
   await user.type(await page.yours(), '11')
-  await user.type(await page.theirs('Ana'), '4')
+  await user.type(await page.theirs(), '4')
 
   expect(page.error()).toBeNull()
 })
@@ -152,23 +151,23 @@ test.each([
     const page = new ScoringScreenPage()
     page.render(props())
     await user.type(await page.yours(), '11')
-    await user.type(await page.theirs('Ana'), '10')
+    await user.type(await page.theirs(), '10')
     await user.click(await page.submit())
     const deuce = 'At 10–10 the game enters deuce — the winner must lead by 2.'
     expect(page.error()).toHaveTextContent(deuce)
     expect(await page.yours()).toBeInvalid()
-    expect(await page.theirs('Ana')).toBeInvalid()
-    expect(await page.theirs('Ana')).toHaveAccessibleDescription(deuce)
+    expect(await page.theirs()).toBeInvalid()
+    expect(await page.theirs()).toHaveAccessibleDescription(deuce)
 
-    const field = side === 'yours' ? await page.yours() : await page.theirs('Ana')
+    const field = side === 'yours' ? await page.yours() : await page.theirs()
     await user.clear(field)
     await user.type(field, fixed)
 
     expect(page.error()).toBeNull()
     expect(await page.yours()).toBeValid()
-    expect(await page.theirs('Ana')).toBeValid()
+    expect(await page.theirs()).toBeValid()
     expect(await page.yours()).not.toHaveAccessibleDescription()
-    expect(await page.theirs('Ana')).not.toHaveAccessibleDescription()
+    expect(await page.theirs()).not.toHaveAccessibleDescription()
   },
 )
 
@@ -177,7 +176,7 @@ test('a refused score that is changed and still refused keeps its error, now wit
   const page = new ScoringScreenPage()
   page.render(props())
   await user.type(await page.yours(), '11')
-  await user.type(await page.theirs('Ana'), '10')
+  await user.type(await page.theirs(), '10')
   await user.click(await page.submit())
 
   await user.clear(await page.yours())
@@ -185,7 +184,7 @@ test('a refused score that is changed and still refused keeps its error, now wit
 
   expect(page.error()).toHaveTextContent('The winning side must reach at least 11 points.')
   expect(await page.yours()).toBeInvalid()
-  expect(await page.theirs('Ana')).toBeInvalid()
+  expect(await page.theirs()).toBeInvalid()
 })
 
 test('the fields keep digits only', async () => {
@@ -206,7 +205,7 @@ test('the screen opens with your field focused; Enter there moves to the opponen
   expect(await page.yours()).toHaveFocus()
 
   await user.keyboard('11{Enter}')
-  expect(await page.theirs('Ana')).toHaveFocus()
+  expect(await page.theirs()).toHaveFocus()
   // It moved, and didn't submit (a refused submit would focus the empty
   // field too, and show the error).
   expect(page.error()).toBeNull()
@@ -215,7 +214,7 @@ test('the screen opens with your field focused; Enter there moves to the opponen
   await user.keyboard('{ArrowLeft}')
   expect(await page.yours()).toHaveFocus()
   await user.keyboard('{ArrowRight}')
-  expect(await page.theirs('Ana')).toHaveFocus()
+  expect(await page.theirs()).toHaveFocus()
 })
 
 test('pressing into a field that holds a score selects it, so typing replaces it', async () => {
@@ -223,10 +222,10 @@ test('pressing into a field that holds a score selects it, so typing replaces it
   const page = new ScoringScreenPage()
   page.render(props({ games: twoGames, game: 1 }))
 
-  await user.click(await page.theirs('Ana'))
+  await user.click(await page.theirs())
   await user.keyboard('9')
 
-  expect(await page.theirs('Ana')).toHaveValue('9')
+  expect(await page.theirs()).toHaveValue('9')
 })
 
 test('opening a saved game selects your score, so typing replaces it', async () => {
@@ -250,7 +249,7 @@ test('the heading says Enter for a game not saved, Edit for a saved one, with it
   page.render(props({ games: twoGames, game: 2 }))
   expect(await page.heading()).toHaveTextContent('Edit game 2 score.')
   expect(await page.yours()).toHaveValue('9')
-  expect(await page.theirs('Ana')).toHaveValue('11')
+  expect(await page.theirs()).toHaveValue('11')
 })
 
 test.each([
@@ -327,7 +326,7 @@ test.each([
     page.render(props(overrides))
     if (typed !== null) {
       await user.type(await page.yours(), typed[0])
-      await user.type(await page.theirs('Ana'), typed[1])
+      await user.type(await page.theirs(), typed[1])
     }
 
     expect(await page.submit()).toHaveAccessibleName(label)
@@ -396,7 +395,7 @@ test('Clear calls onClear with the game at once, asking nothing', async () => {
 test('in a match, Clear empties that game and stays on it, its fields empty', async () => {
   const user = userEvent.setup()
   const page = new ScoringScreenPage()
-  page.renderMatch({ opponentName: 'Ana', bestOf: 5, games: twoGames })
+  page.renderMatch({ bestOf: 5, games: twoGames })
   await user.click((await page.cellLink(1))!)
   expect(await page.heading()).toHaveTextContent('Edit game 1 score.')
 
@@ -404,7 +403,7 @@ test('in a match, Clear empties that game and stays on it, its fields empty', as
 
   expect(await page.heading()).toHaveTextContent('Enter game 1 score.')
   expect(await page.yours()).toHaveValue('')
-  expect(await page.theirs('Ana')).toHaveValue('')
+  expect(await page.theirs()).toHaveValue('')
   expect(page.tally()).toHaveTextContent('Games won: 0 – 1')
   expect(screen.queryByRole('dialog')).toBeNull()
 })
@@ -412,7 +411,7 @@ test('in a match, Clear empties that game and stays on it, its fields empty', as
 test('switching to another game with a score typed and not saved asks nothing and drops what was typed', async () => {
   const user = userEvent.setup()
   const page = new ScoringScreenPage()
-  page.renderMatch({ opponentName: 'Ana', bestOf: 5, games: twoGames })
+  page.renderMatch({ bestOf: 5, games: twoGames })
   await user.click((await page.cellLink(1))!)
   await user.keyboard('5')
 
@@ -422,13 +421,13 @@ test('switching to another game with a score typed and not saved asks nothing an
   expect(await page.heading()).toHaveTextContent('Edit game 2 score.')
   await user.click((await page.cellLink(1))!)
   expect(await page.yours()).toHaveValue('11')
-  expect(await page.theirs('Ana')).toHaveValue('7')
+  expect(await page.theirs()).toHaveValue('7')
 })
 
 test('leaving scoring with a score typed and not saved asks “Leave without saving?”; Keep editing stays with it', async () => {
   const user = userEvent.setup()
   const page = new ScoringScreenPage()
-  page.renderMatch({ opponentName: 'Ana', bestOf: 5, games: twoGames })
+  page.renderMatch({ bestOf: 5, games: twoGames })
   await user.type(await page.yours(), '11')
 
   await user.click(await page.dashboardLink())
@@ -444,7 +443,7 @@ test('leaving scoring with a score typed and not saved asks “Leave without sav
 test('leaving scoring, Discard & leave leaves', async () => {
   const user = userEvent.setup()
   const page = new ScoringScreenPage()
-  page.renderMatch({ opponentName: 'Ana', bestOf: 5, games: twoGames })
+  page.renderMatch({ bestOf: 5, games: twoGames })
   await user.type(await page.yours(), '11')
 
   await user.click(await page.dashboardLink())
@@ -458,14 +457,14 @@ test('leaving scoring, Discard & leave leaves', async () => {
 test('leaving scoring with nothing typed, or a saved score typed again as it was, asks nothing', async () => {
   const user = userEvent.setup()
   const page = new ScoringScreenPage()
-  const first = page.renderMatch({ opponentName: 'Ana', bestOf: 5, games: twoGames })
+  const first = page.renderMatch({ bestOf: 5, games: twoGames })
   await page.heading()
   await user.click(await page.dashboardLink())
   expect(page.queryLeaveDialog()).toBeNull()
   expect(await page.dashboardLink()).toHaveAttribute('aria-current', 'page')
   first.unmount()
 
-  page.renderMatch({ opponentName: 'Ana', bestOf: 5, games: twoGames })
+  page.renderMatch({ bestOf: 5, games: twoGames })
   await user.click((await page.cellLink(1))!)
   await user.keyboard('11')
   await user.click(await page.dashboardLink())
@@ -487,20 +486,11 @@ test('the games won so far sit under VS, yours first; a single game has none', a
   expect(page.tally()).toBeNull()
 })
 
-test('the opponent is named on the right, and you on the left', async () => {
+test('"Anonymous" stands over the opponent’s field on the right, which is named "Opponent’s score", and "You" on the left', async () => {
   const page = new ScoringScreenPage()
-  page.render(props({ opponentName: 'Bea Okafor' }))
+  page.render(props())
 
-  expect(await page.theirs('Bea Okafor')).toBeVisible()
-  expect(screen.getByText('Bea Okafor')).toBeVisible()
-  expect(screen.getByText('You')).toBeVisible()
-})
-
-test('with no opponent’s name, "Anonymous" stands over their field, which is named "Opponent’s score"', async () => {
-  const page = new ScoringScreenPage()
-  page.render(props({ opponentName: null }))
-
-  expect(await page.theirsAnonymous()).toBeVisible()
+  expect(await page.theirs()).toBeVisible()
   expect(screen.getByText('Anonymous')).toBeVisible()
-  expect(screen.queryByRole('textbox', { name: /Anonymous/ })).toBeNull()
+  expect(screen.getByText('You')).toBeVisible()
 })

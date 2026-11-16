@@ -15,7 +15,8 @@ export type MatchListScreenProps = {
 // The matches list, at /matches: this device's matches, newest first. Its
 // heading with, at non-phone widths, the "New match" button beside it (as on
 // the dashboard; on a phone the bottom bar's is the way there). Each match is
-// a row of a table: the opponent ("Anonymous" for a match with no name), a link to the match's page
+// a row of a table: the opponent ("Anonymous": components/opponent.ts), a
+// link to the match's page
 // (/matches/<matchId>), and the format (best of n, rated or not). On phones
 // each row is drawn as a card (AppLayout.css's breakpoint, read in
 // MatchListScreen.css); it is the same table. With no matches, the design
@@ -55,7 +56,7 @@ export function MatchListScreen({ matches }: MatchListScreenProps) {
                     params={{ matchId: match.matchId }}
                     className="match-list-screen__link"
                   >
-                    You vs {opponentLabel(match.opponentName)}
+                    You vs {opponentLabel}
                   </Link>
                 </td>
                 <td className="match-list-screen__format">

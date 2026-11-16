@@ -5,36 +5,29 @@ import { BestOfField } from './new-match-screen/BestOfField.tsx'
 import { Button } from '../Button.tsx'
 import { ButtonLink } from '../ButtonLink.tsx'
 import { DiscardChangesDialog } from './new-match-screen/DiscardChangesDialog.tsx'
-import { Field } from '../Field.tsx'
 import { Icon } from '../Icon.tsx'
 import { opponentLabel } from '../opponent.ts'
 import {
   newMatchDefaults,
   newMatchSchema,
-  opponentNameSchema,
   type NewMatch,
   type NewMatchValues,
 } from './NewMatchScreen.schema.ts'
-import { RatedField } from './new-match-screen/RatedField.tsx'
-import { TextInput } from '../TextInput.tsx'
 import './NewMatchScreen.css'
 
-// What the form gives its handler (NewMatchScreen.schema.ts): the opponent's
-// name as typed, trimmed, or `null` with none; the match's format (`format:
-// {bestOf}`); and whether it is rated.
+// What the form gives its handler (NewMatchScreen.schema.ts): the match's
+// format (`format: {bestOf}`), and whether it is rated (never, for now).
 export type { NewMatch }
 
 // The new match screen, at /matches/new, after fortymm-real's match setup:
-// the title, then one card. In it: the opponent's name, the match's length
-// and whether it is rated (side by side where the card is wide enough), then
-// a summary of the match ("Ready: You vs Ana", or "You vs Anonymous" with no
-// name) with Cancel and Start match.
+// the title, then one card. In it: the match's length, then a summary of
+// the match ("Ready: You vs Anonymous", its length, "Unrated") with Cancel
+// and Start match. The form asks no opponent's name and no rating: every
+// match is against "Anonymous" (components/opponent.ts), and unrated.
 //
 // A React Hook Form form whose rules are `newMatchSchema` (web-client/
 // CLAUDE.md, "Forms"). Start match hands what the schema makes of the form
-// to `onSubmit`. The opponent's name is optional: left empty, the match is
-// recorded with no opponent. Rated needs an opponent: with no name it is off
-// and disabled, and clearing the name turns it off.
+// to `onSubmit`.
 //
 // Leaving a changed form (one that isn't as it opened) asks first, "Discard
 // changes?", whether by Cancel, any other link, or the browser's back;
@@ -47,24 +40,13 @@ export function NewMatchScreen({
 }) {
   const {
     control,
-    formState: { errors, isDirty },
+    formState: { isDirty },
     handleSubmit,
-    register,
-    setValue,
   } = useForm<NewMatchValues, unknown, NewMatch>({
     resolver: zodResolver(newMatchSchema),
     defaultValues: newMatchDefaults,
   })
-  const [opponentName, bestOf, rated] = useWatch({
-    control,
-    name: ['opponentName', 'bestOf', 'rated'],
-  })
-
-  // Every string parses: a blank one to `null`, no opponent. So rated is
-  // available when the name parses to a name, never by whether it parses.
-  const name = opponentNameSchema.parse(opponentName)
-  const ratable = name !== null
-  const isRated = rated && ratable
+  const bestOf = useWatch({ control, name: 'bestOf' })
 
   // The one leave guard: the form's own dirty state, against its defaults.
   const blocker = useBlocker({
@@ -89,30 +71,6 @@ export function NewMatchScreen({
         noValidate
         onSubmit={handleSubmit((match) => onSubmit(match))}
       >
-        <div className="new-match__opponent">
-          <Field
-            label="Opponent’s name"
-            help="Optional. Leave it empty to record a match without an opponent."
-            error={errors.opponentName?.message}
-          >
-            {(fieldControl) => (
-              <TextInput
-                {...fieldControl}
-                autoComplete="off"
-                autoCapitalize="words"
-                {...register('opponentName', {
-                  // No opponent, no rating: a rated match whose opponent is
-                  // cleared is not rated again when another name is typed.
-                  onChange: (event: { target: { value: string } }) => {
-                    if (opponentNameSchema.parse(event.target.value) === null)
-                      setValue('rated', false, { shouldDirty: true })
-                  },
-                })}
-              />
-            )}
-          </Field>
-        </div>
-
         <div className="new-match__settings">
           <Controller
             control={control}
@@ -121,35 +79,18 @@ export function NewMatchScreen({
               <BestOfField bestOf={field.value} onChange={field.onChange} />
             )}
           />
-          <Controller
-            control={control}
-            name="rated"
-            render={({ field }) => (
-              <RatedField
-                rated={field.value}
-                ratable={ratable}
-                onChange={field.onChange}
-              />
-            )}
-          />
         </div>
 
         <div className="new-match__summary">
           <div className="new-match__read">
             <p className="new-match__headline">
-              Ready: <b>You</b> vs <b>{opponentLabel(name)}</b>
+              Ready: <b>You</b> vs <b>{opponentLabel}</b>
             </p>
             <p className="new-match__sub">
               {bestOf === 1
                 ? 'Single game'
                 : `Best of ${bestOf} · first to ${Math.ceil(bestOf / 2)}`}
-              {' · '}
-              {isRated ? (
-                <span className="new-match__rated">Rated</span>
-              ) : (
-                'Unrated'
-              )}
-              {' · games to 11, win by 2'}
+              {' · Unrated · games to 11, win by 2'}
             </p>
           </div>
           <div className="new-match__actions">

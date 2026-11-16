@@ -24,9 +24,6 @@ export type { ActionResult, Failure, Refusal } from './match-source.ts'
 
 // What a screen shows of a match.
 export type MatchState = {
-  // null: no opponent's name was given (a screen names it with
-  // components/opponent.ts).
-  opponentName: string | null
   bestOf: BestOf
   rated: boolean
   // The games, one slot per game number: games[0] is game 1 (scoring.ts).
@@ -147,6 +144,6 @@ export function useMatch(matchId: string): MatchEntry | undefined {
 function entryOf(read: { ok: true; match: StoredMatch | null } | Unavailable): MatchEntry {
   if (!read.ok) return { status: 'unavailable', reason: read.reason }
   if (read.match === null) return { status: 'missing' }
-  const { opponentName, bestOf, rated, games } = read.match
-  return { status: 'ready', match: { opponentName, bestOf, rated, games } }
+  const { bestOf, rated, games } = read.match
+  return { status: 'ready', match: { bestOf, rated, games } }
 }

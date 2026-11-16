@@ -208,12 +208,10 @@ export class DashboardPage {
   }
 }
 
-// The new match screen, at /matches/new: the form for a match's opponent
-// and format.
+// The new match screen, at /matches/new: the form for a match's format.
 export class NewMatchPage {
   readonly heading: Locator
   readonly form: Locator
-  readonly opponent: Locator
   readonly startMatch: Locator
   private readonly page: Page
 
@@ -222,8 +220,12 @@ export class NewMatchPage {
     const main = page.getByRole('main')
     this.heading = main.getByRole('heading', { level: 1, name: 'New match' })
     this.form = main.getByRole('form', { name: 'New match' })
-    this.opponent = this.form.getByRole('textbox', { name: 'Opponent’s name' })
     this.startMatch = this.form.getByRole('button', { name: 'Start match' })
+  }
+
+  // The match's length: the radio "Best of `n`" (1, 3, 5 or 7).
+  bestOf(n: number) {
+    return this.form.getByRole('radio', { name: `Best of ${n}` })
   }
 
   async goto() {

@@ -44,9 +44,9 @@ test('/matches alone shows the matches list, through the layout route, in the la
   ])
   const rows = await list.rows()
   expect(rows.map((row) => list.cells(row))).toEqual([
-    ['You vs Ana', 'Best of 5 · Unrated'],
+    ['You vs Anonymous', 'Best of 5 · Unrated'],
   ])
-  const link = await list.matchLink('You vs Ana')
+  const link = list.matchLink(rows[0]!)
   expect(link).toHaveAttribute('href', `/matches/${matchId}`)
 
   await user.click(link)
@@ -54,5 +54,5 @@ test('/matches alone shows the matches list, through the layout route, in the la
   await expect
     .poll(() => router.state.location.pathname)
     .toBe(`/matches/${matchId}`)
-  expect(await new MatchDetailsScreenPage().heading()).toHaveTextContent('You vs Ana')
+  expect(await new MatchDetailsScreenPage().heading()).toHaveTextContent('You vs Anonymous')
 })
