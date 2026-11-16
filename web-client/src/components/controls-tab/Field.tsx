@@ -1,5 +1,5 @@
 import { useId, type ReactNode } from 'react'
-import { Icon } from './Icon.tsx'
+import { Icon } from '../Icon.tsx'
 import './Field.css'
 
 // What a field's control needs from its Field: the id its label points at,

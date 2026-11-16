@@ -5,7 +5,6 @@ import type { ScoreLink } from './MatchDetailsScreen.tsx'
 import { MatchDetailsScreenPage } from './MatchDetailsScreen.page.tsx'
 
 const inProgress: MatchState = {
-  opponentName: 'Ana',
   bestOf: 5,
   rated: false,
   games: [
@@ -16,7 +15,6 @@ const inProgress: MatchState = {
 }
 
 const youWon: MatchState = {
-  opponentName: 'Ben',
   bestOf: 3,
   rated: true,
   games: [
@@ -26,7 +24,6 @@ const youWon: MatchState = {
 }
 
 const noGames: MatchState = {
-  opponentName: 'Chen',
   bestOf: 5,
   rated: false,
   games: [],
@@ -38,13 +35,13 @@ const scoreLink: ScoreLink = (game) => ({
   params: { matchId: 'm-1', gameId: String(game) },
 })
 
-test('an in-progress match shows both players, its format, that it goes on with the next game, and the tally in games', async () => {
+test('an in-progress match shows both players, the opponent Anonymous, its format, that it goes on with the next game, and the tally in games', async () => {
   const page = new MatchDetailsScreenPage()
   page.render({ match: inProgress, scoreLink })
 
-  expect(await page.heading()).toHaveTextContent('You vs Ana')
+  expect(await page.heading()).toHaveTextContent('You vs Anonymous')
   expect(await page.player('You')).toBeVisible()
-  expect(await page.player('Ana')).toBeVisible()
+  expect(await page.player('Anonymous')).toBeVisible()
   expect(await page.scoreboard()).toHaveAccessibleName('In progress')
   expect(await page.format()).toHaveTextContent(
     /^Best of 5 · Unrated · Game 4 next$/,
@@ -56,7 +53,7 @@ test('a finished match shows it final with the winner, its format, rated, and th
   const page = new MatchDetailsScreenPage()
   page.render({ match: youWon, scoreLink })
 
-  expect(await page.heading()).toHaveTextContent('You vs Ben')
+  expect(await page.heading()).toHaveTextContent('You vs Anonymous')
   expect(await page.scoreboard()).toHaveAccessibleName('Final · You won')
   expect(await page.format()).toHaveTextContent(/^Best of 3 · Rated$/)
   expect(await page.tally()).toHaveTextContent('2 – 0')
@@ -75,7 +72,7 @@ test('a match the opponent won names the opponent as the winner', async () => {
     scoreLink,
   })
 
-  expect(await page.scoreboard()).toHaveAccessibleName('Final · Ben won')
+  expect(await page.scoreboard()).toHaveAccessibleName('Final · Anonymous won')
   expect(await page.tally()).toHaveTextContent('0 – 2')
 })
 
@@ -99,7 +96,7 @@ test('a match with no games yet is in progress at 0 – 0, game 1 next, and says
   const page = new MatchDetailsScreenPage()
   page.render({ match: noGames, scoreLink })
 
-  expect(await page.heading()).toHaveTextContent('You vs Chen')
+  expect(await page.heading()).toHaveTextContent('You vs Anonymous')
   expect(await page.scoreboard()).toHaveAccessibleName('In progress')
   expect(await page.format()).toHaveTextContent(
     /^Best of 5 · Unrated · Game 1 next$/,
@@ -118,7 +115,7 @@ test('each game up to the last saved one shows its score, yours first, and who w
 
   expect(await page.game(1)).toHaveAccessibleName('Game 1 11 7 You')
   expect(await page.game(2)).toHaveAccessibleName('Game 2 – – Not played')
-  expect(await page.game(3)).toHaveAccessibleName('Game 3 9 11 Ana')
+  expect(await page.game(3)).toHaveAccessibleName('Game 3 9 11 Anonymous')
   expect(await page.format()).toHaveTextContent(/Game 2 next$/)
 })
 
@@ -154,30 +151,17 @@ test('the way back is a link to /matches', async () => {
   expect(await page.back()).toHaveAttribute('href', '/matches')
 })
 
-// A match recorded with no opponent's name, which the opponent won.
-const anonymousWon: MatchState = {
-  opponentName: null,
-  bestOf: 3,
-  rated: false,
-  games: [
-    [11, 7],
-    [9, 11],
-    [5, 11],
-  ],
-}
-
-test('a match with no opponent’s name names the opponent Anonymous: the title, the winner and the scoreboard', async () => {
+test('the opponent’s avatar on the scoreboard shows “?”, not an initial, beside Anonymous', async () => {
   const page = new MatchDetailsScreenPage()
-  page.render({ match: anonymousWon, scoreLink })
+  page.render({ match: inProgress, scoreLink })
 
-  expect(await page.heading()).toHaveTextContent('You vs Anonymous')
-  expect(await page.scoreboard()).toHaveAccessibleName('Final · Anonymous won')
-  expect(await page.player('Anonymous')).toBeVisible()
+  expect(await page.playerAvatar('Anonymous')).toHaveTextContent(/^\?$/)
+  expect(await page.playerAvatar('You')).toHaveTextContent(/^Y$/)
 })
 
-test('a match with no opponent’s name heads the opponent’s column Anonymous, and a game they won says Anonymous won it', async () => {
+test('the games’ table heads the opponent’s column Anonymous, and a game they won says Anonymous won it', async () => {
   const page = new MatchDetailsScreenPage()
-  page.render({ match: anonymousWon, scoreLink })
+  page.render({ match: inProgress, scoreLink })
 
   expect(await page.columnHeaders()).toHaveLength(4)
   expect((await page.columnHeaders())[2]).toHaveTextContent(/^Anonymous$/)

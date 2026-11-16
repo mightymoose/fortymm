@@ -24,39 +24,20 @@ test('Start match opens game 1’s scoring page for the new match, asking nothin
   const { router } = renderRoute('/matches/new')
   const page = new NewMatchScreenPage()
 
-  await user.type(await page.opponent(), 'Dee')
-  await user.click(await page.bestOf(5))
+  await user.click(await page.bestOf(3))
   await user.click(await page.startMatch())
 
   const scoring = new ScoringScreenPage()
-  expect(await scoring.theirs('Dee')).toBeVisible()
+  expect(await scoring.theirs()).toBeVisible()
   expect(await scoring.heading()).toHaveTextContent('Enter game 1 score.')
   await matchesStore.getState().load()
   const matches = matchesStore.getState().matches
   if (matches.status !== 'ready') throw new Error(`list ${matches.status}`)
-  expect(matches.matches[0]).toMatchObject({ opponentName: 'Dee', bestOf: 5 })
+  expect(matches.matches[0]).toMatchObject({ bestOf: 3, rated: false })
   expect(router.state.location.pathname).toBe(
     `/matches/${matches.matches[0]!.matchId}/games/1/scores/edit`,
   )
   expect(page.queryDiscardDialog()).toBeNull()
-})
-
-test('Start match with no opponent’s name opens game 1’s scoring page against Anonymous', async () => {
-  const user = userEvent.setup()
-  const { router } = renderRoute('/matches/new')
-
-  await user.click(await new NewMatchScreenPage().startMatch())
-
-  const scoring = new ScoringScreenPage()
-  expect(await scoring.theirsAnonymous()).toBeVisible()
-  expect(await scoring.heading()).toHaveTextContent('Enter game 1 score.')
-  await matchesStore.getState().load()
-  const matches = matchesStore.getState().matches
-  if (matches.status !== 'ready') throw new Error(`list ${matches.status}`)
-  expect(matches.matches[0]).toMatchObject({ opponentName: null })
-  expect(router.state.location.pathname).toBe(
-    `/matches/${matches.matches[0]!.matchId}/games/1/scores/edit`,
-  )
 })
 
 test('Back from the scoring page Start match opened goes where the person was before the form', async () => {
@@ -66,9 +47,9 @@ test('Back from the scoring page Start match opened goes where the person was be
   await router.navigate({ to: '/matches/new' })
   const page = new NewMatchScreenPage()
 
-  await user.type(await page.opponent(), 'Eve')
+  await user.click(await page.bestOf(7))
   await user.click(await page.startMatch())
-  await new ScoringScreenPage().theirs('Eve')
+  await new ScoringScreenPage().theirs()
   router.history.back()
 
   expect(await new DashboardScreenPage().heading()).toBeVisible()
@@ -90,14 +71,14 @@ test('a create the store refuses stays on the form, as filled, asking nothing', 
   try {
     const { router } = renderRoute('/matches/new')
     const page = new NewMatchScreenPage()
-    await user.type(await page.opponent(), 'Cy')
+    await user.click(await page.bestOf(7))
     await user.click(await page.startMatch())
 
     await expect.poll(() => refused).toBe(true)
     // Past the answer, and past any navigation it would have started.
     await new Promise((settled) => setTimeout(settled, 50))
     expect(router.state.location.pathname).toBe('/matches/new')
-    expect(await page.opponent()).toHaveValue('Cy')
+    expect(await page.bestOf(7)).toBeChecked()
     expect(page.queryDiscardDialog()).toBeNull()
   } finally {
     matchesStore.setState({ createMatch })
@@ -118,7 +99,7 @@ test('on a changed form, Discard & leave goes where it was asked to, the dashboa
   const user = userEvent.setup()
   const { router } = renderRoute('/matches/new')
   const page = new NewMatchScreenPage()
-  await user.type(await page.opponent(), 'Ana')
+  await user.click(await page.bestOf(7))
 
   await user.click(await page.cancel())
   await user.click(await page.keepEditing())

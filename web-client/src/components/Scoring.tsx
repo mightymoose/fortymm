@@ -18,10 +18,9 @@ export function Scoring({ matchId, game }: { matchId: string; game: number }) {
   const entry = useMatch(matchId)
   const navigate = useNavigate()
   if (entry?.status !== 'ready') return null
-  const { opponentName, bestOf, games } = entry.match
+  const { bestOf, games } = entry.match
   return (
     <ScoringScreen
-      opponentName={opponentName}
       bestOf={bestOf}
       games={games}
       game={game}

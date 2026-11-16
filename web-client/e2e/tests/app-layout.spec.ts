@@ -21,15 +21,15 @@ import { StorageHarness } from '../pages/storage.ts'
 // dashboard's button wider than a phone, the bottom bar's on a phone) is
 // the breakpoint's too.
 
-// Keeps a match against each opponent through the new match form, then
-// opens the matches list by the layout's Matches link (the sidebar's, or on
-// a phone the bottom bar's). All in one page load: matches are kept in
-// memory for now, so a reload would lose them.
-async function startMatchesThenOpenList(page: Page, opponents: string[]) {
+// Keeps `count` matches through the new match form, then opens the matches
+// list by the layout's Matches link (the sidebar's, or on a phone the bottom
+// bar's). All in one page load: matches are kept in memory for now, so a
+// reload would lose them.
+async function startMatchesThenOpenList(page: Page, count: number) {
   const newMatch = new NewMatchPage(page)
   const matchesLink = page.getByRole('link', { name: 'Matches', exact: true })
   await newMatch.goto()
-  for (const [index, opponent] of opponents.entries()) {
+  for (let index = 0; index < count; index++) {
     if (index > 0) {
       await matchesLink.filter({ visible: true }).click()
       await page
@@ -38,7 +38,6 @@ async function startMatchesThenOpenList(page: Page, opponents: string[]) {
         .first()
         .click()
     }
-    await newMatch.opponent.fill(opponent)
     await newMatch.startMatch.click()
     await expect(page).toHaveURL(/\/games\/1\/scores\/edit$/)
   }
@@ -101,7 +100,7 @@ test.describe('at a desktop width', () => {
   }) => {
     const layout = new AppLayout(page)
     const matches = new MatchesPage(page)
-    await startMatchesThenOpenList(page, ['Ana', 'Ben'])
+    await startMatchesThenOpenList(page, 2)
 
     await expect(layout.link('Matches')).toHaveAttribute('aria-current', 'page')
     expect(new URL(page.url()).pathname).toBe('/matches')
@@ -124,7 +123,7 @@ for (const width of [320, 768, 1280]) {
       ['the matches list, empty', (page: Page) => new MatchesPage(page).goto()],
       [
         'the matches list, with a match',
-        (page: Page) => startMatchesThenOpenList(page, ['Ana']),
+        (page: Page) => startMatchesThenOpenList(page, 1),
       ],
     ] as const) {
       test(`${name} has no horizontal scroll`, async ({ page }) => {
@@ -210,7 +209,7 @@ test.describe('at a phone width', () => {
   }) => {
     const layout = new AppLayout(page)
     const matches = new MatchesPage(page)
-    await startMatchesThenOpenList(page, ['Ana', 'Ben', 'Chen'])
+    await startMatchesThenOpenList(page, 3)
 
     await expect(
       layout.bottomBar.getByRole('link', { name: 'Matches' }),
@@ -229,11 +228,11 @@ test.describe('at a phone width', () => {
 
     // A tap near the card's bottom right corner, away from its link's text,
     // opens the match's page.
-    const ana = matches.rows.filter({ hasText: 'You vs Ana' })
-    const href = await ana.getByRole('link').getAttribute('href')
+    const first = matches.rows.first()
+    const href = await first.getByRole('link').getAttribute('href')
     expect(href).toMatch(/^\/matches\/[^/]+$/)
-    const card = (await ana.boundingBox())!
-    await ana.click({ position: { x: card.width - 8, y: card.height - 8 } })
+    const card = (await first.boundingBox())!
+    await first.click({ position: { x: card.width - 8, y: card.height - 8 } })
     await expect(page).toHaveURL(new RegExp(`${href}$`))
   })
 

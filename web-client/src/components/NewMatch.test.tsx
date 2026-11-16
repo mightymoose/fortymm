@@ -22,27 +22,17 @@ async function newestMatch() {
   return list.matches[0]
 }
 
-test('Start match keeps a match with the form’s opponent, length and rating', async () => {
+test('Start match keeps a match of the length chosen, unrated, with no opponent’s name', async () => {
   const user = userEvent.setup()
   renderScreen(<NewMatch />, { path: '/matches/new' })
 
-  await user.type(await page.opponent(), 'Bea')
   await user.click(await page.bestOf(7))
-  await user.click(await page.rated())
   await user.click(await page.startMatch())
 
-  await expect.poll(newestMatch).toMatchObject({ opponentName: 'Bea', bestOf: 7, rated: true })
-})
-
-test('Start match with no opponent’s name keeps an unrated match with no opponent', async () => {
-  const user = userEvent.setup()
-  renderScreen(<NewMatch />, { path: '/matches/new' })
-
-  await user.click(await page.startMatch())
-
-  await expect.poll(newestMatch).toMatchObject({
-    opponentName: null,
-    bestOf: 5,
+  // Exactly these keys: a kept opponent's name would be one more.
+  await expect.poll(newestMatch).toEqual({
+    matchId: expect.any(String),
+    bestOf: 7,
     rated: false,
   })
 })

@@ -76,11 +76,11 @@ export function createMatchMemory(): MatchMemory {
   }
 
   return {
-    async create({ opponentName, format, rated }) {
+    async create({ format, rated }) {
       const failure = await begin(nextWrite)
       if (failure !== null) return { ok: false, reason: failure }
       const matchId = crypto.randomUUID()
-      matches.set(matchId, { matchId, opponentName, bestOf: format.bestOf, rated, games: [] })
+      matches.set(matchId, { matchId, bestOf: format.bestOf, rated, games: [] })
       changed([matchId])
       return { ok: true, matchId }
     },
@@ -109,9 +109,8 @@ export function createMatchMemory(): MatchMemory {
       if (failure !== null) return { ok: false, reason: failure }
       return {
         ok: true,
-        matches: kept.map(({ matchId, opponentName, bestOf, rated }) => ({
+        matches: kept.map(({ matchId, bestOf, rated }) => ({
           matchId,
-          opponentName,
           bestOf,
           rated,
         })),

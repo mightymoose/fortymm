@@ -5,33 +5,19 @@ import { bestOfs } from '../../scoring/scoring.ts'
 // (web-client/CLAUDE.md, "Forms"). Its input is what the form holds; its
 // output is what Start match hands on. Every length a match can be is the
 // scoring rules' (`bestOfs`).
-
-// The opponent's name: what was typed, trimmed, or `null` when that leaves
-// nothing (a match recorded with no opponent). The screen also asks it
-// whether what is typed so far is a name, `null` or not (rated needs one).
-export const opponentNameSchema: z.ZodType<string | null, string> = z
-  .string()
-  .trim()
-  .transform((name) => (name === '' ? null : name))
-
+//
+// The form asks only the match's length. No match is rated for now: a
+// rating needs an opponent who is a real player and signs the result, so
+// every match the form makes is unrated.
 export const newMatchSchema = z
   .object({
-    opponentName: opponentNameSchema,
     bestOf: z.literal(bestOfs),
-    rated: z.boolean(),
-  })
-  // Only a match with an opponent can be rated. The screen never gets here
-  // (rated is off and disabled with no name); this is the rule itself.
-  .refine(({ opponentName, rated }) => !(rated && opponentName === null), {
-    path: ['opponentName'],
-    message: 'Enter your opponent’s name to rate this match.',
   })
   // The match's format, as the plan's match descriptor names it (`format:
-  // {bestOf}`).
-  .transform(({ opponentName, bestOf, rated }) => ({
-    opponentName,
+  // {bestOf}`), and whether it is rated: never, for now.
+  .transform(({ bestOf }) => ({
     format: { bestOf },
-    rated,
+    rated: false,
   }))
 
 // What the form holds, and what it gives its handler.
@@ -40,7 +26,5 @@ export type NewMatch = z.output<typeof newMatchSchema>
 
 // The form as it opens. Anything else is a change that leaving would lose.
 export const newMatchDefaults: NewMatchValues = {
-  opponentName: '',
   bestOf: 5,
-  rated: false,
 }

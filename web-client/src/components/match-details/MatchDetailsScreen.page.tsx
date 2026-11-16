@@ -56,6 +56,14 @@ export class MatchDetailsScreenPage {
     return within(await this.scoreboard()).getByText(name)
   }
 
+  // The avatar beside a player's name on the scoreboard. It is decoration,
+  // hidden from assistive technology, so it has no role or name of its own:
+  // it is found as the hidden text in the line of the player's name.
+  async playerAvatar(name: string) {
+    const line = (await this.player(name)).closest('p')!
+    return within(line).getByText(/./, { selector: '[aria-hidden="true"]' })
+  }
+
   // The games' section, named "Games".
   games() {
     return screen.findByRole('region', { name: 'Games' })

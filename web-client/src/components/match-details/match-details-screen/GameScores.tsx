@@ -9,16 +9,9 @@ import './GameScores.css'
 // any order, so a game before the last saved one can be empty: its row says
 // "Not played". Each row's header is the game ("Game 1"), so a screen reader
 // reads a row as one game. With no game saved, a line saying so instead.
-// The opponent is named "Anonymous" for a match with no opponent's name.
-export function GameScores({
-  opponentName: given,
-  games,
-}: {
-  opponentName: string | null
-  games: Games
-}) {
+// The opponent is named "Anonymous" (components/opponent.ts).
+export function GameScores({ games }: { games: Games }) {
   const headingId = useId()
-  const opponentName = opponentLabel(given)
   return (
     <section className="game-scores" aria-labelledby={headingId}>
       <h2 id={headingId} className="game-scores__heading">
@@ -32,7 +25,7 @@ export function GameScores({
             <tr>
               <th scope="col">Game</th>
               <th scope="col">You</th>
-              <th scope="col">{opponentName}</th>
+              <th scope="col">{opponentLabel}</th>
               <th scope="col">Won by</th>
             </tr>
           </thead>
@@ -60,7 +53,7 @@ export function GameScores({
                     {theirs}
                   </td>
                   <td className="game-scores__winner">
-                    {youWon ? 'You' : opponentName}
+                    {youWon ? 'You' : opponentLabel}
                   </td>
                 </tr>
               )

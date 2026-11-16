@@ -14,9 +14,6 @@ import type { BestOf, Games, SaveRefusal, Score } from '../scoring/scoring.ts'
 // A match as a source keeps it.
 export type StoredMatch = {
   readonly matchId: string
-  // The name typed for the opponent, or null for a match recorded with none
-  // (never an empty string).
-  readonly opponentName: string | null
   readonly bestOf: BestOf
   readonly rated: boolean
   // The games, one slot per game number: games[0] is game 1 (scoring.ts).
@@ -26,19 +23,15 @@ export type StoredMatch = {
 // A match as the list shows it.
 export type MatchSummary = {
   matchId: string
-  // null: no opponent's name was given.
-  opponentName: string | null
   bestOf: BestOf
   rated: boolean
 }
 
-// A match to create: the opponent's name (null for none), its format, as
-// the plan's match descriptor names it, and whether it is rated. The stores'
-// own type, not the form's: the new match form's output (NewMatch) fits it,
-// and other callers may create a match with no name. Neither a store nor a
-// source checks it: rated needing a name is the form's rule.
+// A match to create: its format, as the plan's match descriptor names it,
+// and whether it is rated. A match keeps no opponent's name: every screen
+// names the opponent "Anonymous" (components/opponent.ts). The stores' own
+// type, not the form's: the new match form's output (NewMatch) fits it.
 export type MatchToCreate = {
-  opponentName: string | null
   format: { bestOf: BestOf }
   rated: boolean
 }

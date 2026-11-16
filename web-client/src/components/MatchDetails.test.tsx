@@ -19,7 +19,7 @@ test('the connected page shows the store’s match, a game saved while it is wat
     path: `/matches/${matchId}`,
   })
 
-  expect(await page.heading()).toHaveTextContent('You vs Ana')
+  expect(await page.heading()).toHaveTextContent('You vs Anonymous')
   expect(await page.tally()).toHaveTextContent('1 – 0')
   expect(await page.score()).toHaveAttribute(
     'href',

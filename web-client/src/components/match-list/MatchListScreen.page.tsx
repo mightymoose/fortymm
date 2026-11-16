@@ -37,9 +37,10 @@ export class MatchListScreenPage {
       .map((cell) => cell.textContent)
   }
 
-  // The link to a match's page, by its name ("You vs Ana").
-  matchLink(name: string) {
-    return screen.findByRole('link', { name })
+  // The link to a match's page, in its row. Every row's link has the same
+  // name ("You vs Anonymous"), so a match is found by its row.
+  matchLink(row: HTMLElement) {
+    return within(row).getByRole('link')
   }
 
   // The empty state's title, with no matches.

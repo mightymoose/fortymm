@@ -20,7 +20,7 @@ test('a known match’s /matches/<id> shows its details page with the store’s 
   const page = new MatchDetailsScreenPage()
 
   const heading = await page.heading()
-  expect(heading).toHaveTextContent('You vs Ana')
+  expect(heading).toHaveTextContent('You vs Anonymous')
   expect(await page.format()).toHaveTextContent('Best of 5 · Unrated · Game 4 next')
   expect(await page.tally()).toHaveTextContent('2 – 1')
   const main = await new AppLayoutPage().main()

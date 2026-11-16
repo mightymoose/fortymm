@@ -1,7 +1,7 @@
 import { act, renderHook } from '@testing-library/react'
 import { useEffect } from 'react'
 import { expect, test, vi } from 'vitest'
-import type { NewMatch } from '../components/new-match/NewMatchScreen.schema.ts'
+import type { MatchToCreate } from './match-source.ts'
 import type { Games, Score } from '../scoring/scoring.ts'
 import { createMatchMemory } from './match-memory.ts'
 import { createMatchStore, matchStore, useMatch } from './match.ts'
@@ -11,8 +11,8 @@ import { createMatchesStore, matchesStore } from './matches.ts'
 // memory of their own; the last test uses the app's own stores and hook, as a
 // connected component will.
 
-function bestOf(length: 1 | 3 | 5 | 7): NewMatch {
-  return { opponentName: 'Ana', format: { bestOf: length }, rated: false }
+function bestOf(length: 1 | 3 | 5 | 7): MatchToCreate {
+  return { format: { bestOf: length }, rated: false }
 }
 
 // A fresh match store, and a match in it with these games saved (a null
@@ -42,7 +42,6 @@ test('a match is scored in any order, cleared in the middle and corrected', asyn
   const matches = createMatchesStore(memory)
   const match = createMatchStore(memory)
   const created = await matches.getState().createMatch({
-    opponentName: 'Ana',
     format: { bestOf: 5 },
     rated: false,
   })
@@ -56,7 +55,6 @@ test('a match is scored in any order, cleared in the middle and corrected', asyn
   expect(await load(matchId)).toEqual({
     status: 'ready',
     match: {
-      opponentName: 'Ana',
       bestOf: 5,
       rated: false,
       games: [
@@ -69,20 +67,6 @@ test('a match is scored in any order, cleared in the middle and corrected', asyn
   expect(await clearGameScore(matchId, 1)).toEqual({ ok: true })
   expect(await setGameScore(matchId, 3, [12, 10])).toEqual({ ok: true })
   expect(await gamesOf(match, matchId)).toEqual([null, [9, 11], [12, 10]])
-})
-
-test('a match created with no opponent’s name loads with opponentName null', async () => {
-  const memory = createMatchMemory()
-  const store = createMatchStore(memory)
-  const created = await createMatchesStore(memory)
-    .getState()
-    .createMatch({ opponentName: null, format: { bestOf: 5 }, rated: false })
-  if (!created.ok) throw new Error('not created')
-
-  expect(await store.getState().load(created.matchId)).toEqual({
-    status: 'ready',
-    match: { opponentName: null, bestOf: 5, rated: false, games: [] },
-  })
 })
 
 test('load of an id nobody created is missing', async () => {
@@ -231,7 +215,7 @@ test('a watched match’s entry is read again after another store writes it', as
   await vi.waitFor(() =>
     expect(watching.getState().matches[matchId]).toEqual({
       status: 'ready',
-      match: { opponentName: 'Ana', bestOf: 5, rated: false, games: [[11, 7]] },
+      match: { bestOf: 5, rated: false, games: [[11, 7]] },
     }),
   )
 })
@@ -252,7 +236,7 @@ test('a match nobody watches is dropped after another store writes it, and read 
 // What the source can do that memory, left alone, never does: wait, and
 // refuse. The memory is told to hold or fail its next read or write.
 
-const noGames = { opponentName: 'Ana', bestOf: 5, rated: false, games: [] }
+const noGames = { bestOf: 5, rated: false, games: [] }
 
 // Lets everything that can run without the held call run.
 const settle = () => new Promise((resolve) => setTimeout(resolve))
@@ -383,7 +367,7 @@ test('a page watching a match shows the new score after an action', async () => 
   await vi.waitFor(() =>
     expect(result.current).toEqual({
     status: 'ready',
-    match: { opponentName: 'Ana', bestOf: 5, rated: false, games: [[11, 7]] },
+    match: { bestOf: 5, rated: false, games: [[11, 7]] },
     }),
   )
 })
