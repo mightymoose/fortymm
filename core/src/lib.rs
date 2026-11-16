@@ -11,6 +11,8 @@
 //!   [`Record`] and the generated username of a player ([`username`]).
 //! - **The product layouts** ([`product`]): the terms of a match and the value
 //!   of a score, which a record carries as opaque bytes.
+//! - **A match's state** ([`state`]): what a device shows of a match, derived
+//!   from the set of its records (the start of the rules).
 //!
 //! The library is pure: no input or output, no clock, no random generator.
 //! Hashing and verification come from a [`Crypto`]; [`Software`] provides
@@ -30,6 +32,7 @@ pub mod parcel;
 pub mod product;
 pub mod record;
 pub mod signature;
+pub mod state;
 pub mod username;
 
 pub use crypto::Crypto;
@@ -42,4 +45,5 @@ pub use record::{
     GrantSubject, Header, Kind, Record, RecordError, StaffFields, Stamp, Subject,
 };
 pub use signature::{Signature, SignatureError};
+pub use state::{MatchState, match_state};
 pub use username::BadSuffixLength;

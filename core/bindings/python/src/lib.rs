@@ -146,7 +146,8 @@ impl PyRecord {
         self.0.scored_match().map(|id| bytes(py, id.as_bytes()))
     }
 
-    /// A `score` record's slot: 0 for the whole match, n for game n.
+    /// A `score` record's slot: n for game n. Slot 0 is accepted but means
+    /// no game.
     #[getter]
     fn slot(&self) -> Option<u64> {
         self.0.slot()
@@ -428,7 +429,7 @@ fn match_body<'py>(
 }
 
 /// The body of a `score`, to sign, about the match with the 32-byte id
-/// `match_id`. The slot is 0 for the whole match or n for game n; the value
+/// `match_id`. The slot is n for game n (0 is accepted but means no game); the value
 /// is bytes the core carries and does not read; `replaces` lists the ids of
 /// the `score` records this one replaces.
 #[pyfunction]
@@ -563,6 +564,78 @@ fn read_score_value(data: &[u8]) -> Option<PyScoreValue> {
     })
 }
 
+// A match's state, derived from its records (FORMAT.md section 16).
+
+/// What a match's records say, as a device shows it.
+#[pyclass(frozen, name = "MatchState", module = "fortymm_core")]
+struct PyMatchState(fmm::MatchState);
+
+#[pymethods]
+impl PyMatchState {
+    /// The match: the record id of its `match` record.
+    #[getter]
+    fn match_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        bytes(py, self.0.match_id.as_bytes())
+    }
+
+    /// The 33-byte key that signed the `match` record.
+    #[getter]
+    fn creator<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        bytes(py, self.0.creator.as_bytes())
+    }
+
+    /// The two sides, each a list of player ids.
+    #[getter]
+    fn sides<'py>(&self, py: Python<'py>) -> Vec<Vec<Bound<'py, PyBytes>>> {
+        self.0
+            .sides
+            .iter()
+            .map(|side| side.iter().map(|p| bytes(py, p.as_bytes())).collect())
+            .collect()
+    }
+
+    /// The terms, or None for terms of a layout this build does not read.
+    #[getter]
+    fn terms(&self) -> Option<PyTerms> {
+        self.0.terms.map(|terms| PyTerms {
+            best_of: terms.best_of(),
+            rated: terms.rated(),
+        })
+    }
+
+    /// games[0] is game 1: its final score, first side first, or None for no
+    /// score. Never ends with None.
+    #[getter]
+    fn games(&self) -> Vec<Option<(u32, u32)>> {
+        self.0
+            .games
+            .iter()
+            .map(|game| game.map(|[first, second]| (first, second)))
+            .collect()
+    }
+
+    /// Per game, current[0] for game 1, the ids of the `score` records that
+    /// no `score` record of that game replaces, lowest first.
+    #[getter]
+    fn current<'py>(&self, py: Python<'py>) -> Vec<Vec<Bound<'py, PyBytes>>> {
+        self.0
+            .current
+            .iter()
+            .map(|ids| ids.iter().map(|id| bytes(py, id.as_bytes())).collect())
+            .collect()
+    }
+}
+
+/// The state of the match a set of records is about: any order, repeats
+/// allowed. `score` records of other matches, and records of other kinds,
+/// are ignored. None when the set holds no `match` record, or a `match`
+/// record of another match too: pass only this match's records.
+#[pyfunction]
+fn match_state(records: Vec<PyRef<'_, PyRecord>>) -> Option<PyMatchState> {
+    let records: Vec<Record> = records.iter().map(|r| r.0.clone()).collect();
+    fmm::match_state(&records, &Software).map(PyMatchState)
+}
+
 #[pymodule]
 fn fortymm_core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyRecord>()?;
@@ -587,5 +660,8 @@ fn fortymm_core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(read_terms, module)?)?;
     module.add_function(wrap_pyfunction!(score_value, module)?)?;
     module.add_function(wrap_pyfunction!(read_score_value, module)?)?;
+    // A match's state.
+    module.add_class::<PyMatchState>()?;
+    module.add_function(wrap_pyfunction!(match_state, module)?)?;
     Ok(())
 }

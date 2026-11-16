@@ -64,7 +64,7 @@ export class Core {
   // assembled as a hello's is. A key, a random value or an id of the wrong
   // length throws. An id is 32 bytes; a side is one or more player ids;
   // `terms` and `value` are bytes the core carries and does not read; `slot`
-  // is 0 for the whole match or n for game n.
+  // is n for game n (0 is accepted but means no game).
   playerBody(environment: number, publicKey: Uint8Array, random: Uint8Array, clock?: number | null): Uint8Array
   matchBody(environment: number, publicKey: Uint8Array, random: Uint8Array, sides: [Uint8Array[], Uint8Array[]], terms: Uint8Array, clock?: number | null): Uint8Array
   scoreBody(environment: number, publicKey: Uint8Array, random: Uint8Array, matchId: Uint8Array, slot: number, value: Uint8Array, replaces: Uint8Array[], clock?: number | null): Uint8Array
@@ -109,4 +109,29 @@ export class Core {
   readTerms(terms: Uint8Array): { bestOf: number; rated: boolean } | null
   scoreValue(score: [number, number] | null): Uint8Array
   readScoreValue(value: Uint8Array): { score: [number, number] | null } | null
+
+  // A match's state, derived from the set of records the device holds about
+  // it (core/FORMAT.md, section 16): any order, repeats allowed. Score
+  // records of other matches, and records of other kinds, are ignored. Null
+  // when the set holds no match record, or a match record of another match
+  // too: pass only this match's records. Bytes that are not a record throw.
+  matchState(records: Uint8Array[]): MatchState | null
+}
+
+export type MatchState = {
+  matchId: Uint8Array
+  // The key that signed the match record, 33 bytes.
+  creator: Uint8Array
+  sides: [Uint8Array[], Uint8Array[]]
+  // Null for terms of a layout this build can't read.
+  terms: { bestOf: number; rated: boolean } | null
+  // games[0] is game 1: its final score, first side first, or null for none
+  // (not entered, cleared, or a value this build can't read). Never ends
+  // with null.
+  games: ([number, number] | null)[]
+  // Per game, current[0] for game 1, the ids of the score records no score
+  // record of that game replaces, lowest first. It can be longer than
+  // `games`: a game cleared at the end still has its clearing entry, which
+  // the next score for that game must name as replaced.
+  current: Uint8Array[][]
 }

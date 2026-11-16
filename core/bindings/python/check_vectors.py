@@ -144,7 +144,7 @@ def public(thing: object) -> set[str]:
 
 check(names(stub.body) == public(core), f"stub: module names {names(stub.body) ^ public(core)}")
 for node in stub.body:
-    if isinstance(node, ast.ClassDef) and node.name in ("Record", "Parcel", "Terms", "ScoreValue"):
+    if isinstance(node, ast.ClassDef) and node.name in ("Record", "Parcel", "Terms", "ScoreValue", "MatchState"):
         cls = getattr(core, node.name)
         found = names(node.body) - {"__init__"}
         check(found == public(cls), f"stub: {node.name} names {found ^ public(cls)}")
@@ -400,6 +400,39 @@ for v in vectors["unreadable_score_values"]:
 
 for score in [(-1, 0), (11, 2**32)]:
     check(refusal(lambda: core.score_value(score)) is not None, f"score_value {score}: refused")
+
+# A match's state from each set of records, as Rust gives it: a corrected
+# game (C2), a gap and a clear at the end (C3), the current ids (C4).
+for v in vectors["match_states"]:
+    state = core.match_state([core.Record.decode(unhex(r)) for r in v["records"]])
+    check(state is not None, f"match state {v['name']}: a state")
+    if state is None:
+        continue
+    # The stub's types, not only the values: each game None or a tuple of two
+    # ints (a list would compare equal below, but can't be hashed).
+    check(
+        all(
+            g is None or (type(g) is tuple and len(g) == 2 and all(type(p) is int for p in g))
+            for g in state.games
+        ),
+        f"match state {v['name']}: games are None or tuple[int, int], gave {state.games!r}",
+    )
+    terms = None if state.terms is None else {"best_of": state.terms.best_of, "rated": state.terms.rated}
+    got = {
+        "match_id": state.match_id.hex(),
+        "creator": state.creator.hex(),
+        "sides": [[p.hex() for p in side] for side in state.sides],
+        "terms": terms,
+        "games": [None if g is None else list(g) for g in state.games],
+        "current": [[i.hex() for i in ids] for ids in state.current],
+    }
+    for field in ("match_id", "creator", "sides", "terms", "games", "current"):
+        check(got[field] == v["state"][field], f"match state {v['name']}: {field} gave {got[field]}")
+
+# No match record, no state.
+first = [core.Record.decode(unhex(r)) for r in vectors["match_states"][0]["records"]]
+check(core.match_state([r for r in first if r.kind_name == "score"]) is None, "match state without a match: None")
+check(core.match_state([]) is None, "match state of no records: None")
 
 print(f"Python {sys.version.split()[0]}, module {core.__file__}: {checks} checks")
 if failures:

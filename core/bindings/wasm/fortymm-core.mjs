@@ -131,8 +131,8 @@ export class Core {
     const items = [publicKey, random, terms, ...sides.map(frame)];
     return this.call("fmm_match_body", concat([head, frame(items)])).out;
   }
-  // The body of a `score` about the match `matchId` (32 bytes): `slot` is 0
-  // for the whole match or n for game n, `value` is bytes the core carries
+  // The body of a `score` about the match `matchId` (32 bytes): `slot` is n
+  // for game n (0 is accepted but means no game), `value` is bytes the core carries
   // and does not read, and `replaces` lists the ids of the `score` records
   // this one replaces.
   scoreBody(environment, publicKey, random, matchId, slot, value, replaces, clock = null) {
@@ -240,6 +240,31 @@ export class Core {
     if (out[0] === 0) return { score: null };
     const view = new DataView(out.buffer);
     return { score: [view.getUint32(1), view.getUint32(5)] };
+  }
+
+  // A match's state, derived from the set of records the device holds about
+  // it (core/FORMAT.md, section 16): any order, repeats allowed. Score
+  // records of other matches, and records of other kinds, are ignored. Null
+  // when the set holds no match record, or a match record of another match
+  // too: pass only this match's records. Bytes that are not a record throw.
+  matchState(records) {
+    const { status, out } = this.call("fmm_match_state", frame(records), { allow: [NOT_APPLICABLE] });
+    if (status !== OK) return null;
+    const [matchId, creator, first, second, terms, games, current] = unframe(out);
+    const pair = (bytes) => {
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      return [view.getUint32(0), view.getUint32(4)];
+    };
+    return {
+      matchId,
+      creator,
+      sides: [unframe(first), unframe(second)],
+      terms: terms.length === 0
+        ? null
+        : { bestOf: new DataView(terms.buffer, terms.byteOffset).getUint32(0), rated: terms[4] === 1 },
+      games: unframe(games).map((game) => (game.length === 0 ? null : pair(game))),
+      current: unframe(current).map(unframe),
+    };
   }
 }
 

@@ -5,6 +5,7 @@
 // WebCrypto is hidden throughout: the module hashes and verifies by itself.
 
 import { readFile } from "node:fs/promises";
+import { inspect, isDeepStrictEqual } from "node:util";
 import { Core, Damaged } from "./fortymm-core.mjs";
 
 const [vectorsPath, path] = process.argv.slice(2);
@@ -12,6 +13,11 @@ const vectors = JSON.parse(await readFile(vectorsPath, "utf8"));
 
 const hex = (bytes) => Buffer.from(bytes).toString("hex");
 const unhex = (text) => new Uint8Array(Buffer.from(text, "hex"));
+// Values are compared with isDeepStrictEqual: by structure, with types kept
+// apart (null is not undefined, a number is not a string, an array is not a
+// tuple-like object). `shown` writes a value for a failure message, undefined
+// included, which JSON.stringify would print as null.
+const shown = (value) => inspect(value, { depth: null, breakLength: Infinity, maxArrayLength: null });
 
 let failures = 0;
 function check(condition, what) {
@@ -56,8 +62,8 @@ Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: tr
       ["creator", "creator"],
       ["introducedKey", "introduced_key"],
     ]) {
-      const got = JSON.stringify(hexed(core[getter](record)));
-      check(got === JSON.stringify(v[field] ?? null), `${v.name}: ${getter} gave ${got}`);
+      const got = hexed(core[getter](record));
+      check(isDeepStrictEqual(got, v[field] ?? null), `${v.name}: ${getter} gave ${shown(got)}`);
     }
     checks += 10;
   }
@@ -149,7 +155,7 @@ Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: tr
     const SCORE_GETTERS = ["scoredMatch", "slot", "value", "replaces"];
     const hexed = (value) =>
       value instanceof Uint8Array ? hex(value) : Array.isArray(value) ? value.map(hexed) : value;
-    const same = (got, expected) => JSON.stringify(hexed(got)) === JSON.stringify(expected);
+    const same = (got, expected) => isDeepStrictEqual(hexed(got), expected);
     // The body a made record's vector describes, with any input replaced.
     const bodyOf = (v, replaced = {}) => {
       const i = { ...v, ...replaced };
@@ -236,7 +242,7 @@ Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: tr
     for (const v of vectors.records) {
       for (const [getter, field] of [["scoredMatch", "scored_match"], ["slot", "slot"], ["value", "value"], ["replaces", "replaces"]]) {
         const got = core[getter](unhex(v.record));
-        check(same(got, v[field] ?? null), `${v.name}: ${getter} gave ${JSON.stringify(hexed(got))}`);
+        check(same(got, v[field] ?? null), `${v.name}: ${getter} gave ${shown(hexed(got))}`);
         checks += 1;
       }
     }
@@ -280,7 +286,7 @@ Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: tr
       check(hex(binary) === v.binary, `parcel ${v.name} (${form}): binary`);
       check(core.text(binary) === v.text, `parcel ${v.name} (${form}): text`);
       const records = core.records(binary).map(hex);
-      check(JSON.stringify(records) === JSON.stringify(v.records), `parcel ${v.name}: records`);
+      check(isDeepStrictEqual(records, v.records), `parcel ${v.name}: records`);
       checks += 3;
     }
     const rebuilt = core.build(v.environment, v.records.map(unhex));
@@ -325,7 +331,7 @@ Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: tr
     const what = `terms best of ${v.best_of} rated ${v.rated}`;
     check(hex(core.termsBytes(v.best_of, v.rated)) === v.bytes, `${what}: bytes`);
     const read = core.readTerms(unhex(v.bytes));
-    check(JSON.stringify(read) === JSON.stringify({ bestOf: v.best_of, rated: v.rated }), `${what}: read ${JSON.stringify(read)}`);
+    check(isDeepStrictEqual(read, { bestOf: v.best_of, rated: v.rated }), `${what}: read ${shown(read)}`);
     checks += 2;
   }
   for (const v of vectors.unreadable_terms) {
@@ -342,7 +348,7 @@ Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: tr
     const what = `score value ${JSON.stringify(v.score)}`;
     check(hex(core.scoreValue(v.score)) === v.bytes, `${what}: bytes`);
     const read = core.readScoreValue(unhex(v.bytes));
-    check(JSON.stringify(read) === JSON.stringify({ score: v.score }), `${what}: read ${JSON.stringify(read)}`);
+    check(isDeepStrictEqual(read, { score: v.score }), `${what}: read ${shown(read)}`);
     checks += 2;
   }
   for (const v of vectors.unreadable_score_values) {
@@ -354,6 +360,38 @@ Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: tr
     try { core.scoreValue(score); } catch (error) { refused = !(error instanceof Damaged); }
     check(refused, `scoreValue ${JSON.stringify(score)}: refused`);
     checks += 1;
+  }
+  // A match's state from each set of records, as Rust gives it: a corrected
+  // game (C2), a gap and a clear at the end (C3), the current ids (C4).
+  {
+    const hexed = (value) =>
+      value instanceof Uint8Array ? hex(value) : Array.isArray(value) ? value.map(hexed) : value;
+    for (const v of vectors.match_states) {
+      const state = core.matchState(v.records.map(unhex));
+      const got = state && {
+        match_id: hex(state.matchId),
+        creator: hex(state.creator),
+        sides: hexed(state.sides),
+        terms: state.terms && { best_of: state.terms.bestOf, rated: state.terms.rated },
+        games: state.games,
+        current: hexed(state.current),
+      };
+      check(state !== null, `match state ${v.name}: a state`);
+      for (const field of ["match_id", "creator", "sides", "terms", "games", "current"]) {
+        // Strict: a gap in games must be null, not undefined.
+        check(isDeepStrictEqual(got?.[field], v.state[field]), `match state ${v.name}: ${field} gave ${shown(got?.[field])}`);
+      }
+      checks += 7;
+    }
+    // No match record, no state; bytes that are not a record throw.
+    const match = vectors.match_states[0];
+    const scores = match.records.filter((r) => core.kind(unhex(r)) === "score").map(unhex);
+    check(core.matchState(scores) === null, "match state without a match record: null");
+    check(core.matchState([]) === null, "match state of no records: null");
+    let refused = false;
+    try { core.matchState([new Uint8Array([1, 2, 3])]); } catch (error) { refused = !(error instanceof Damaged); }
+    check(refused, "match state of bytes that are not a record: throws");
+    checks += 3;
   }
   console.log(`  ${checks} checks`);
 }

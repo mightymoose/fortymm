@@ -178,6 +178,14 @@ pub mod score_value {
     }
 }
 
+/// A match's state, derived from its records (FORMAT.md section 16).
+pub mod match_state {
+    /// The highest game a `score` record's slot can name and still count.
+    /// A slot above it is ignored, so a record cannot make a state of
+    /// millions of empty games. A limit of this implementation.
+    pub const MAX_GAME: u64 = 255;
+}
+
 /// The parcel container.
 pub mod parcel {
     /// The first byte of the binary form.

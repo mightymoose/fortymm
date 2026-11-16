@@ -9,7 +9,8 @@ use fortymm_core::{
     Signature, Software, StaffFields, Stamp, Subject,
 };
 use p256::ecdsa::SigningKey;
-use p256::ecdsa::signature::Signer;
+use p256::ecdsa::signature::{RandomizedSigner, Signer};
+use p256::elliptic_curve::rand_core::{CryptoRng, RngCore};
 
 pub const CRYPTO: Software = Software;
 pub const ENV: Environment = Environment::UAT;
@@ -71,6 +72,21 @@ impl TestKey {
         Record::assemble_verified(body, signature, &CRYPTO).unwrap()
     }
 
+    /// The same record signed again: the same body, a signature with another
+    /// nonce. A second valid record with the same record id and other bytes,
+    /// as two devices could hold. `seed` picks the nonce, so it is
+    /// reproducible.
+    pub fn re_sign(&self, record: &Record, seed: u64) -> Record {
+        let platform: p256::ecdsa::Signature = self
+            .signing
+            .sign_with_rng(&mut Rng::new(seed), record.body());
+        let signature = Signature::from_der(platform.to_der().as_bytes()).unwrap();
+        let again = Record::assemble_verified(record.body().to_vec(), signature, &CRYPTO).unwrap();
+        assert_eq!(again.id(&CRYPTO), record.id(&CRYPTO));
+        assert_ne!(again.to_bytes(), record.to_bytes());
+        again
+    }
+
     /// Sign any body bytes, valid or not (for kinds the library does not
     /// build, and for invalid vectors).
     pub fn sign_body(&self, body: &[u8]) -> Signature {
@@ -115,6 +131,32 @@ impl Rng {
         self.bytes(8).try_into().unwrap()
     }
 }
+
+/// Only for `TestKey::re_sign`, to pick a second nonce reproducibly. Not a
+/// source of secrets.
+impl RngCore for Rng {
+    fn next_u32(&mut self) -> u32 {
+        self.next() as u32
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.next()
+    }
+
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        dest.fill_with(|| self.next() as u8);
+    }
+
+    fn try_fill_bytes(
+        &mut self,
+        dest: &mut [u8],
+    ) -> Result<(), p256::elliptic_curve::rand_core::Error> {
+        self.fill_bytes(dest);
+        Ok(())
+    }
+}
+
+impl CryptoRng for Rng {}
 
 /// The same signature with s replaced by n - s: valid ECDSA, but not the
 /// stored form.
