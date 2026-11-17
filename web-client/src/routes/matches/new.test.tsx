@@ -65,7 +65,7 @@ test('a create the device refused stays on the form, as filled, with its alert, 
   await user.click(await page.bestOf(7))
   await user.click(await page.startMatch())
 
-  expect(await page.alert()).toHaveTextContent('That wasn’t saved.')
+  expect(await page.alert()).toHaveTextContent('Couldn’t start the match')
   // Past any navigation the answer would have started.
   await new Promise((settled) => setTimeout(settled, 50))
   expect(router.state.location.pathname).toBe('/matches/new')

@@ -13,14 +13,14 @@ export class ScoringScreenPage {
     return renderScreen(<ScoringScreen {...props} />, { path: '/scoring', browserHistory })
   }
 
-  // What the device refused of the last save or clear: the alert named
-  // "That wasn't saved." (the form's error line is an alert too, unnamed).
+  // What the device refused of the last save or clear: the named alert
+  // (DeviceAlert; the form's error line is an alert too, unnamed).
   alert() {
-    return screen.findByRole('alert', { name: 'That wasn’t saved.' })
+    return screen.findByRole('alert', { name: /^(Couldn’t|Your browser)/ })
   }
 
   queryAlert() {
-    return screen.queryByRole('alert', { name: 'That wasn’t saved.' })
+    return screen.queryByRole('alert', { name: /^(Couldn’t|Your browser)/ })
   }
 
   reload() {

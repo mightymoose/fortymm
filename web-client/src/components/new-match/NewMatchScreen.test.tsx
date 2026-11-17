@@ -123,7 +123,7 @@ test('Keep editing, or Escape, closes the question and keeps what was chosen', a
   expect(await page.bestOf(7)).toBeChecked()
 })
 
-test('a Start match the device refused shows why nothing was saved, and the form stays as chosen', async () => {
+test('a Start match the device refused says it couldn’t start the match and what to do, and the form stays as chosen', async () => {
   const user = userEvent.setup()
   const page = new NewMatchScreenPage()
   page.render({ onSubmit: vi.fn(refused('storage-unavailable')) })
@@ -132,8 +132,8 @@ test('a Start match the device refused shows why nothing was saved, and the form
   await user.click(await page.startMatch())
 
   const alert = await page.alert()
-  expect(alert).toHaveTextContent('That wasn’t saved.')
-  expect(alert).toHaveTextContent('This browser isn’t letting FortyMM store data.')
+  expect(alert).toHaveAccessibleName('Couldn’t start the match')
+  expect(alert).toHaveTextContent('Check that your browser allows site data and that you have free storage space, then try again.')
   expect(await page.bestOf(7)).toBeChecked()
 })
 
@@ -172,7 +172,7 @@ test('a Start match refused again, at once, shows the alert anew: a new alert in
   await user.click(await page.startMatch())
 
   await vi.waitFor(() => expect(page.queryAlert()).not.toBe(first))
-  expect(page.queryAlert()).toHaveTextContent('That wasn’t saved.')
+  expect(page.queryAlert()).toHaveTextContent('Couldn’t start the match')
 })
 
 test('with a new version waiting, a Start match refused for the core offers Reload, which switches to it without asking to leave', async () => {
@@ -185,7 +185,9 @@ test('with a new version waiting, a Start match refused for the core offers Relo
   )
   await user.click(await page.bestOf(7))
   await user.click(await page.startMatch())
-  expect(await page.alert()).toHaveTextContent('Plot twist')
+  expect(await page.alert()).toHaveTextContent(
+    'Reload FortyMM, then start the match again. Your unsaved changes will be lost.',
+  )
   // The changed form asks the browser before the page goes...
   expect(unloadAsks()).toBe(true)
 

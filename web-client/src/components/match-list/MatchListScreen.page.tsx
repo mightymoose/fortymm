@@ -19,13 +19,13 @@ export class MatchListScreenPage {
     return renderScreen(<MatchListScreenUnavailable {...props} />, { path: '/matches' })
   }
 
-  // The alert that says the list can't be shown, and its Try again.
+  // The alert that says the list couldn't be loaded, and its Try again.
   unavailable() {
-    return screen.findByRole('alert', { name: 'Your matches can’t be shown.' })
+    return screen.findByRole('alert', { name: 'Couldn’t load your matches' })
   }
 
   unavailableNow() {
-    return screen.queryByRole('alert', { name: 'Your matches can’t be shown.' })
+    return screen.queryByRole('alert', { name: 'Couldn’t load your matches' })
   }
 
   tryAgain() {

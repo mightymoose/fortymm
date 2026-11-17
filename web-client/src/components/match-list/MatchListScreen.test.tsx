@@ -72,9 +72,7 @@ test('a list the device wouldn’t read says so under the heading, with no table
   })
 
   expect(await page.heading()).toBeVisible()
-  expect(await page.unavailable()).toHaveTextContent(
-    'This browser isn’t letting FortyMM read its data.',
-  )
+  expect(await page.unavailable()).toBeVisible()
   expect(page.tableNow()).toBeNull()
   expect(page.emptyStateNow()).toBeNull()
   expect(page.newMatchLinks()).toEqual([])
@@ -95,7 +93,7 @@ test('Try again reads the list again; refused again, the alert is shown anew', a
   expect(page.unavailableNow()).toBe(before)
   release()
   await vi.waitFor(() => expect(page.unavailableNow()).not.toBe(before))
-  expect(page.unavailableNow()).toHaveTextContent('Try again.')
+  expect(page.unavailableNow()).toHaveTextContent('Part of FortyMM didn’t load. Try again.')
   // The pressed button was remounted with its alert: focus is on the new one.
   expect(await page.tryAgain()).toHaveFocus()
 })

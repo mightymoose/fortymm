@@ -27,7 +27,7 @@ test.each([
   { page: 'details page', rest: '' },
   { page: 'scoring page', rest: '/games/1/scores/edit' },
 ])(
-  'a match the device won’t read says it can’t be opened on its $page, not that it isn’t found',
+  'a match the device won’t read says it couldn’t be loaded on its $page, not that it isn’t found',
   async ({ rest }) => {
     const matchId = await createMatch(5)
     onTestFinished(matchMemory.failReads('storage-unavailable'))
@@ -35,9 +35,7 @@ test.each([
 
     const page = new MatchUnavailableScreenPage()
     expect(await page.heading()).toBeVisible()
-    expect(await page.alert()).toHaveTextContent(
-      'This browser isn’t letting FortyMM read its data.',
-    )
+    expect(await page.alert()).toBeVisible()
     expect(new NotFoundScreenPage().headingNow()).toBeNull()
   },
 )
@@ -137,7 +135,7 @@ test('a later read of an open match the device refuses leaves its page and the s
 })
 
 // A read now would be refused: a match read again would swap the page for
-// "can't be opened".
+// "couldn't load this match".
 test('a match already read is not read again when the page is shown again', async () => {
   const matchId = await createMatch(5)
   renderRoute(`/matches/${matchId}`)

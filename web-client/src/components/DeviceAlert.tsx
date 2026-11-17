@@ -7,39 +7,54 @@ import { Button } from './Button.tsx'
 // component hands it to its screen.
 export type NewVersionOffer = { waiting: boolean; reload: () => void }
 
-// What the device refused: a write (nothing was kept) or a read.
+// What the device refused: starting a match, saving or clearing a score
+// (nothing was kept), or reading (the list, or one match).
 export type DeviceRefusal =
-  | { action: 'write'; reason: Failure['reason'] }
+  | { action: 'start' | 'save' | 'clear'; reason: Failure['reason'] }
   | { action: 'read'; reason: Unavailable['reason'] }
 
+type Write = Exclude<DeviceRefusal['action'], 'read'>
+
 // The one place the words for a refusal of this device's storage are
-// written (PLAN-match-store-and-sync.md §3, as the user approved them on
-// 2026-11-16). An error alert: read out the moment it appears.
+// written, as the user approved them (2026-11-17), by web-client/CLAUDE.md's
+// "Error messages": what failed, what we know, what to do. An error alert:
+// read out the moment it appears.
 //
-// - Storage or its locks refused: the browser isn't letting FortyMM store
-//   (or read) its data.
-// - Signing refused: the browser isn't letting FortyMM sign it.
-// - The core didn't load: "Try again." (a failed load is forgotten, so the
-//   next try loads it again). But when a new deployment is waiting, the old
-//   build's files are likely gone: the alert says so and offers Reload,
-//   which switches to the waiting version (`newVersion.reload`, once, from
-//   the kept files, so with no connection too). `lost` is said after it:
-//   what the reload would drop.
-// - `onRetry` adds a Try again button, for a read; Reload takes its place
-//   when it is offered.
+// - Storage refused: check the browser's site data setting and free space,
+//   then try again (a read: Try again alone).
+// - A browser feature missing (signing, locks): this browser doesn't
+//   support saving; nothing to try here.
+// - The core didn't load: part of FortyMM didn't load; try again (a failed
+//   load is forgotten, so the next try loads it again).
+// - The core didn't load and a new deployment is waiting: the old build's
+//   files are likely gone, so the way back is a reload, to the waiting
+//   version (`newVersion.reload`, once, from the kept files, so with no
+//   connection too). The alert offers Reload, and says when it would drop
+//   what is typed (`unsaved`).
+//
+// For a write, the form's own button tries again; `saved` (a correction's
+// saved score, "11–7") says first that it is still saved. A read gives its
+// own `title` and `onRetry`, a Try again button.
 export function DeviceAlert({
-  title,
   refusal,
   newVersion,
-  lost,
+  title,
+  saved,
+  unsaved = false,
+  heading = false,
   onReload,
   onRetry,
   focusRetry = false,
 }: {
-  title: string
   refusal: DeviceRefusal
   newVersion: NewVersionOffer
-  lost?: string
+  // A read's title: what couldn't be loaded.
+  title?: string
+  saved?: string
+  // Whether a reload would drop what is typed or chosen.
+  unsaved?: boolean
+  // The title is the page's heading (Alert).
+  heading?: boolean
   // Called just before `newVersion.reload`, for a screen that must let the
   // page go without asking (its leave guard).
   onReload?: () => void
@@ -49,13 +64,21 @@ export function DeviceAlert({
   // the person's press of the old one's Try again.
   focusRetry?: boolean
 }) {
-  const update = refusal.reason === 'core-unavailable' && newVersion.waiting
+  const reload = refusal.reason === 'core-unavailable' && newVersion.waiting
+  const words =
+    refusal.action === 'read'
+      ? readWords(refusal.reason, reload)
+      : writeWords(refusal.action, refusal.reason, reload, unsaved)
+  const body = [saved !== undefined ? `Your saved score is still ${saved}.` : undefined, words.body]
+    .filter((sentence) => sentence !== undefined)
+    .join(' ')
   return (
     <Alert
       tone="error"
-      title={title}
+      title={words.title ?? title ?? ''}
+      heading={heading}
       actions={
-        update ? (
+        reload ? (
           <Button
             variant="secondary"
             size="sm"
@@ -74,25 +97,65 @@ export function DeviceAlert({
         ) : undefined
       }
     >
-      {update
-        ? ['Plot twist: a new FortyMM arrived mid-match. Reload to switch to it, then try again.', lost]
-            .filter((sentence) => sentence !== undefined)
-            .join(' ')
-        : body(refusal)}
+      {body === '' ? undefined : body}
     </Alert>
   )
 }
 
-function body({ action, reason }: DeviceRefusal): string {
+const failed: Record<Write, { title: string; again: string; redo: string }> = {
+  start: {
+    title: 'Couldn’t start the match',
+    again: 'Try starting the match again.',
+    redo: 'start the match again',
+  },
+  save: {
+    title: 'Couldn’t save your score',
+    again: 'Try saving again.',
+    redo: 'enter your score again',
+  },
+  clear: {
+    title: 'Couldn’t clear your score',
+    again: 'Try clearing it again.',
+    redo: 'clear your score again',
+  },
+}
+
+function writeWords(
+  action: Write,
+  reason: Failure['reason'],
+  reload: boolean,
+  unsaved: boolean,
+): { title?: string; body?: string } {
+  const { title, again, redo } = failed[action]
   switch (reason) {
     case 'storage-unavailable':
-    case 'locks-unavailable':
-      return action === 'write'
-        ? 'This browser isn’t letting FortyMM store data.'
-        : 'This browser isn’t letting FortyMM read its data.'
+      return {
+        title,
+        body: 'Check that your browser allows site data and that you have free storage space, then try again.',
+      }
     case 'signing-unavailable':
-      return 'This browser isn’t letting FortyMM sign it.'
+    case 'locks-unavailable':
+      return {
+        title: 'Your browser doesn’t support saving matches',
+        body: 'Update your browser or try another browser.',
+      }
     case 'core-unavailable':
-      return 'Try again.'
+      return reload
+        ? {
+            title,
+            body: `Reload FortyMM, then ${redo}.${unsaved ? ' Your unsaved changes will be lost.' : ''}`,
+          }
+        : { title, body: `Part of FortyMM didn’t load. ${again}` }
+  }
+}
+
+function readWords(reason: Unavailable['reason'], reload: boolean): { title?: string; body?: string } {
+  switch (reason) {
+    case 'storage-unavailable':
+      return {}
+    case 'core-unavailable':
+      return {
+        body: reload ? 'Reload FortyMM, then try again.' : 'Part of FortyMM didn’t load. Try again.',
+      }
   }
 }

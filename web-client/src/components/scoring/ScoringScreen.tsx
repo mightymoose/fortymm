@@ -100,7 +100,7 @@ export function ScoringScreen(props: ScoringScreenProps) {
 //
 // A save or a clear the device refused (its storage, its locks, signing, or
 // the core not loaded) keeps what is typed and shows an error alert where
-// the error line goes, read out at once ("That wasn't saved.", DeviceAlert).
+// the error line goes, read out at once (DeviceAlert: what failed, what we know, what to do).
 // It stays while the person types, and goes the moment Save or Clear is
 // pressed again; a refusal again shows it anew. Opening another game drops
 // it. A move to another game while a save or a clear is on its way waits
@@ -147,17 +147,16 @@ function ScoringGame({
   const [yours, theirs] = useWatch({ control, name: ['yours', 'theirs'] })
   const errorId = useId()
   // What the device refused of the last save or clear, if it did.
-  const [deviceRefusal, setDeviceRefusal] = useState<Failure['reason'] | null>(null)
+  const [deviceRefusal, setDeviceRefusal] = useState<{
+    action: 'save' | 'clear'
+    reason: Failure['reason']
+  } | null>(null)
+  // Which of the two is on its way, for its refusal.
+  const acting = useRef<'save' | 'clear'>('save')
   // Whether a save or a clear is on its way.
   const [pending, setPending] = useState(false)
   // Set once the person asked for the new version: that reload doesn't ask.
   const reloading = useRef(false)
-  // What the new version's reload would drop: the score typed now and not
-  // saved, if both fields have one.
-  const lost =
-    isDirty && yours !== '' && theirs !== ''
-      ? `Reloading clears ${yours}–${theirs}; you’ll type it again.`
-      : undefined
 
   // The store's answer to a save or a clear: a device refusal is the alert;
   // a rules refusal, the error line.
@@ -167,7 +166,7 @@ function ScoringGame({
     if ('message' in result) {
       setError(refusalPath, { type: 'custom', message: result.message })
     } else {
-      setDeviceRefusal(result.reason)
+      setDeviceRefusal({ action: acting.current, reason: result.reason })
     }
   }
 
@@ -250,6 +249,7 @@ function ScoringGame({
     const result = schema.safeParse(getValues())
     if (result.success) {
       const saving = onSave(game, result.data)
+      acting.current = 'save'
       setPending(true)
       setDeviceRefusal(null)
       clearErrors(refusalPath)
@@ -344,10 +344,10 @@ function ScoringGame({
           {deviceRefusal !== null && (
             <div className="scoring__refused">
               <DeviceAlert
-                title="That wasn’t saved."
-                refusal={{ action: 'write', reason: deviceRefusal }}
+                refusal={deviceRefusal}
                 newVersion={newVersion}
-                lost={lost}
+                saved={saved === null ? undefined : `${saved[0]}–${saved[1]}`}
+                unsaved={isDirty}
                 onReload={() => {
                   reloading.current = true
                 }}
@@ -364,6 +364,7 @@ function ScoringGame({
                   size="lg"
                   onClick={() => {
                     const clearing = onClear(game)
+                    acting.current = 'clear'
                     setPending(true)
                     setDeviceRefusal(null)
                     clearErrors(refusalPath)

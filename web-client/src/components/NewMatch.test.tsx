@@ -48,9 +48,7 @@ test('a create the device refused shows why, with the length still chosen; the n
   await user.click(await page.bestOf(3))
   await user.click(await page.startMatch())
 
-  expect(await page.alert()).toHaveTextContent(
-    'This browser isn’t letting FortyMM store data.',
-  )
+  expect(await page.alert()).toHaveTextContent('Check that your browser allows site data and that you have free storage space, then try again.')
   expect(await page.bestOf(3)).toBeChecked()
   expect(await newestMatch()).toEqual(before)
 
@@ -102,7 +100,7 @@ test('with the update notice dismissed and the new version still waiting, a crea
 
   await user.click(await page.startMatch())
 
-  expect(await page.alert()).toHaveTextContent('Plot twist')
+  expect(await page.alert()).toHaveTextContent('Reload FortyMM, then start the match again.')
   expect(await page.reload()).toBeVisible()
 })
 

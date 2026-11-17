@@ -7,14 +7,14 @@ import { MatchUnavailableScreenPage } from './MatchUnavailableScreen.page.tsx'
 // when the device won't read the match is the route's test
 // (src/routes/matches/$matchId.test.tsx).
 
-test('a match the device wouldn’t read says it can’t be opened and why, with a link to all matches', async () => {
+test('a match the device wouldn’t read says it couldn’t be loaded, with Try again and a link to all matches', async () => {
   const page = new MatchUnavailableScreenPage()
   page.render({ reason: 'storage-unavailable', newVersion: noNewVersion, onRetry: async () => {} })
 
   expect(await page.heading()).toBeVisible()
-  expect(await page.alert()).toHaveTextContent(
-    'This browser isn’t letting FortyMM read its data.',
-  )
+  // One title: the page's heading is the alert's.
+  expect(await page.alert()).toContainElement(await page.heading())
+  expect(await page.tryAgain()).toBeVisible()
   expect(await page.allMatches()).toHaveAttribute('href', '/matches')
 })
 
@@ -32,7 +32,7 @@ test('Try again reads the match again; refused again, the alert is shown anew', 
   expect(page.alertNow()).toBe(before)
   release()
   await vi.waitFor(() => expect(page.alertNow()).not.toBe(before))
-  expect(page.alertNow()).toHaveTextContent('Try again.')
+  expect(page.alertNow()).toHaveTextContent('Part of FortyMM didn’t load. Try again.')
   // The pressed button was remounted with its alert: focus is on the new one.
   expect(await page.tryAgain()).toHaveFocus()
 })

@@ -32,7 +32,7 @@ export type { NewMatch }
 // CLAUDE.md, "Forms"). Start match hands what the schema makes of the form
 // to `onSubmit`, and waits for its answer. One the device refused (its
 // storage, its locks, signing, or the core not loaded) shows an error alert
-// above the summary, read out at once ("That wasn't saved.", DeviceAlert),
+// above the summary, read out at once (DeviceAlert: what failed, what we know, what to do),
 // with the form as chosen. The next Start match takes it away the moment it
 // is pressed; a refusal again shows it anew. Where a kept match goes is the
 // caller's.
@@ -108,9 +108,9 @@ export function NewMatchScreen({
         {refused !== null && (
           <div key={answers} className="new-match__refused">
             <DeviceAlert
-              title="That wasn’t saved."
-              refusal={{ action: 'write', reason: refused }}
+              refusal={{ action: 'start', reason: refused }}
               newVersion={newVersion}
+              unsaved={isDirty}
               onReload={() => {
                 reloading.current = true
               }}

@@ -14,13 +14,19 @@ export function Alert({
   title,
   children,
   actions,
+  heading = false,
 }: {
   tone: AlertTone
   title: string
-  children: ReactNode
+  // The body; none when the title and the actions say it all.
+  children?: ReactNode
   actions?: ReactNode
+  // The title is the page's heading (an <h1>), for a page that is only
+  // this alert: one title, not a heading and the same words again.
+  heading?: boolean
 }) {
   const titleId = useId()
+  const Title = heading ? 'h1' : 'p'
   return (
     <div
       className={`alert alert--${tone}`}
@@ -28,10 +34,10 @@ export function Alert({
       aria-labelledby={tone === 'error' ? titleId : undefined}
     >
       <Icon name={tone === 'error' ? 'circle-alert' : 'triangle-alert'} />
-      <p id={titleId} className="alert__title">
+      <Title id={titleId} className="alert__title">
         {title}
-      </p>
-      <p className="alert__body">{children}</p>
+      </Title>
+      {children !== undefined && <p className="alert__body">{children}</p>}
       {actions !== undefined && <div className="alert__actions">{actions}</div>}
     </div>
   )

@@ -101,7 +101,7 @@ export function MatchListScreenUnavailable({
       <DeviceAlert
         key={tries}
         focusRetry={tries > 0}
-        title="Your matches can’t be shown."
+        title="Couldn’t load your matches"
         refusal={{ action: 'read', reason }}
         newVersion={newVersion}
         onRetry={() => {

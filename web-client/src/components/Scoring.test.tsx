@@ -188,7 +188,7 @@ test('a save the device refused stays on the game with the typed score and says 
 
   await user.keyboard('11{Enter}07{Enter}')
 
-  expect(await page.alert()).toHaveTextContent('This browser isn’t letting FortyMM store data.')
+  expect(await page.alert()).toHaveTextContent('Check that your browser allows site data and that you have free storage space, then try again.')
   expect(await page.yours()).toHaveValue('11')
   expect(await page.theirs()).toHaveValue('07')
   expect(router.state.location.pathname).toBe(edit(matchId, 1))
@@ -266,7 +266,7 @@ test('a clear the device refused keeps the game saved and says so; the next clea
 
   await user.click(page.clear()!)
 
-  expect(await page.alert()).toHaveTextContent('Try again.')
+  expect(await page.alert()).toHaveTextContent('Your saved score is still 11–7. Part of FortyMM didn’t load. Try clearing it again.')
   expect(await page.yours()).toHaveValue('11')
   expect(await gamesOf(matchId)).toEqual([[11, 7]])
 

@@ -5,9 +5,9 @@ import { DeviceAlert, type NewVersionOffer } from '../DeviceAlert.tsx'
 import './MatchUnavailableScreen.css'
 
 // A match the device wouldn't read, at any page of it (its details, its
-// scoring), as the user approved it (2026-11-16): the heading "This match
-// can't be opened.", an error alert, read out at once (DeviceAlert), and a
-// link to all matches. Not a match that isn't on this device: that is the
+// scoring): an error alert whose title is the page's heading, "Couldn't
+// load this match", read out at once (DeviceAlert, words the user approved
+// on 2026-11-17), and a link to all matches. Not a match that isn't on this device: that is the
 // not-found page.
 //
 // Try again reads the match again (`onRetry`); while that runs, the alert
@@ -27,11 +27,11 @@ export function MatchUnavailableScreen({
   const [tries, setTries] = useState(0)
   return (
     <div className="match-unavailable">
-      <h1 className="match-unavailable__title">This match can’t be opened.</h1>
       <DeviceAlert
         key={tries}
         focusRetry={tries > 0}
-        title="That match couldn’t be read."
+        title="Couldn’t load this match"
+        heading
         refusal={{ action: 'read', reason }}
         newVersion={newVersion}
         onRetry={() => {

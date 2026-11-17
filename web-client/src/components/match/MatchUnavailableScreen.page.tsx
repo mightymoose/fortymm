@@ -11,15 +11,15 @@ export class MatchUnavailableScreenPage {
   }
 
   heading() {
-    return screen.findByRole('heading', { level: 1, name: 'This match can’t be opened.' })
+    return screen.findByRole('heading', { level: 1, name: 'Couldn’t load this match' })
   }
 
   alert() {
-    return screen.findByRole('alert', { name: 'That match couldn’t be read.' })
+    return screen.findByRole('alert', { name: 'Couldn’t load this match' })
   }
 
   alertNow() {
-    return screen.queryByRole('alert', { name: 'That match couldn’t be read.' })
+    return screen.queryByRole('alert', { name: 'Couldn’t load this match' })
   }
 
   tryAgain() {

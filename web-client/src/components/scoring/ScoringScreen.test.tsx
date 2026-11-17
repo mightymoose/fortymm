@@ -508,7 +508,7 @@ test('"Anonymous" stands over the opponent’s field on the right, which is name
   expect(screen.getByText('You')).toBeVisible()
 })
 
-test('a save the device refused keeps the typed score and says it wasn’t saved; typing keeps the alert', async () => {
+test('a save the device refused keeps the typed score and says why; typing keeps the alert', async () => {
   const user = userEvent.setup()
   const page = new ScoringScreenPage()
   page.render(props({ onSave: vi.fn(refused('signing-unavailable')) }))
@@ -517,7 +517,11 @@ test('a save the device refused keeps the typed score and says it wasn’t saved
 
   await user.click(await page.submit())
 
-  expect(await page.alert()).toHaveTextContent('This browser isn’t letting FortyMM sign it.')
+  const alert = await page.alert()
+  expect(alert).toHaveAccessibleName('Your browser doesn’t support saving matches')
+  expect(alert).toHaveTextContent('Update your browser or try another browser.')
+  // A new game: there was no saved score to speak of.
+  expect(alert).not.toHaveTextContent('Your saved score')
   expect(await page.yours()).toHaveValue('11')
   expect(await page.theirs()).toHaveValue('7')
   expect(page.error()).toBeNull()
@@ -551,7 +555,7 @@ test('the next Save takes the alert away when pressed', async () => {
   expect(page.queryAlert()).toBeNull()
 })
 
-test('a clear the device refused says it wasn’t saved, the saved score still shown; the next Clear takes it away', async () => {
+test('a clear the device refused says the saved score is still saved, and shows it; the next Clear takes it away', async () => {
   const user = userEvent.setup()
   const onClear = vi
     .fn<ScoringScreenProps['onClear']>()
@@ -563,12 +567,29 @@ test('a clear the device refused says it wasn’t saved, the saved score still s
 
   await user.click(page.clear()!)
 
-  expect(await page.alert()).toHaveTextContent('This browser isn’t letting FortyMM store data.')
+  const alert = await page.alert()
+  expect(alert).toHaveTextContent('Your saved score is still 11–7.')
   expect(await page.yours()).toHaveValue('11')
   expect(await page.theirs()).toHaveValue('7')
 
   await user.click(page.clear()!)
   expect(page.queryAlert()).toBeNull()
+})
+
+test('a correction the device refused says the saved score is still saved, and what to do', async () => {
+  const user = userEvent.setup()
+  const page = new ScoringScreenPage()
+  page.render(props({ games: twoGames, game: 1, onSave: vi.fn(refused('storage-unavailable')) }))
+  await user.type(await page.theirs(), '{Backspace}9')
+
+  await user.click(await page.submit())
+
+  const alert = await page.alert()
+  expect(alert).toHaveAccessibleName('Couldn’t save your score')
+  expect(alert).toHaveTextContent(
+    'Your saved score is still 11–7. Check that your browser allows site data and that you have free storage space, then try again.',
+  )
+  expect(await page.theirs()).toHaveValue('9')
 })
 
 test('a save the store’s rules refused after the screen allowed it shows their message in the error line', async () => {
@@ -594,7 +615,7 @@ test('a save the store’s rules refused after the screen allowed it shows their
   expect(page.queryAlert()).toBeNull()
 })
 
-test('with a new version waiting, a save refused for the core offers Reload, says the typed score goes, and reloads without asking to leave', async () => {
+test('with a new version waiting, a save refused for the core offers Reload, says the unsaved changes go, and reloads without asking to leave', async () => {
   const user = userEvent.setup()
   const reload = vi.fn()
   const page = new ScoringScreenPage()
@@ -606,7 +627,9 @@ test('with a new version waiting, a save refused for the core offers Reload, say
   await user.type(await page.theirs(), '7')
   await user.click(await page.submit())
 
-  expect(await page.alert()).toHaveTextContent('Reloading clears 11–7; you’ll type it again.')
+  expect(await page.alert()).toHaveTextContent(
+    'Reload FortyMM, then enter your score again. Your unsaved changes will be lost.',
+  )
   // The typed score asks the browser before the page goes...
   expect(unloadAsks()).toBe(true)
 
@@ -639,23 +662,7 @@ test('a Reload that reloads at once still doesn’t ask to leave', async () => {
   expect(asked).toBe(false)
 })
 
-test('the score a reload would clear is the one typed now, not the one refused', async () => {
-  const user = userEvent.setup()
-  const page = new ScoringScreenPage()
-  page.render(
-    props({ onSave: vi.fn(refused('core-unavailable')), newVersion: { waiting: true, reload: () => {} } }),
-  )
-  await user.type(await page.yours(), '11')
-  await user.type(await page.theirs(), '7')
-  await user.click(await page.submit())
-  await page.alert()
-
-  await user.type(await page.theirs(), '{Backspace}9')
-
-  expect(page.queryAlert()).toHaveTextContent('Reloading clears 11–9; you’ll type it again.')
-})
-
-test('a clear refused for the core, with nothing typed, says nothing of a score to type again', async () => {
+test('a clear refused for the core, with nothing typed, says nothing of unsaved changes', async () => {
   const user = userEvent.setup()
   const page = new ScoringScreenPage()
   page.render(
@@ -671,8 +678,8 @@ test('a clear refused for the core, with nothing typed, says nothing of a score 
   await user.click(page.clear()!)
 
   const alert = await page.alert()
-  expect(alert).toHaveTextContent('Plot twist')
-  expect(alert).not.toHaveTextContent('Reloading clears')
+  expect(alert).toHaveTextContent('Reload FortyMM, then clear your score again.')
+  expect(alert).not.toHaveTextContent('unsaved')
 })
 
 // Whether the browser would ask before the page goes (the leave guard's

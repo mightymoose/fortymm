@@ -1,20 +1,12 @@
 /* A match the device wouldn't read: one column at most 720px wide, centred,
-   as the match details page is: the title, the alert, then the link to all
-   matches. */
+   as the match details page is: the alert, whose title is the page's
+   heading, then the link to all matches. */
 .match-unavailable {
   display: flex;
   flex-direction: column;
   gap: var(--s-5);
   max-width: 720px;
   margin: 0 auto;
-}
-
-.match-unavailable__title {
-  margin: 0;
-  font: 400 40px / 1 var(--font-display);
-  letter-spacing: 0.01em;
-  text-transform: uppercase;
-  color: var(--fg-1);
 }
 
 /* At least 44px tall, to tap on a phone. */

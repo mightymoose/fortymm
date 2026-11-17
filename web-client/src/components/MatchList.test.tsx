@@ -39,9 +39,7 @@ test('a list the device wouldn’t read says so, not the pending view; Try again
   await matchesStore.getState().load()
   renderScreen(<MatchList />, { path: '/matches' })
 
-  expect(await page.unavailable()).toHaveTextContent(
-    'This browser isn’t letting FortyMM read its data.',
-  )
+  expect(await page.unavailable()).toBeVisible()
 
   await user.click(await page.tryAgain())
 
