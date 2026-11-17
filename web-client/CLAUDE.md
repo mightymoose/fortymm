@@ -89,6 +89,22 @@ A form is a React Hook Form form whose rules are one zod schema. The new match f
 - **Dirty is the form's own**: `formState.isDirty`, against `defaultValues`, so a form changed back to how it opened is not dirty. A screen that asks before leaving has one guard, `useBlocker({ shouldBlockFn: () => isDirty, enableBeforeUnload: () => isDirty, withResolver: true })`, and nothing else decides it. A submitted form is still dirty: whatever navigates after a submit must get past that one guard (leave it to the task that navigates).
 - **Tests.** The schema's rules are its own test, `<Name>Screen.schema.test.ts`, called directly: every variant once, the refused inputs as a `test.each` table (`NewMatchScreen.schema.test.ts`). The screen's test proves through the page object, by role, that it uses them: one case per outcome (the error shown and focused, the handler's match, the leave guard asking or not).
 
+## Error messages
+
+The user's rules (2026-11-17), for every message a person reads when something fails. Imagine someone who isn't technical recording a match, possibly offline. Before writing one, read the code that handles the failure: what is kept, what stays on screen, and what retrying or reloading actually does.
+
+- **Name the action that failed.** "Couldn't save game 2", "Couldn't open this match", never "Something went wrong", "That wasn't saved" or "Oops". Where the code knows the action (creating a match, saving a score, clearing one), each gets its own words.
+- **Say what it means for their work, when the code proves it.** Whether what they typed is still there, whether what was saved before is unchanged. Promise nothing the code doesn't do, and say which promises no test proves.
+- **Give a next step that works for that failure.** Check that retrying, a browser setting or reloading really helps before suggesting it. No advice just to fill the message.
+- **Don't guess the cause.** A refused read doesn't prove the browser blocked it; a new version waiting doesn't prove it caused the failure. Advice may be informed by the likely cause ("check that this browser lets FortyMM store data"), never stated as the cause.
+- **Offline is normal.** Suggest a connection only for what needs one. Say "on this device" where it matters.
+- **Warn before a reload loses something.** If reloading drops what is typed, the message says so ("Reloading clears 11–9.").
+- **No implementation words.** No keys, signing, storage, cores, locks or error names; the technical cause shapes the advice and never appears.
+- **No repetition.** Don't repeat the page's heading in an alert's title, or write "Try again" next to a Try again button. Every sentence says something the title and buttons don't.
+- **No jokes while something fails.**
+- **Group failures by what the person needs to know or do**, not one message per internal reason.
+- **Show the words to the user before building them**, as a table of title, message and buttons per case, with the claims that couldn't be verified.
+
 ## This device's signing key
 
 `src/device-key.ts` (README "This device's signing key") is the only place the web client makes, keeps or signs with a key.
