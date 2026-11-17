@@ -76,6 +76,24 @@ type LoadedMatch<M> = { ok: true; match: M | null } | { ok: false; reason: strin
 export type FailWrites = 'refused' | 'aborted'
 export type StoreName = 'records' | 'journal' | 'matches' | 'users' | 'me'
 
+// A draft for the harness's commit: see harness/storage.ts.
+export type SignFault = 'throws' | 'truncated' | 'wrong-key'
+export type Refusal = { reason: string; message: string }
+export type CommitSpec =
+  | { kind: 'create'; bestOf: number; rated: boolean; fault?: SignFault; swallow?: boolean }
+  | { kind: 'score'; match: string; game: number; score: [number, number] | null }
+  | { kind: 'refuse'; refusal: Refusal }
+  | { kind: 'write-then-refuse'; write: 'append' | 'me'; refusal: Refusal }
+  | { kind: 'foreign'; from: 'another-key' | 'kept' }
+  | { kind: 'builder-throws' }
+  | { kind: 'throws' }
+export type Committed = { made: string[]; read?: string[] }
+export type CommitAnswer =
+  | { ok: true; value: Committed }
+  | ({ ok: false } & ({ reason: string } | Refusal))
+  | `threw: ${string}`
+export type KeptByCore = { id: string; kind: string | null; verifies: boolean; signer: string }
+
 export const storageHarnessPath = '/storage.html'
 
 export class StorageHarness {
@@ -175,6 +193,38 @@ export class StorageHarness {
     | { ok: false; reason: string }
   > {
     return this.invoke('loadMatches')
+  }
+
+  // The journal's commit (src/journal.ts), running the draft a spec names
+  // (harness/storage.ts says what each does).
+  commit(spec: CommitSpec): Promise<CommitAnswer> {
+    return this.invoke('commit', spec)
+  }
+
+  // Each spec committed at once, queued for the append lock in the order
+  // given: what each answered.
+  commitTogether(specs: CommitSpec[]): Promise<CommitAnswer[]> {
+    return this.invoke('commitTogether', specs)
+  }
+
+  // Takes the append lock, and keeps it until releaseLock.
+  holdLock(): Promise<void> {
+    return this.invoke('holdLock')
+  }
+
+  releaseLock(): Promise<void> {
+    return this.invoke('releaseLock')
+  }
+
+  // Resolves once this many requests for the append lock wait for it, in
+  // any tab.
+  waitForQueued(count: number): Promise<void> {
+    return this.invoke('waitForQueued', count)
+  }
+
+  // Every record kept, as the core reads it.
+  keptRecords(): Promise<KeptByCore[]> {
+    return this.invoke('keptRecords')
   }
 
   // A hello signed by this device's key (hex), not stored.

@@ -97,7 +97,7 @@ A form is a React Hook Form form whose rules are one zod schema. The new match f
 - The key is reached only through `withDeviceKey(callback)`, which runs the callback inside the append lock (`appendLock`, in `src/storage.ts`) with the key, made there if none is kept. The journal's appends take the same lock.
 - Callbacks are short: every append, in every tab, waits for them. Inside one, write and read with the `store` it gets, never the public `storeRecord`, which would wait for the lock the callback holds, for ever (Web Locks are not re-entrant). Never keep `store` past the callback.
 - A browser that can't make or keep the key is a typed result (`{ ok: false, reason }`), never a thrown error, and never a key that isn't kept. A callback that throws makes `withDeviceKey` throw, with the lock released.
-- Feature code never signs (design 4.3); what makes records does (today, the first launch).
+- Feature code never signs (design 4.3); what makes records does: the first launch (its hello), and `commit` in `src/journal.ts` (every other record: a draft decides on what the held store reads, `make` signs and assembles, and nothing is kept unless every record is; README "Making records").
 - Claims about the real key go in the browser suite (`e2e/tests/device-key.spec.ts`, through `e2e/harness/`); jsdom has no IndexedDB and no real `CryptoKey` to keep.
 - To learn which account this device has (a screen loading), read the user store (`src/stores/user.ts`, whose `load` calls `loadMe()` in `src/storage.ts`), never `withDeviceKey`: one read, no key, no core. Opening a page never mints an identity; only the first launch at app startup does.
 
