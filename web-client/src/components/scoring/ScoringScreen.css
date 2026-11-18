@@ -39,6 +39,8 @@
   flex-direction: column;
   gap: var(--s-2);
   min-width: 0;
+  /* Its width sizes the score field's digits (below). */
+  container-type: inline-size;
 }
 .scoring__side--yours {
   grid-area: yours;
@@ -59,7 +61,12 @@
   width: 100%;
   height: auto;
   padding: var(--s-3);
-  font-size: var(--text-score);
+  /* Two digits always fit the field: the score's full size where the side
+     is wide enough, smaller on a narrow phone (a side is about 116px wide
+     at 390px), never cut off. A score is at most two digits (scoring.ts);
+     two of the number font's digits are about 1.21em wide, so the room
+     inside the padding and the 1px edges is divided by 1.3. */
+  font-size: min(var(--text-score), calc((100cqi - 2 * var(--s-3) - 2px) / 1.3));
   line-height: 1;
   text-align: center;
 }
