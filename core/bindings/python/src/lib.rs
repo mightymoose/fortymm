@@ -96,7 +96,8 @@ impl PyRecord {
     // (an unknown kind, or a format version it cannot read) gives None from
     // each; it still has its signer.
 
-    /// A `match` record's two sides, each a list of 32-byte player ids. None
+    /// A `match` record's two sides, each a list of 32-byte player ids; one
+    /// may be empty, an anonymous side. None
     /// for every other record, including a `match` at a format version this
     /// library did not interpret.
     #[getter]
@@ -402,8 +403,10 @@ fn player_body<'py>(
     body_of(py, &Draft::player(), environment, signer, clock)
 }
 
-/// The body of a `match`, to sign: two sides, each a list of one or more
-/// 32-byte player ids, on terms the core carries and does not read.
+/// The body of a `match`, to sign: two sides, each a list of 32-byte player
+/// ids, on terms the core carries. One side may be empty, an anonymous side,
+/// never both; a match with an anonymous side can't be rated, so terms that
+/// read as rated raise Malformed.
 #[pyfunction]
 #[pyo3(signature = (environment, public_key, random, sides, terms, clock=None))]
 fn match_body<'py>(

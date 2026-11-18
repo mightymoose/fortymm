@@ -5,7 +5,8 @@
 # The getters (sides, terms, repeats_player, creator, introduced_key,
 # match_id, extra_player_id) report what the bytes say, not that the record
 # counts: verify() is a separate call. A record this library did not
-# interpret gives None from each; it still has its signer.
+# interpret gives None from each; it still has its signer. One of a match's
+# sides may be an empty list: an anonymous side.
 
 FORMAT_VERSION: int
 
@@ -108,7 +109,10 @@ def read_score_value(data: bytes) -> ScoreValue | None: ...
 
 # Making a `player`, a `match` and a `score`: each body is signed and
 # assembled as a hello's is. An id is 32 bytes; terms and value are bytes the
-# core carries and does not read.
+# core carries and does not read. A match's side is a list of player ids, and
+# one side may be empty, an anonymous side, never both (two empty sides raise
+# Malformed). A match with an anonymous side can't be rated: terms that read
+# as rated raise Malformed.
 def player_body(environment: int, public_key: bytes, random: bytes, clock: int | None = None) -> bytes: ...
 def match_body(
     environment: int,

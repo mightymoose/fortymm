@@ -267,6 +267,13 @@ check(
     made["player"].extra_player_id() != made["player-with-clock"].extra_player_id(),
     "made players: two random values, two players",
 )
+# A match against an anonymous side: its second side is an empty list, made
+# and read back as Rust makes it.
+v = vector["match-anonymous"]
+check(v["sides"][1] == [], "made match-anonymous: its second side is empty")
+check(hexes(made["match-anonymous"].sides) == v["sides"], "made match-anonymous: sides")
+check(hexes(made["match-anonymous"].terms) == v["terms"], "made match-anonymous: terms")
+check(hexes(made["match-anonymous"].match_id()) == v["id"], "made match-anonymous: its id is the record id")
 
 # B3. A made score gives back its match, slot, value and replaced ids; those
 # getters give nothing for another kind.
@@ -304,18 +311,30 @@ for bad in vectors["invalid_hello_inputs"]:
             f"invalid {name} input {bad['name']}: {got}, expected {expected}",
         )
 # The other inputs are checked too: ids are 32 bytes, and a match has two
-# sides with a player each.
+# sides with a player on one at least.
 ID = "00" * 32
 for what, name, replaced in [
     ("a player id of 31 bytes", "match", {"sides": [[ID[2:]], [ID]]}),
     ("a player id of 33 bytes", "match", {"sides": [[ID], [ID, ID + "00"]]}),
-    ("an empty side", "match", {"sides": [[ID], []]}),
+    ("no player on either side", "match", {"sides": [[], []]}),
     ("one side", "match", {"sides": [[ID]]}),
     ("three sides", "match", {"sides": [[ID], [ID], [ID]]}),
     ("a match id of 31 bytes", "score", {"scored_match": ID[2:]}),
     ("a replaced id of 33 bytes", "score", {"replaces": [ID + "00"]}),
 ]:
     check(refusal(lambda: body_of(vector[name], **replaced)) is not None, f"{name} body with {what}: refused")
+# The match rules' own reasons: a match needs a player, and an anonymous match
+# is never rated, whichever side is the empty one. Unrated, the same sides are
+# made.
+anonymous = vector["match-anonymous"]
+[player] = anonymous["sides"][0]
+rated, unrated = core.terms_bytes(3, True).hex(), core.terms_bytes(3, False).hex()
+got = refusal(lambda: body_of(anonymous, sides=[[], []]))
+check(got == "a match needs a player on one side at least", f"match with no players: refused with {got}")
+for sides in ([[player], []], [[], [player]]):
+    got = refusal(lambda: body_of(anonymous, sides=sides, terms=rated))
+    check(got == "an anonymous match can't be rated", f"rated match with sides {sides}: refused with {got}")
+    check(refusal(lambda: body_of(anonymous, sides=sides, terms=unrated)) is None, f"unrated match with sides {sides}: made")
 
 by_name = {}
 for v in vectors["parcels"]:

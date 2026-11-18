@@ -79,7 +79,7 @@ An unknown environment number still decodes. Refusing a record from the wrong en
 | Kind | Key | Field | Type |
 |---|---|---|---|
 | `hello`, `player` | | none | |
-| `match` | 8 | sides | array of exactly 2 arrays, each of 1 or more player ids |
+| `match` | 8 | sides | array of exactly 2 arrays of player ids. One of them may be empty, an anonymous side (below); never both |
 | | 9 | terms | bytes, opaque (section 15) |
 | `score` | 8 | match | id |
 | | 9 | slot | uint: n for game n, 1 and up. Any uint is accepted in a record; 0 has no value layout and is no game, and a match's state ignores it (section 16) |
@@ -104,6 +104,12 @@ An unknown environment number still decodes. Refusing a record from the wrong en
 | | 10 | reason code | uint |
 
 A decoded kind must have exactly these keys. Any other key is an error, so a known kind cannot gain a field without a new format version.
+
+**Anonymous side** (decided 2026-11-17). A `match` side with no players is an anonymous side: an opponent nobody names, such as a match against "Anonymous". No `player` record is made for it. A side with no players is the empty array, the one byte `80`, so a match against an anonymous side has one byte form and one id, like any other (golden vector `made_records`, `match-anonymous`).
+
+- **One side at most.** A match needs a player on one side at least. Making a match with both sides empty is refused ("a match needs a player on one side at least"), and a body whose two sides are both empty does not decode: field 8 is malformed (golden vector `invalid_records`, `match-both-sides-empty`).
+- **Never rated.** Nobody on an anonymous side can be rated, and nobody there can sign a result. So making a match with an anonymous side and terms that read as rated (section 15) is refused ("an anonymous match can't be rated"). This is the only place the core reads terms while making a record (`Draft::match_`, in `src/record.rs`): terms that don't read are carried as for any match. Decoding still never reads terms, so a `match` record from elsewhere with an anonymous side and rated terms decodes; whatever rates matches, once it is built, never rates one with an anonymous side.
+- **One side's signature agrees a result** (results are not judged yet). An anonymous side has no player and no key, so nobody on it signs. Once results are judged, a side with no players needs no signature for a result to be agreed: the other side's signature is enough. A match against an anonymous side changes nothing for anyone else, so a second signature would protect nothing.
 
 **Subject** of a `result` or `ruling` (design section 4, "Subject"): the array `[match id, seen list, result content]`. The seen list is an array of 8-byte tags, oldest first. The content is opaque bytes. The subject is embedded as a CBOR value, not wrapped in a byte string, so its bytes are a contiguous slice of the body, and a second signer copying them reproduces them exactly (R6).
 
@@ -262,7 +268,7 @@ Nothing else: no points per game. Best of 5, rated, is the 7 bytes `a3 00 01 01 
 
 A game won 11 to 9 by the first side is the 7 bytes `a2 00 01 01 82 0b 09`. A cleared score is the 3 bytes `a1 00 01`: the version and nothing else, as an optional field is left out and never written empty (section 5).
 
-**What the layouts do not check.** Best of must be odd, since no side can win most of an even number of games. Nothing else is judged: that a match is best of 1, 3, 5 or 7, that a game is to 11, and that a score can end a game are the app's rules, not the layout's. The limit of 2³² − 1 is this implementation's.
+**What the layouts do not check.** Best of must be odd, since no side can win most of an even number of games. Rated terms are valid terms; that a match with an anonymous side can't be rated is checked when the match is made (section 5, "Anonymous side"), not by the layout. Nothing else is judged: that a match is best of 1, 3, 5 or 7, that a game is to 11, and that a score can end a game are the app's rules, not the layout's. The limit of 2³² − 1 is this implementation's.
 
 **Reading.** Reading gives the value, or nothing. It gives nothing for a layout version other than 1, whatever the rest holds, and for any bytes that are not exactly what writing a value produces: bytes outside the profile, a missing or extra key, a value of the wrong type or out of range, trailing bytes. So whatever reads, writes back to the same bytes. Reading never fails any other way, and a record whose terms or value do not read is still a valid record. Neither layout has a checksum: the record's signature covers these bytes.
 
@@ -291,11 +297,11 @@ What a device shows of a match is derived from the set of records it holds about
 |---|---|
 | match id | 32 bytes |
 | creator | the 33-byte key |
-| sides | two lists of player ids |
+| sides | two lists of player ids. One may be empty: an anonymous side (section 5) |
 | terms | best of and rated, or none |
 | games | for n from 1, game n's score or none, up to the last game that has a score, so it never ends with none, and never past the last game (best of, or 255). A gap stays: a game with no score before one with a score is none |
 | current | for n from 1, the ids of game n's current entries, lowest first, up to the last game that has a current entry, and never past the last game. It can be longer than games: a game cleared at the end has no score but still has its clearing entry, which the next score for that game names as replaced |
 
 The state is a function of the set alone: the same records give the same state in any order and with any repeats (design L4). Nothing else is read: no clock, no random value, no arrival order. It does not judge a score: whether a game can end that way, or whether the match is already decided, is the app's rule (`web-client/src/scoring/scoring.ts`).
 
-The golden vectors `match_states` hold sets of records (in a shuffled order; every set but the one of terms that don't read holds a repeat) and the state each gives: a corrected game, a game cleared between two scored games, and a game cleared at the end; an unrated match with a chain of three corrections, a game with two current entries of the same points (so the vector pins `current`, not the placeholder's choice) and points past 2^31; two games cleared at the end, with a slot-0 score that replaces nothing; terms that don't read, with scores for games 255 and 256; and a doubles match of best of 301 (games still stop at 255, so a game-260 score is ignored), where a score by another key has the highest record id, and the match record and a score are each listed again signed a second time; and a rated best of 4294967295 (u32::MAX, past 2^31), with a gap, game 255, and a game-256 score that is ignored.
+The golden vectors `match_states` hold sets of records (in a shuffled order; every set but the one of terms that don't read holds a repeat) and the state each gives: a corrected game, a game cleared between two scored games, and a game cleared at the end; an unrated match with a chain of three corrections, a game with two current entries of the same points (so the vector pins `current`, not the placeholder's choice) and points past 2^31; two games cleared at the end, with a slot-0 score that replaces nothing; terms that don't read, with scores for games 255 and 256; and a doubles match of best of 301 (games still stop at 255, so a game-260 score is ignored), where a score by another key has the highest record id, and the match record and a score are each listed again signed a second time; a rated best of 4294967295 (u32::MAX, past 2^31), with a gap, game 255, and a game-256 score that is ignored; and an unrated best of 3 against an anonymous side, whose state shows that side as an empty list.

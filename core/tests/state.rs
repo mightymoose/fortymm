@@ -140,6 +140,23 @@ fn the_state_gives_the_match_its_creator_sides_and_terms() {
     assert_eq!(got.current, Vec::<Vec<RecordId>>::new());
 }
 
+#[test]
+fn an_anonymous_side_shows_as_an_empty_list() {
+    let [alice, ..] = keys();
+    let sides = [vec![alice.own_player()], vec![]];
+    let terms = Terms::new(3, false).unwrap();
+    let match_ = alice.commit(
+        &Draft::match_(sides.clone(), terms.to_bytes()).unwrap(),
+        random(2),
+        None,
+    );
+    let game_1 = score(&alice, match_id(&match_), 1, points(11, 6), &[], 3);
+    let got = state(&[&match_, &game_1]).unwrap();
+    assert_eq!(got.sides, sides);
+    assert_eq!(got.terms, Some(terms));
+    assert_eq!(got.games, vec![Some([11, 6])]);
+}
+
 // The creator is the key that signed the match record, whatever else the set
 // holds. Here the match is a doubles match signed by carol, and a score
 // signed by bob has the highest record id in the set, so neither the first

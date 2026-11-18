@@ -17,6 +17,7 @@ use crate::cbor::{self, CborError, Value};
 use crate::crypto::Crypto;
 use crate::ids::{self, AccountId, MatchId, OutcomeId, PlayerId, PublicKey, RecordId, Tag};
 use crate::layout::{self, field, grant_side, grant_subject, header as key, kind as number};
+use crate::product::Terms;
 use crate::signature::{Signature, SignatureError};
 
 /// The largest body this library accepts. Chosen by this implementation; the
@@ -356,7 +357,8 @@ pub enum Content {
     Player,
     /// `match`.
     Match {
-        /// The two sides, each one or more players.
+        /// The two sides. One may have no players (an anonymous side); never
+        /// both.
         sides: [Vec<PlayerId>; 2],
         /// The terms. Opaque here; their layout is a product schema.
         terms: Vec<u8>,
@@ -762,17 +764,18 @@ fn decode_content(kind: Kind, fields: &mut Fields) -> Result<Content, RecordErro
                 .try_into()
                 .map_err(|_| RecordError::BadField(sides_key))?;
             let [first, second] = sides.map(|side| {
-                let players = array(side, sides_key)?
+                array(side, sides_key)?
                     .into_iter()
                     .map(|item| player(item, sides_key))
-                    .collect::<Result<Vec<_>, _>>()?;
-                if players.is_empty() {
-                    return Err(RecordError::BadField(sides_key));
-                }
-                Ok(players)
+                    .collect::<Result<Vec<_>, _>>()
             });
+            let sides = [first?, second?];
+            // One side may be empty (an anonymous side); both may not.
+            if sides.iter().all(Vec::is_empty) {
+                return Err(RecordError::BadField(sides_key));
+            }
             Content::Match {
-                sides: [first?, second?],
+                sides,
                 terms: bytes(fields.required(field::match_::TERMS)?, field::match_::TERMS)?,
             }
         }
@@ -914,8 +917,11 @@ fn decode_body(body: &[u8]) -> Result<(Header, Content), RecordError> {
 /// What a draft is missing or has wrong.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DraftError {
-    /// A match side with no players.
-    EmptySide,
+    /// A match whose two sides both have no players.
+    NoPlayers,
+    /// A match with an anonymous side (no players) whose terms say it is
+    /// rated. Nobody is on that side to be rated.
+    RatedAnonymous,
     /// The body would be longer than [`MAX_BODY_LENGTH`].
     TooLarge,
 }
@@ -923,7 +929,8 @@ pub enum DraftError {
 impl fmt::Display for DraftError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DraftError::EmptySide => write!(f, "each side of a match needs a player"),
+            DraftError::NoPlayers => write!(f, "a match needs a player on one side at least"),
+            DraftError::RatedAnonymous => write!(f, "an anonymous match can't be rated"),
             DraftError::TooLarge => write!(f, "the body would be too large"),
         }
     }
@@ -954,10 +961,21 @@ impl Draft {
         Draft::plain(Content::Player)
     }
 
-    /// A `match`. Each side needs at least one player.
+    /// A `match`. One side may have no players: an anonymous side, such as
+    /// an opponent nobody names. The other side needs a player.
+    ///
+    /// A match with an anonymous side is never rated: there is nobody on
+    /// that side to rate, and nobody there to sign a result. So the terms are
+    /// read here (FORMAT.md section 15), for this rule only, and terms that
+    /// say rated are refused. Terms this build does not read are carried as
+    /// they are, as for any match.
     pub fn match_(sides: [Vec<PlayerId>; 2], terms: Vec<u8>) -> Result<Draft, DraftError> {
-        if sides.iter().any(Vec::is_empty) {
-            return Err(DraftError::EmptySide);
+        if sides.iter().all(Vec::is_empty) {
+            return Err(DraftError::NoPlayers);
+        }
+        let anonymous = sides.iter().any(Vec::is_empty);
+        if anonymous && Terms::read(&terms).is_some_and(|terms| terms.rated()) {
+            return Err(DraftError::RatedAnonymous);
         }
         Ok(Draft::plain(Content::Match { sides, terms }))
     }
@@ -1258,7 +1276,8 @@ impl Record {
         self.header.signer
     }
 
-    /// A `match` record's two sides, each one or more player ids.
+    /// A `match` record's two sides, each a list of player ids. One may be
+    /// empty: an anonymous side.
     pub fn sides(&self) -> Option<&[Vec<PlayerId>; 2]> {
         match &self.content {
             Content::Match { sides, .. } => Some(sides),
