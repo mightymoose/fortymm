@@ -1,6 +1,7 @@
 import userEvent from '@testing-library/user-event'
-import { expect, test } from 'vitest'
+import { expect, test, vi } from 'vitest'
 import type { MatchSummary } from '../../stores/matches.ts'
+import { noNewVersion } from '../DeviceAlert.page.tsx'
 import { MatchListScreenPage } from './MatchListScreen.page.tsx'
 
 // The screen alone, with the props each state takes: matches as the match
@@ -60,4 +61,39 @@ test('with no matches, the empty state shows with its New match, a link to the n
   const links = page.newMatchLinks()
   expect(links.map((link) => link.getAttribute('href'))).toEqual(['/matches/new'])
   expect(page.tableNow()).toBeNull()
+})
+
+test('a list the device wouldn’t read says so under the heading, with no table, no empty state and no New match', async () => {
+  const page = new MatchListScreenPage()
+  page.renderUnavailable({
+    reason: 'storage-unavailable',
+    newVersion: noNewVersion,
+    onRetry: async () => {},
+  })
+
+  expect(await page.heading()).toBeVisible()
+  expect(await page.unavailable()).toBeVisible()
+  expect(page.tableNow()).toBeNull()
+  expect(page.emptyStateNow()).toBeNull()
+  expect(page.newMatchLinks()).toEqual([])
+})
+
+test('Try again reads the list again; refused again, the alert is shown anew', async () => {
+  const user = userEvent.setup()
+  let release = () => {}
+  const onRetry = vi.fn(() => new Promise<void>((resolve) => (release = resolve)))
+  const page = new MatchListScreenPage()
+  page.renderUnavailable({ reason: 'core-unavailable', newVersion: noNewVersion, onRetry })
+  const before = await page.unavailable()
+
+  await user.click(await page.tryAgain())
+
+  expect(onRetry).toHaveBeenCalledTimes(1)
+  // While the read runs, the same alert stays.
+  expect(page.unavailableNow()).toBe(before)
+  release()
+  await vi.waitFor(() => expect(page.unavailableNow()).not.toBe(before))
+  expect(page.unavailableNow()).toHaveTextContent('Part of FortyMM didn’t load. Try again.')
+  // The pressed button was remounted with its alert: focus is on the new one.
+  expect(await page.tryAgain()).toHaveFocus()
 })

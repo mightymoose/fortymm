@@ -1,6 +1,10 @@
 import { screen, within } from '@testing-library/react'
 import { renderScreen } from '../../test/render-screen.tsx'
-import { MatchListScreen, type MatchListScreenProps } from './MatchListScreen.tsx'
+import {
+  MatchListScreen,
+  MatchListScreenUnavailable,
+  type MatchListScreenProps,
+} from './MatchListScreen.tsx'
 
 // The matches list (MatchListScreen.tsx): how to render it alone, and what a
 // person sees on it. The finders work wherever the screen is mounted,
@@ -8,6 +12,24 @@ import { MatchListScreen, type MatchListScreenProps } from './MatchListScreen.ts
 export class MatchListScreenPage {
   render(props: MatchListScreenProps) {
     return renderScreen(<MatchListScreen {...props} />, { path: '/matches' })
+  }
+
+  // The list the device wouldn't read (MatchListScreenUnavailable).
+  renderUnavailable(props: Parameters<typeof MatchListScreenUnavailable>[0]) {
+    return renderScreen(<MatchListScreenUnavailable {...props} />, { path: '/matches' })
+  }
+
+  // The alert that says the list couldn't be loaded, and its Try again.
+  unavailable() {
+    return screen.findByRole('alert', { name: 'Couldn’t load your matches' })
+  }
+
+  unavailableNow() {
+    return screen.queryByRole('alert', { name: 'Couldn’t load your matches' })
+  }
+
+  tryAgain() {
+    return screen.findByRole('button', { name: 'Try again' })
   }
 
   heading() {

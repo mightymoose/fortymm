@@ -1,4 +1,5 @@
 import { useNavigate } from '@tanstack/react-router'
+import { useNewVersion } from '../new-version.ts'
 import { matchesStore } from '../stores/matches.ts'
 import { NewMatchScreen } from './new-match/NewMatchScreen.tsx'
 
@@ -8,26 +9,26 @@ import { NewMatchScreen } from './new-match/NewMatchScreen.tsx'
 // Start match keeps the match on this device and, the moment the store
 // answers, opens game 1's scoring page in place of this one: Back from it
 // doesn't return to a filled form, and it gets past the screen's leave guard,
-// since a submitted form is still dirty. A create the store refuses (only
-// the device's storage can) stays on the form, as filled, showing nothing:
-// the screen has no error state.
+// since a submitted form is still dirty. The store's answer goes back to the
+// screen, which shows a create the device refused, on the form as filled.
+// Whether a new version is waiting (src/new-version.ts) goes to it too.
 export function NewMatch() {
   const navigate = useNavigate()
+  const newVersion = useNewVersion()
   return (
     <NewMatchScreen
-      onSubmit={(match) => {
-        void matchesStore
-          .getState()
-          .createMatch(match)
-          .then((result) => {
-            if (!result.ok) return
-            void navigate({
-              to: '/matches/$matchId/games/$gameId/scores/edit',
-              params: { matchId: result.matchId, gameId: '1' },
-              replace: true,
-              ignoreBlocker: true,
-            })
+      newVersion={newVersion}
+      onSubmit={async (match) => {
+        const result = await matchesStore.getState().createMatch(match)
+        if (result.ok) {
+          void navigate({
+            to: '/matches/$matchId/games/$gameId/scores/edit',
+            params: { matchId: result.matchId, gameId: '1' },
+            replace: true,
+            ignoreBlocker: true,
           })
+        }
+        return result
       }}
     />
   )

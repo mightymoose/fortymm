@@ -147,3 +147,49 @@ test('a watched list is read again after a change of ‘all’', async () => {
     }),
   )
 })
+
+test('a watched list the device wouldn’t read is read again when the page is shown again', async () => {
+  const memory = createMatchMemory()
+  const matches = createMatchesStore(memory)
+  memory.failNextRead('storage-unavailable')
+  await matches.getState().load()
+  const stop = matches.getState().watchMatches()
+
+  document.dispatchEvent(new Event('visibilitychange'))
+
+  await vi.waitFor(() =>
+    expect(matches.getState().matches).toEqual({ status: 'ready', matches: [] }),
+  )
+  stop()
+})
+
+// A read now would be refused: a list read again would turn unavailable.
+test('a watched list already read is not read again when the page is shown again', async () => {
+  const memory = createMatchMemory()
+  const matches = createMatchesStore(memory)
+  await matches.getState().load()
+  const stop = matches.getState().watchMatches()
+  memory.failNextRead('storage-unavailable')
+
+  document.dispatchEvent(new Event('visibilitychange'))
+  await new Promise((settled) => setTimeout(settled, 20))
+
+  expect(matches.getState().matches).toEqual({ status: 'ready', matches: [] })
+  stop()
+})
+
+test('a list nobody watches is not read again when the page is shown again', async () => {
+  const memory = createMatchMemory()
+  const matches = createMatchesStore(memory)
+  memory.failNextRead('storage-unavailable')
+  await matches.getState().load()
+  matches.getState().watchMatches()()
+
+  document.dispatchEvent(new Event('visibilitychange'))
+  await new Promise((settled) => setTimeout(settled, 20))
+
+  expect(matches.getState().matches).toEqual({
+    status: 'unavailable',
+    reason: 'storage-unavailable',
+  })
+})

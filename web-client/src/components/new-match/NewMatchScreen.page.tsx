@@ -1,13 +1,41 @@
 import { screen, within } from '@testing-library/react'
+import { findAlert, noNewVersion, queryAlert } from '../DeviceAlert.page.tsx'
 import { renderScreen } from '../../test/render-screen.tsx'
 import { NewMatchScreen } from './NewMatchScreen.tsx'
+
+type Props = Parameters<typeof NewMatchScreen>[0]
 
 // The new match screen (NewMatchScreen.tsx): how to render it alone, and
 // what a person sees on it. The finders work wherever the screen is mounted,
 // through its route (src/routes/matches/new.test.tsx) too.
 export class NewMatchScreenPage {
-  render(props: Parameters<typeof NewMatchScreen>[0]) {
-    return renderScreen(<NewMatchScreen {...props} />, { path: '/matches/new' })
+  // With no new version waiting, unless the test gives one. With
+  // `browserHistory`, the screen's leave guard answers the window's
+  // beforeunload (renderScreen).
+  render(
+    {
+      newVersion = noNewVersion,
+      ...props
+    }: Omit<Props, 'newVersion'> & Partial<Pick<Props, 'newVersion'>>,
+    { browserHistory = false } = {},
+  ) {
+    return renderScreen(<NewMatchScreen newVersion={newVersion} {...props} />, {
+      path: '/matches/new',
+      browserHistory,
+    })
+  }
+
+  // What the device refused of the last Start match: the error alert.
+  alert() {
+    return findAlert()
+  }
+
+  queryAlert() {
+    return queryAlert()
+  }
+
+  reload() {
+    return screen.findByRole('button', { name: 'Reload' })
   }
 
   heading() {

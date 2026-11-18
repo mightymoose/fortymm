@@ -12,9 +12,12 @@ import { matchStore } from '../../../../../../stores/match.ts'
 export const Route = createFileRoute('/matches/$matchId/games/$gameId/scores/edit')({
   // A route's loader runs alongside its parent's, so this one reads the match
   // itself (the store queues the reads) rather than wait for the layout's.
-  // A match that isn't there is the layout's not found.
+  // A match that isn't there is not found, whichever of the two reads says
+  // so (the layout's may have been refused); one the device won't read is
+  // the layout's to show.
   loader: async ({ params: { matchId, gameId } }) => {
     const entry = await matchStore.getState().load(matchId)
+    if (entry.status === 'missing') throw notFound()
     if (entry.status !== 'ready') return
     const opened = gameToOpen(gameId, entry.match)
     if (opened.status === 'not-found') throw notFound()

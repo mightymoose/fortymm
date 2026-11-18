@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import { expect, test } from 'vitest'
 import { Alert } from './Alert.tsx'
-import { Button } from '../Button.tsx'
+import { Button } from './Button.tsx'
 
 test('an error is an alert, announced with its title, its reason and its fix', () => {
   render(
@@ -18,8 +18,9 @@ test('an error is an alert, announced with its title, its reason and its fix', (
     </Alert>,
   )
 
-  const alert = screen.getByRole('alert')
-  expect(alert).toHaveTextContent("Table 4's tablet stopped sending scores")
+  const alert = screen.getByRole('alert', {
+    name: "Table 4's tablet stopped sending scores",
+  })
   expect(alert).toHaveTextContent('The last update was at 11:42.')
   expect(screen.getByRole('button', { name: 'Enter score here' })).toBeVisible()
 })

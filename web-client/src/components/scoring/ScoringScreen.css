@@ -101,6 +101,12 @@
   color: var(--danger);
 }
 
+/* What the device refused of the last save or clear, where the error line
+   goes. */
+.scoring__refused {
+  padding: 0 var(--s-5) var(--s-4);
+}
+
 /* The action row on bg-panel: what saving does, then Clear and the submit;
    on a narrow card, the buttons under the line, the submit taking the
    rest of the width. */

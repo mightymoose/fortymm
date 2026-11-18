@@ -7,8 +7,24 @@ import { ScoringScreen, type ScoringScreenProps } from './ScoringScreen.tsx'
 // The scoring screen (ScoringScreen.tsx): how to render it alone, and what a
 // person sees on it. The finders work wherever the screen is mounted.
 export class ScoringScreenPage {
-  render(props: ScoringScreenProps) {
-    return renderScreen(<ScoringScreen {...props} />, { path: '/scoring' })
+  // With `browserHistory`, the screen's leave guard answers the window's
+  // beforeunload (renderScreen).
+  render(props: ScoringScreenProps, { browserHistory = false } = {}) {
+    return renderScreen(<ScoringScreen {...props} />, { path: '/scoring', browserHistory })
+  }
+
+  // What the device refused of the last save or clear: the named alert
+  // (DeviceAlert; the form's error line is an alert too, unnamed).
+  alert() {
+    return screen.findByRole('alert', { name: /^(Couldn’t|Your browser)/ })
+  }
+
+  queryAlert() {
+    return screen.queryByRole('alert', { name: /^(Couldn’t|Your browser)/ })
+  }
+
+  reload() {
+    return screen.findByRole('button', { name: 'Reload' })
   }
 
   // The screen with a stand-in caller around it (ScoringScreen.match.tsx),
@@ -40,9 +56,10 @@ export class ScoringScreenPage {
     return screen.queryByText('Games won:')?.closest('p') ?? null
   }
 
-  // The one error line, or null.
+  // The one error line, or null: the alert with no name (the device's
+  // refusal is named by its title).
   error() {
-    return screen.queryByRole('alert')
+    return screen.queryByRole('alert', { name: '' })
   }
 
   // The submit, by its label ("Save game & next", "Finish match"...).

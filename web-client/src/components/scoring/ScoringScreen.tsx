@@ -4,12 +4,16 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
+  useState,
   type FormEvent,
   type KeyboardEvent,
   type MouseEvent,
 } from 'react'
 import { Controller, useForm, useWatch } from 'react-hook-form'
+import type { ActionResult, Failure } from '../../stores/match-source.ts'
 import { Button } from '../Button.tsx'
+import { DeviceAlert, type NewVersionOffer } from '../DeviceAlert.tsx'
 import { Icon } from '../Icon.tsx'
 import { opponentLabel } from '../opponent.ts'
 import { TextInput } from '../TextInput.tsx'
@@ -53,11 +57,15 @@ export type ScoringScreenProps = {
   gameLink: GameLink
   // A valid score for this game, called inside the submit event itself, so
   // the caller can move focus to the next game in the same tap. What
-  // happens next (the next game, the dashboard) is the caller's.
-  onSave: (game: number, score: Score) => void
+  // happens next (the next game, the dashboard) is the caller's. Its answer
+  // is the store's: one refused shows on the screen.
+  onSave: (game: number, score: Score) => Promise<ActionResult>
   // Clear game n's saved score, at once: Clear on a saved game's page, with
-  // nothing to confirm.
-  onClear: (game: number) => void
+  // nothing to confirm. Its answer too.
+  onClear: (game: number) => Promise<ActionResult>
+  // Whether a new version of the app is waiting, for a save refused because
+  // the core didn't load.
+  newVersion: NewVersionOffer
 }
 
 // The scoring screen (fortymm-real's ScoreEntry): a person types one game's
@@ -90,6 +98,18 @@ export function ScoringScreen(props: ScoringScreenProps) {
 // Clear empties a saved game at once, with nothing to confirm, and the
 // screen stays on that game, its fields empty. No other action asks.
 //
+// A save or a clear the device refused (its storage, its locks, signing, or
+// the core not loaded) keeps what is typed and shows an error alert where
+// the error line goes, read out at once (DeviceAlert: what failed, what we know, what to do).
+// It stays while the person types, and goes the moment Save or Clear is
+// pressed again; a refusal again shows it anew. Opening another game drops
+// it. A move to another game while a save or a clear is on its way waits
+// for the answer, and is dropped if it was refused. When it offers the new
+// version's Reload after a save, it says the
+// typed score will need typing again, and that reload doesn't ask to leave.
+// A save the store's rules refused after the screen allowed it (the match
+// changed meanwhile) shows its message in the error line.
+//
 // Leaving scoring altogether with a score typed and not saved (the form not
 // as it opened) asks "Leave without saving?": by any link or the browser's
 // back to a page that isn't one of this match's games; closing or reloading
@@ -103,6 +123,7 @@ function ScoringGame({
   gameLink,
   onSave,
   onClear,
+  newVersion,
 }: ScoringScreenProps) {
   const saved = savedScore(games, game)
   const editing = saved !== null
@@ -125,6 +146,29 @@ function ScoringGame({
   })
   const [yours, theirs] = useWatch({ control, name: ['yours', 'theirs'] })
   const errorId = useId()
+  // What the device refused of the last save or clear, if it did.
+  const [deviceRefusal, setDeviceRefusal] = useState<{
+    action: 'save' | 'clear'
+    reason: Failure['reason']
+  } | null>(null)
+  // Which of the two is on its way, for its refusal.
+  const acting = useRef<'save' | 'clear'>('save')
+  // Whether a save or a clear is on its way.
+  const [pending, setPending] = useState(false)
+  // Set once the person asked for the new version: that reload doesn't ask.
+  const reloading = useRef(false)
+
+  // The store's answer to a save or a clear: a device refusal is the alert;
+  // a rules refusal, the error line.
+  function answered(result: ActionResult) {
+    setPending(false)
+    if (result.ok) return
+    if ('message' in result) {
+      setError(refusalPath, { type: 'custom', message: result.message })
+    } else {
+      setDeviceRefusal({ action: acting.current, reason: result.reason })
+    }
+  }
 
   // Your field first, its score selected.
   useEffect(() => {
@@ -171,29 +215,46 @@ function ScoringGame({
     else setError(refusalPath, { type: 'custom', message: reason })
   }
 
+  // Whether `pathname` is one of the match's games' pages (a path `gameLink`
+  // gives).
+  const isGamePage = (pathname: string) =>
+    Array.from({ length: bestOf }, (_, index) => index + 1).some(
+      (n) => router.buildLocation(gameLink(n)).pathname === pathname,
+    )
+
   // The one leave guard: the form's own dirty state, against how it opened,
-  // for a move out of scoring; a move to one of the match's games (a path
-  // `gameLink` gives) drops what is typed and asks nothing.
+  // for a move out of scoring; a move to one of the match's games drops what
+  // is typed and asks nothing. While a save or a clear is on its way, a move
+  // to another game waits for its answer, asking nothing (the user's choice,
+  // 2026-11-16): one that works moves on as it does; one refused stays, and
+  // the move is dropped (the effect below).
   const blocker = useBlocker({
-    shouldBlockFn: ({ next }) =>
-      isDirty &&
-      !Array.from({ length: bestOf }, (_, index) => index + 1).some(
-        (n) => router.buildLocation(gameLink(n)).pathname === next.pathname,
-      ),
-    enableBeforeUnload: () => isDirty,
+    shouldBlockFn: ({ next }) => (isGamePage(next.pathname) ? pending : isDirty),
+    enableBeforeUnload: () => isDirty && !reloading.current,
     withResolver: true,
   })
+  const heldMove = blocker.status === 'blocked' && isGamePage(blocker.next.pathname)
+  useEffect(() => {
+    if (heldMove && !pending) blocker.reset?.()
+  }, [heldMove, pending, blocker])
 
   // A valid score is handed on synchronously, inside the submit event, not
   // after React Hook Form's asynchronous validation: a phone keeps its
   // keyboard open only if the next game's field takes focus in the same tap
   // (fortymm-real's score-entry.tsx). An invalid one goes through
-  // `handleSubmit`, which shows the errors and focuses the first.
+  // `handleSubmit`, which shows the errors and focuses the first. Pressing
+  // Save takes away what the last answer showed.
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const result = schema.safeParse(getValues())
-    if (result.success) onSave(game, result.data)
-    else void handleSubmit(() => {})(event)
+    if (result.success) {
+      const saving = onSave(game, result.data)
+      acting.current = 'save'
+      setPending(true)
+      setDeviceRefusal(null)
+      clearErrors(refusalPath)
+      void saving.then(answered)
+    } else void handleSubmit(() => {})(event)
   }
 
   function keyDown(side: 'yours' | 'theirs', event: KeyboardEvent<HTMLInputElement>) {
@@ -280,11 +341,36 @@ function ScoringGame({
             </p>
           )}
 
+          {deviceRefusal !== null && (
+            <div className="scoring__refused">
+              <DeviceAlert
+                refusal={deviceRefusal}
+                newVersion={newVersion}
+                saved={saved === null ? undefined : `${saved[0]}–${saved[1]}`}
+                unsaved={isDirty}
+                onReload={() => {
+                  reloading.current = true
+                }}
+              />
+            </div>
+          )}
+
           <div className="scoring__actions">
             <p className="scoring__sub">{subtitle}</p>
             <div className="scoring__buttons">
               {editing && (
-                <Button variant="ghost" size="lg" onClick={() => onClear(game)}>
+                <Button
+                  variant="ghost"
+                  size="lg"
+                  onClick={() => {
+                    const clearing = onClear(game)
+                    acting.current = 'clear'
+                    setPending(true)
+                    setDeviceRefusal(null)
+                    clearErrors(refusalPath)
+                    void clearing.then(answered)
+                  }}
+                >
                   Clear
                 </Button>
               )}
@@ -306,7 +392,7 @@ function ScoringGame({
         <Scoreline bestOf={bestOf} games={games} game={game} gameLink={gameLink} />
       </div>
 
-      {blocker.status === 'blocked' && (
+      {blocker.status === 'blocked' && !heldMove && (
         <ConfirmDialog
           title="Leave without saving?"
           stayLabel="Keep editing"

@@ -287,6 +287,21 @@ test('load of a match the device refuses to read is unavailable', async () => {
   })
 })
 
+// The user's decision (2026-11-16): a page already showing the match stays
+// as it is.
+test('a watched match already read keeps its entry when a read again after a change is refused', async () => {
+  const { memory, store, matchId } = await matchWith(5)
+  await store.getState().load(matchId)
+  const before = store.getState().matches[matchId]
+  store.getState().watchMatch(matchId)
+  memory.failNextRead('storage-unavailable')
+
+  memory.announceAll()
+  await new Promise((settled) => setTimeout(settled, 20))
+
+  expect(store.getState().matches[matchId]).toBe(before)
+})
+
 // The store here never hears of a change, so its copy stays as loaded while
 // the memory behind it moves on (as after another tab's write, before its
 // announcement arrives).

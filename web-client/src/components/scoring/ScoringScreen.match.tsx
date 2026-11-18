@@ -35,7 +35,8 @@ export function Match({
           to: '/matches/$matchId/games/$gameId/scores/edit',
           params: { matchId: 'm', gameId: String(n) },
         })}
-        onSave={(n, score) => {
+        newVersion={{ waiting: false, reload: () => {} }}
+        onSave={async (n, score) => {
           const next = withGame(games, n, score)
           setGames(next)
           const after = nextGame(next, bestOf)
@@ -48,8 +49,12 @@ export function Match({
                   ignoreBlocker: true,
                 },
           )
+          return { ok: true }
         }}
-        onClear={(n) => setGames(withGame(games, n, null))}
+        onClear={async (n) => {
+          setGames(withGame(games, n, null))
+          return { ok: true }
+        }}
       />
     </>
   )

@@ -1,5 +1,7 @@
 import userEvent from '@testing-library/user-event'
-import { expect, test } from 'vitest'
+import { expect, onTestFinished, test, vi } from 'vitest'
+import { showNewVersionOf, watchForNewVersion } from '../new-version.ts'
+import { matchMemory } from '../stores/match-memory.ts'
 import { matchesStore } from '../stores/matches.ts'
 import { renderScreen } from '../test/render-screen.tsx'
 import { NewMatch } from './NewMatch.tsx'
@@ -35,5 +37,70 @@ test('Start match keeps a match of the length chosen, unrated, with no opponentâ
     bestOf: 7,
     rated: false,
   })
+})
+
+test('a create the device refused shows why, with the length still chosen; the next Start match that works keeps it and the alert goes', async () => {
+  const user = userEvent.setup()
+  renderScreen(<NewMatch />, { path: '/matches/new' })
+  const before = await newestMatch()
+  matchMemory.failNextWrite('storage-unavailable')
+
+  await user.click(await page.bestOf(3))
+  await user.click(await page.startMatch())
+
+  expect(await page.alert()).toHaveTextContent('Check that your browser allows site data and that you have free storage space, then try again.')
+  expect(await page.bestOf(3)).toBeChecked()
+  expect(await newestMatch()).toEqual(before)
+
+  await user.click(await page.startMatch())
+
+  await expect.poll(newestMatch).toMatchObject({ bestOf: 3 })
+  expect(page.queryAlert()).toBeNull()
+})
+
+test('a create refused for the core, with a new version waiting, offers the new versionâ€™s Reload', async () => {
+  const user = userEvent.setup()
+  const reload = vi.fn()
+  showNewVersionOf({ ready: () => true, waiting: () => true, subscribe: () => () => {}, reload, dismiss: () => {} })
+  try {
+    renderScreen(<NewMatch />, { path: '/matches/new' })
+    matchMemory.failNextWrite('core-unavailable')
+
+    await user.click(await page.startMatch())
+    await user.click(await page.reload())
+
+    expect(reload).toHaveBeenCalledTimes(1)
+  } finally {
+    showNewVersionOf({ ready: () => false, waiting: () => false, subscribe: () => () => {}, reload: () => {}, dismiss: () => {} })
+  }
+})
+
+test('with the update notice dismissed and the new version still waiting, a create refused for the core still offers Reload', async () => {
+  const user = userEvent.setup()
+  const worker = () =>
+    Object.assign(new EventTarget(), { state: 'installed' as const, postMessage: () => {} })
+  const registration = Object.assign(new EventTarget(), {
+    installing: null,
+    waiting: worker(),
+    update: async () => {},
+  })
+  const newVersion = watchForNewVersion(
+    registration,
+    Object.assign(new EventTarget(), { controller: worker() }),
+    () => {},
+  )
+  onTestFinished(() => newVersion.stop())
+  showNewVersionOf(newVersion)
+  onTestFinished(() =>
+    showNewVersionOf({ ready: () => false, waiting: () => false, subscribe: () => () => {}, reload: () => {}, dismiss: () => {} }),
+  )
+  newVersion.dismiss()
+  renderScreen(<NewMatch />, { path: '/matches/new' })
+  matchMemory.failNextWrite('core-unavailable')
+
+  await user.click(await page.startMatch())
+
+  expect(await page.alert()).toHaveTextContent('Reload FortyMM, then start the match again.')
+  expect(await page.reload()).toBeVisible()
 })
 

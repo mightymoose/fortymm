@@ -1,6 +1,9 @@
 import { Link } from '@tanstack/react-router'
+import { useState } from 'react'
+import type { Unavailable } from '../../stores/match-source.ts'
 import type { MatchSummary } from '../../stores/matches.ts'
 import { ButtonLink } from '../ButtonLink.tsx'
+import { DeviceAlert, type NewVersionOffer } from '../DeviceAlert.tsx'
 import { EmptyState } from '../EmptyState.tsx'
 import { Icon } from '../Icon.tsx'
 import { opponentLabel } from '../opponent.ts'
@@ -74,6 +77,39 @@ export function MatchListScreen({ matches }: MatchListScreenProps) {
 // The list before the store has read it (MatchList): its heading alone.
 export function MatchListScreenPending() {
   return <MatchListHead newMatch={false} />
+}
+
+// The list when the device wouldn't read it: the heading (no New match, as
+// for an empty list), then an error alert, read out at once, in place of the
+// table (DeviceAlert). Its Try again reads the list again (`onRetry`); while
+// that runs, the alert stays as it is. Read, the caller shows the list in
+// its place; refused again, the alert is shown anew, and read out again.
+export function MatchListScreenUnavailable({
+  reason,
+  newVersion,
+  onRetry,
+}: {
+  reason: Unavailable['reason']
+  newVersion: NewVersionOffer
+  onRetry: () => Promise<void>
+}) {
+  // Counts the reads Try again asked for: each new one remounts the alert.
+  const [tries, setTries] = useState(0)
+  return (
+    <>
+      <MatchListHead newMatch={false} />
+      <DeviceAlert
+        key={tries}
+        focusRetry={tries > 0}
+        title="Couldn’t load your matches"
+        refusal={{ action: 'read', reason }}
+        newVersion={newVersion}
+        onRetry={() => {
+          void onRetry().then(() => setTries((n) => n + 1))
+        }}
+      />
+    </>
+  )
 }
 
 function MatchListHead({ newMatch }: { newMatch: boolean }) {

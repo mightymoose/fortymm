@@ -10,6 +10,7 @@ import userEvent from '@testing-library/user-event'
 import { expect, test } from 'vitest'
 import type { Score } from '../scoring/scoring.ts'
 import { matchStore } from '../stores/match.ts'
+import { matchMemory } from '../stores/match-memory.ts'
 import { createMatch } from '../test/match.ts'
 import { Scoring } from './Scoring.tsx'
 import { ScoringScreenPage } from './scoring/ScoringScreen.page.tsx'
@@ -176,4 +177,101 @@ test('saving a game’s score again as it was, typed differently, moves on askin
   expect(router.state.location.pathname).toBe(edit(matchId, 2))
   expect(page.queryLeaveDialog()).toBeNull()
   expect(await gamesOf(matchId)).toEqual([[11, 7]])
+})
+
+test('a save the device refused stays on the game with the typed score and says so; the next save that works moves on', async () => {
+  const user = userEvent.setup()
+  const matchId = await createMatch(5)
+  const router = await renderScoring(matchId, 1)
+  await page.heading()
+  matchMemory.failNextWrite('storage-unavailable')
+
+  await user.keyboard('11{Enter}07{Enter}')
+
+  expect(await page.alert()).toHaveTextContent('Check that your browser allows site data and that you have free storage space, then try again.')
+  expect(await page.yours()).toHaveValue('11')
+  expect(await page.theirs()).toHaveValue('07')
+  expect(router.state.location.pathname).toBe(edit(matchId, 1))
+  expect(await gamesOf(matchId)).toEqual([])
+
+  await user.click(await page.submit())
+
+  expect(await page.heading()).toHaveTextContent('Enter game 2 score.')
+  expect(page.queryAlert()).toBeNull()
+  expect(await gamesOf(matchId)).toEqual([[11, 7]])
+})
+
+// A move to another game while a save is on its way waits for its answer
+// (the user's choice, 2026-11-16).
+test('a tap on another game while a save is on its way, which the device then refuses, is dropped: the game stays with its typed score and the alert', async () => {
+  const user = userEvent.setup()
+  const matchId = await createMatch(5)
+  const router = await renderScoring(matchId, 1)
+  await page.heading()
+  const release = matchMemory.holdNextWrite()
+  matchMemory.failNextWrite('storage-unavailable')
+  await user.keyboard('11{Enter}07{Enter}')
+
+  await user.click((await page.cellLink(3))!)
+  release()
+
+  expect(await page.alert()).toBeVisible()
+  expect(await page.heading()).toHaveTextContent('Enter game 1 score.')
+  expect(await page.yours()).toHaveValue('11')
+  expect(await page.theirs()).toHaveValue('07')
+  expect(router.state.location.pathname).toBe(edit(matchId, 1))
+  expect(page.queryLeaveDialog()).toBeNull()
+})
+
+test('a tap on another game while a save is on its way, which then works, moves on as a save does', async () => {
+  const user = userEvent.setup()
+  const matchId = await createMatch(5)
+  const router = await renderScoring(matchId, 1)
+  await page.heading()
+  const release = matchMemory.holdNextWrite()
+  await user.keyboard('11{Enter}07{Enter}')
+
+  await user.click((await page.cellLink(3))!)
+  release()
+
+  await expect.poll(() => router.state.location.pathname).toBe(edit(matchId, 2))
+  expect(await page.heading()).toHaveTextContent('Enter game 2 score.')
+  expect(page.queryLeaveDialog()).toBeNull()
+  expect(await gamesOf(matchId)).toEqual([[11, 7]])
+})
+
+// A correction's "next game" is another game: a refusal must not move on.
+test('a correction of a saved game the device refused stays on that game with the typed score and says so', async () => {
+  const user = userEvent.setup()
+  const matchId = await createMatch(5, [[11, 7]])
+  const router = await renderScoring(matchId, 1)
+  expect(await page.heading()).toHaveTextContent('Edit game 1 score.')
+  matchMemory.failNextWrite('storage-unavailable')
+
+  await user.keyboard('11{Enter}9{Enter}')
+
+  expect(await page.alert()).toBeVisible()
+  expect(router.state.location.pathname).toBe(edit(matchId, 1))
+  expect(await page.yours()).toHaveValue('11')
+  expect(await page.theirs()).toHaveValue('9')
+  expect(await gamesOf(matchId)).toEqual([[11, 7]])
+})
+
+test('a clear the device refused keeps the game saved and says so; the next clear that works empties it and the alert goes', async () => {
+  const user = userEvent.setup()
+  const matchId = await createMatch(5, [[11, 7]])
+  await renderScoring(matchId, 1)
+  await page.heading()
+  matchMemory.failNextWrite('core-unavailable')
+
+  await user.click(page.clear()!)
+
+  expect(await page.alert()).toHaveTextContent('Your saved score is still 11–7. Part of FortyMM didn’t load. Try clearing it again.')
+  expect(await page.yours()).toHaveValue('11')
+  expect(await gamesOf(matchId)).toEqual([[11, 7]])
+
+  await user.click(page.clear()!)
+
+  expect(await page.heading()).toHaveTextContent('Enter game 1 score.')
+  expect(page.queryAlert()).toBeNull()
 })

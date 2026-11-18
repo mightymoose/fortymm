@@ -23,8 +23,8 @@ import {
 // device's storage can.
 
 export type MatchMemory = MatchSource & {
-  // For tests. Each acts on the next call of its kind only: a read is `read`
-  // or `list`, a write is `create` or `saveGame`.
+  // For tests. Each acts on the next call of its kind only, but failReads: a
+  // read is `read` or `list`, a write is `create` or `saveGame`.
   //
   // Holds the next read open: it takes what is kept when it is called, and
   // answers with that once the function this gives is called.
@@ -34,6 +34,9 @@ export type MatchMemory = MatchSource & {
   holdNextWrite(): () => void
   // Makes the next read answer that the device refused.
   failNextRead(reason: Unavailable['reason']): void
+  // Makes every read answer that the device refused, as storage that stays
+  // unavailable does, until the function this gives is called.
+  failReads(reason: Unavailable['reason']): () => void
   // Makes the next write keep nothing and answer that the device refused.
   failNextWrite(reason: Failure['reason']): void
   // Says any match may have changed, as the device does when a page is shown
@@ -52,6 +55,8 @@ export function createMatchMemory(): MatchMemory {
   const listeners = new Set<(matches: string[] | 'all') => void>()
   const nextRead: Next<Unavailable['reason']> = { held: null, failure: null }
   const nextWrite: Next<Failure['reason']> = { held: null, failure: null }
+  // What every read answers while reads are made to fail (failReads).
+  let readsFail: Unavailable['reason'] | null = null
 
   const changed = (changes: string[] | 'all') => {
     for (const listener of [...listeners]) listener(changes)
@@ -99,13 +104,13 @@ export function createMatchMemory(): MatchMemory {
       // Taken before any wait: a read held open answers with the match as
       // it was when the read began.
       const match = matches.get(matchId) ?? null
-      const failure = await begin(nextRead)
+      const failure = (await begin(nextRead)) ?? readsFail
       if (failure !== null) return { ok: false, reason: failure }
       return { ok: true, match }
     },
     async list() {
       const kept = [...matches.values()].reverse()
-      const failure = await begin(nextRead)
+      const failure = (await begin(nextRead)) ?? readsFail
       if (failure !== null) return { ok: false, reason: failure }
       return {
         ok: true,
@@ -126,6 +131,12 @@ export function createMatchMemory(): MatchMemory {
     holdNextWrite: () => hold(nextWrite),
     failNextRead(reason) {
       nextRead.failure = reason
+    },
+    failReads(reason) {
+      readsFail = reason
+      return () => {
+        readsFail = null
+      }
     },
     failNextWrite(reason) {
       nextWrite.failure = reason
