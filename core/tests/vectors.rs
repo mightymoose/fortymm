@@ -212,6 +212,25 @@ fn invalid_records() -> Vec<(&'static str, Vec<u8>)> {
             "record-not-a-pair",
             fortymm_core::cbor::encode(&Value::Array(vec![Value::Bytes(hello.body().to_vec())])),
         ),
+        // A match with no players on either side, correctly signed: one side
+        // may be anonymous, not both.
+        (
+            "match-both-sides-empty",
+            signed(raw_body(
+                alice,
+                1,
+                Kind::Match.number(),
+                ENV.0,
+                r,
+                vec![
+                    (
+                        8,
+                        Value::Array(vec![Value::Array(vec![]), Value::Array(vec![])]),
+                    ),
+                    (9, Value::Bytes(Terms::new(3, false).unwrap().to_bytes())),
+                ],
+            )),
+        ),
     ]
 }
 
@@ -650,6 +669,21 @@ fn made_records() -> Vec<Json> {
         random(55),
         None,
     );
+
+    // A match against an anonymous side: the made player against nobody,
+    // unrated best of 3. The second side is an empty list.
+    make(
+        "match-anonymous",
+        alice,
+        ENV,
+        Draft::match_(
+            [vec![extra(&first)], vec![]],
+            Terms::new(3, false).unwrap().to_bytes(),
+        )
+        .unwrap(),
+        random(56),
+        clock,
+    );
     made
 }
 
@@ -990,6 +1024,30 @@ fn match_states() -> Vec<Json> {
         "best-of-4294967295",
         &[&game_3, &game_256, &game_1, &match_, &game_255, &game_1],
         state_of(&match_, Some(best_of_max), games, current),
+    );
+
+    // Alice against an anonymous side, unrated best of 3: the second side
+    // has no players, and the state shows it as an empty list. Game 1 is
+    // listed twice.
+    let anonymous = [vec![alice.own_player()], vec![]];
+    let best_of_3 = Terms::new(3, false).unwrap();
+    let match_ = made(
+        alice,
+        Draft::match_(anonymous.clone(), best_of_3.to_bytes()).unwrap(),
+    );
+    let game_1 = a_score(&mut made, alice, &match_, 1, points(11, 6), &[]);
+    add(
+        "anonymous-side",
+        &[&game_1, &match_, &game_1],
+        MatchState {
+            sides: anonymous,
+            ..state_of(
+                &match_,
+                Some(best_of_3),
+                vec![Some([11, 6])],
+                vec![one(&game_1)],
+            )
+        },
     );
     vectors
 }

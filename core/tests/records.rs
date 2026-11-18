@@ -8,6 +8,7 @@ use fortymm_core::cbor::{self, CborError, Value};
 use fortymm_core::record::MAX_BODY_LENGTH;
 use fortymm_core::{
     AssembleError, Content, Draft, DraftError, Environment, Kind, Record, RecordError, Signature,
+    Terms,
 };
 
 #[test]
@@ -335,10 +336,7 @@ fn strict_decoding_rejects_each_non_canonical_form() {
                 vec![
                     (
                         8,
-                        Value::Array(vec![
-                            Value::Array(vec![]),
-                            Value::Array(vec![Value::Bytes(vec![0; 32])]),
-                        ]),
+                        Value::Array(vec![Value::Array(vec![]), Value::Array(vec![])]),
                     ),
                     (9, Value::Bytes(vec![])),
                 ],
@@ -425,10 +423,97 @@ fn strict_decoding_rejects_each_non_canonical_form() {
         .body(ENV, alice.public(), r, None),
         Err(DraftError::TooLarge)
     );
-    assert_eq!(
-        Draft::match_([vec![], vec![alice.own_player()]], vec![]),
-        Err(DraftError::EmptySide)
+}
+
+/// Unrated and rated terms of best of 3, as the product layout writes them.
+fn terms(rated: bool) -> Vec<u8> {
+    Terms::new(3, rated).unwrap().to_bytes()
+}
+
+#[test]
+fn a_match_may_have_one_side_with_no_players() {
+    let alice = &fixtures().keys[0];
+    let a = alice.own_player();
+    for sides in [[vec![a], vec![]], [vec![], vec![a]]] {
+        let draft = Draft::match_(sides.clone(), terms(false)).unwrap();
+        let record = alice.commit(&draft, random(70), None);
+        assert_eq!(record.sides(), Some(&sides));
+    }
+}
+
+#[test]
+fn a_match_with_no_players_on_either_side_is_refused() {
+    let refused = Draft::match_([vec![], vec![]], terms(false));
+    assert_eq!(refused, Err(DraftError::NoPlayers));
+    assert!(
+        DraftError::NoPlayers
+            .to_string()
+            .contains("a match needs a player"),
+        "{}",
+        DraftError::NoPlayers
     );
+}
+
+#[test]
+fn an_anonymous_match_is_never_rated() {
+    let a = fixtures().keys[0].own_player();
+    let b = fixtures().keys[1].own_player();
+    for sides in [[vec![a], vec![]], [vec![], vec![a]]] {
+        assert_eq!(
+            Draft::match_(sides.clone(), terms(true)),
+            Err(DraftError::RatedAnonymous)
+        );
+        assert!(Draft::match_(sides, terms(false)).is_ok());
+    }
+    assert_eq!(
+        DraftError::RatedAnonymous.to_string(),
+        "an anonymous match can't be rated"
+    );
+    // The rule is about the empty side: with a player on each side, rated
+    // terms are made as before.
+    assert!(Draft::match_([vec![a], vec![b]], terms(true)).is_ok());
+    // Terms this build doesn't read are carried as they are.
+    assert!(Draft::match_([vec![a], vec![]], common::TERMS.to_vec()).is_ok());
+}
+
+#[test]
+fn a_match_with_one_empty_side_decodes_and_verifies() {
+    let alice = &fixtures().keys[0];
+    let sides = [vec![alice.own_player()], vec![]];
+    let draft = Draft::match_(sides.clone(), terms(false)).unwrap();
+    let made = alice.commit(&draft, random(71), None);
+    let read = Record::decode(&made.to_bytes()).unwrap();
+    read.verify(&CRYPTO).unwrap();
+    assert_eq!(read.sides(), Some(&sides));
+    assert_eq!(read, made);
+}
+
+#[test]
+fn signed_bytes_of_a_match_with_both_sides_empty_do_not_decode() {
+    let alice = &fixtures().keys[0];
+    let sides = |first: Vec<Value>| {
+        let body = raw_body(
+            alice,
+            1,
+            Kind::Match.number(),
+            ENV.0,
+            random(72),
+            vec![
+                (
+                    8,
+                    Value::Array(vec![Value::Array(first), Value::Array(vec![])]),
+                ),
+                (9, Value::Bytes(terms(false))),
+            ],
+        );
+        let signature = Signature::from_der(&alice.sign_der(&body)).unwrap();
+        Record::assemble(body, signature)
+    };
+    // The same body with a player on the first side is a record: only the
+    // empty sides make it fail.
+    let player = Value::Bytes(alice.own_player().as_bytes().to_vec());
+    assert!(sides(vec![player]).is_ok());
+    assert_eq!(sides(vec![]), Err(RecordError::BadField(8)));
 }
 
 #[test]

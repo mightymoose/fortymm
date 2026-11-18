@@ -123,9 +123,10 @@ export class Core {
     const head = bodyHead("playerBody", environment, clock);
     return this.call("fmm_player_body", concat([head, frame([publicKey, random])])).out;
   }
-  // The body of a `match` between two sides, each a list of one or more
-  // 32-byte player ids, on `terms` (bytes the core carries and does not
-  // read).
+  // The body of a `match` between two sides, each a list of 32-byte player
+  // ids, on `terms` (bytes the core carries). One side may be empty, an
+  // anonymous side, never both; a match with an anonymous side can't be
+  // rated, so terms that read as rated throw.
   matchBody(environment, publicKey, random, sides, terms, clock = null) {
     const head = bodyHead("matchBody", environment, clock);
     const items = [publicKey, random, terms, ...sides.map(frame)];

@@ -41,7 +41,8 @@ export class Core {
 
   // What a record says about its match and its players: what the bytes say,
   // not that the record counts (`verify` is separate). Null for a record of
-  // another kind or one this library did not interpret.
+  // another kind or one this library did not interpret. One of a match's
+  // sides may be an empty list: an anonymous side.
   matchId(record: Uint8Array): Uint8Array | null
   sides(record: Uint8Array): [Uint8Array[], Uint8Array[]] | null
   terms(record: Uint8Array): Uint8Array | null
@@ -62,9 +63,12 @@ export class Core {
 
   // Making a `player`, a `match` and a `score`: each body is signed and
   // assembled as a hello's is. A key, a random value or an id of the wrong
-  // length throws. An id is 32 bytes; a side is one or more player ids;
-  // `terms` and `value` are bytes the core carries and does not read; `slot`
-  // is n for game n (0 is accepted but means no game).
+  // length throws. An id is 32 bytes; a side is a list of player ids, and
+  // one side may be empty, an anonymous side, never both (two empty sides
+  // throw); `terms` and `value` are bytes the core carries and does not
+  // read, except that a match with an anonymous side can't be rated: terms
+  // that read as rated throw; `slot` is n for game n (0 is accepted but
+  // means no game).
   playerBody(environment: number, publicKey: Uint8Array, random: Uint8Array, clock?: number | null): Uint8Array
   matchBody(environment: number, publicKey: Uint8Array, random: Uint8Array, sides: [Uint8Array[], Uint8Array[]], terms: Uint8Array, clock?: number | null): Uint8Array
   scoreBody(environment: number, publicKey: Uint8Array, random: Uint8Array, matchId: Uint8Array, slot: number, value: Uint8Array, replaces: Uint8Array[], clock?: number | null): Uint8Array
@@ -122,6 +126,7 @@ export type MatchState = {
   matchId: Uint8Array
   // The key that signed the match record, 33 bytes.
   creator: Uint8Array
+  // One side may be an empty list: an anonymous side.
   sides: [Uint8Array[], Uint8Array[]]
   // Null for terms of a layout this build can't read.
   terms: { bestOf: number; rated: boolean } | null

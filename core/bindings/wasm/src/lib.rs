@@ -145,7 +145,8 @@ pub unsafe extern "C" fn fmm_record_match_id(pointer: *const u8, length: usize) 
 }
 
 /// The two sides of a `match` record: for each, a player count (4 bytes,
-/// big-endian) followed by that many 32-byte player ids.
+/// big-endian) followed by that many 32-byte player ids. One count may be 0:
+/// an anonymous side.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fmm_record_sides(pointer: *const u8, length: usize) -> i32 {
     getter(unsafe { input(pointer, length) }, |r| {
@@ -608,7 +609,8 @@ pub unsafe extern "C" fn fmm_player_body(pointer: *const u8, length: usize) -> i
 }
 
 /// The body of a `match`, to sign. Its own items: the terms, then each of
-/// the two sides as a list of player ids.
+/// the two sides as a list of player ids. One list may be empty (an
+/// anonymous side), never both; with one empty, rated terms are refused.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fmm_match_body(pointer: *const u8, length: usize) -> i32 {
     make_body(unsafe { input(pointer, length) }, |fields| {

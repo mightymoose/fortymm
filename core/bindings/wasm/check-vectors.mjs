@@ -213,6 +213,17 @@ Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: tr
       );
       checks += 6;
     }
+    // A match against an anonymous side: its second side is an empty list,
+    // made and read back as Rust makes it.
+    {
+      const v = vector["match-anonymous"];
+      const record = made["match-anonymous"];
+      check(v.sides[1].length === 0, "made match-anonymous: its second side is empty");
+      check(same(core.sides(record), v.sides), "made match-anonymous: sides");
+      check(same(core.terms(record), v.terms), "made match-anonymous: terms");
+      check(same(core.matchId(record), v.id), "made match-anonymous: its id is the record id");
+      checks += 4;
+    }
 
     // B3. A made score gives back its match, slot, value and replaced ids;
     // those getters give nothing for another kind.
@@ -258,13 +269,14 @@ Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: tr
       }
     }
     // The other inputs are checked too: ids are 32 bytes, a match has two
-    // sides with a player each, and the numbers are whole numbers from 0.
+    // sides with a player on one at least, and the numbers are whole numbers
+    // from 0.
     const id = "00".repeat(32);
     for (const [what, name, replaced] of [
       ["a player id of 31 bytes", "match", { sides: [[id.slice(2)], [id]] }],
       ["a player id of 33 bytes", "match", { sides: [[id], [id, `${id}00`]] }],
       ["two ids run together", "match", { sides: [[id + id], [id]] }],
-      ["an empty side", "match", { sides: [[id], []] }],
+      ["no player on either side", "match", { sides: [[], []] }],
       ["one side", "match", { sides: [[id]] }],
       ["three sides", "match", { sides: [[id], [id], [id]] }],
       ["a match id of 31 bytes", "score", { scored_match: id.slice(2) }],
@@ -276,6 +288,24 @@ Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: tr
     ]) {
       const got = reason(() => bodyOf(vector[name], replaced));
       check(got !== null && got !== "Damaged", `${name} body with ${what}: refused with ${got}`);
+      checks += 1;
+    }
+    // The match rules' own reasons: a match needs a player, and an anonymous
+    // match is never rated, whichever side is the empty one. Unrated, the
+    // same sides are made.
+    {
+      const anonymous = vector["match-anonymous"];
+      const [player] = anonymous.sides[0];
+      const rated = hex(core.termsBytes(3, true));
+      const unrated = hex(core.termsBytes(3, false));
+      const none = reason(() => bodyOf(anonymous, { sides: [[], []] }));
+      check(none === "a match needs a player on one side at least", `match with no players: refused with ${none}`);
+      for (const sides of [[[player], []], [[], [player]]]) {
+        const got = reason(() => bodyOf(anonymous, { sides, terms: rated }));
+        check(got === "an anonymous match can't be rated", `rated match with sides ${shown(sides)}: refused with ${got}`);
+        check(reason(() => bodyOf(anonymous, { sides, terms: unrated })) === null, `unrated match with sides ${shown(sides)}: made`);
+        checks += 2;
+      }
       checks += 1;
     }
   }
