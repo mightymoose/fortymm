@@ -91,6 +91,28 @@ test('a valid score calls onSave once with the game and the score, inside the su
   expect(onSave).toHaveBeenCalledWith(3, [11, 8])
 })
 
+// A phone's keyboard covers Save: its action key saves instead, labelled
+// for what it does (enterkeyhint). A real phone's keyboard can't be run
+// here, so this is the label it is given and what its Enter does.
+test('the keyboard’s action key is Next in your field, which moves to theirs, and Go in theirs, which saves', async () => {
+  const user = userEvent.setup()
+  const onSave = vi.fn(kept)
+  const page = new ScoringScreenPage()
+  page.render(props({ games: twoGames, game: 3, onSave }))
+  const yours = await page.yours()
+  const theirs = await page.theirs()
+  expect(yours).toHaveAttribute('enterkeyhint', 'next')
+  expect(theirs).toHaveAttribute('enterkeyhint', 'go')
+
+  await user.click(yours)
+  await user.keyboard('11{Enter}')
+  expect(theirs).toHaveFocus()
+  await user.keyboard('8{Enter}')
+
+  expect(onSave).toHaveBeenCalledTimes(1)
+  expect(onSave).toHaveBeenCalledWith(3, [11, 8])
+})
+
 test.each([
   {
     score: '11–10',
