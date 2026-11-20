@@ -23,8 +23,7 @@ import { StorageHarness } from '../pages/storage.ts'
 
 // Keeps `count` matches through the new match form, then opens the matches
 // list by the layout's Matches link (the sidebar's, or on a phone the bottom
-// bar's). All in one page load: matches are kept in memory for now, so a
-// reload would lose them.
+// bar's), all in one page load.
 async function startMatchesThenOpenList(page: Page, count: number) {
   const newMatch = new NewMatchPage(page)
   const matchesLink = page.getByRole('link', { name: 'Matches', exact: true })

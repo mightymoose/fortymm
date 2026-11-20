@@ -1,5 +1,5 @@
 import { createStore, useStore } from 'zustand'
-import { matchMemory } from './match-memory.ts'
+import { matchDevice } from './match-device.ts'
 import type {
   Failure,
   MatchSource,
@@ -17,9 +17,8 @@ export type { MatchSummary, MatchToCreate } from './match-source.ts'
 // creating a match. The interface is the plan's `my-matches.ts`
 // (PLAN-match-store-and-sync.md §2), named without "my", and without the
 // revision only the device's storage keeps. It reads and writes through a
-// source (match-source.ts), the same one the match store reads: until
-// IndexedDB and the journal exist (tasks D to G2) the app's is a memory
-// (match-memory.ts), so a reload loses them.
+// source (match-source.ts), the same one the match store reads: the app's
+// is the device's (match-device.ts), so matches outlive a reload.
 //
 // A create goes to the source first. The list changes only by being read
 // again, after the write succeeded; a create the source refuses is returned
@@ -27,8 +26,10 @@ export type { MatchSummary, MatchToCreate } from './match-source.ts'
 //
 // As in the plan, after a write to any match the list is read again if a
 // mounted page watches it (watchMatches), and goes back to unread if not. A
-// watched list the device wouldn't read is also read again when the page is
-// shown again.
+// page watches only once it is drawn, after its loader's read, and a change
+// can land in between (or while that read is on its way, which then answers
+// with the list as it was): so watching starts with a read. A watched list
+// the device wouldn't read is also read again when the page is shown again.
 
 // - unread: not read since the last change (or ever).
 // - ready: every match, newest first.
@@ -44,21 +45,24 @@ export type MatchesStore = {
   matches: MatchesState
   // For loaders: resolves once the list has been read. Never rejects.
   load(): Promise<void>
-  // While a page shows the list: keeps it current after every write. Gives
-  // the function that stops watching.
+  // While a page shows the list: reads it at once, then keeps it current
+  // after every write. Gives the function that stops watching.
   watchMatches(): () => void
   // Keeps a new match with no games, under a fresh id, and gives the id.
   createMatch(match: MatchToCreate): Promise<CreateMatchResult>
 }
 
 // A store of its own over `source`. The app has one, matchesStore, over the
-// app's memory; a test builds a fresh one over a fresh memory.
-export function createMatchesStore(source: MatchSource = matchMemory) {
+// device's source; a test builds a fresh one over a fresh memory.
+export function createMatchesStore(source: MatchSource = matchDevice) {
   const queue = createQueue()
   let watchers = 0
 
-  const read = async () => {
+  // `watched`: only if a page still watches the list when the read answers
+  // (the read a watch starts with).
+  const read = async ({ watched = false } = {}) => {
     const listed = await source.list()
+    if (watched && watchers === 0) return
     store.setState({
       matches: listed.ok
         ? { status: 'ready', matches: listed.matches }
@@ -80,6 +84,7 @@ export function createMatchesStore(source: MatchSource = matchMemory) {
     watchMatches() {
       watchers += 1
       if (watchers === 1) document.addEventListener('visibilitychange', shown)
+      void queue(() => read({ watched: true }))
       let stopped = false
       return () => {
         if (stopped) return

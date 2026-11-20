@@ -7,7 +7,7 @@ import {
 } from '../pages/storage.ts'
 
 // The journal's commit (src/journal.ts), with the real device key, Web Locks
-// and IndexedDB. No screen commits yet (task G2), so the tests call it
+// and IndexedDB. The tests call it directly,
 // through the test-only page in the "harness" deployment (../harness/),
 // which runs a few fixed drafts: create a match (a player, then the match),
 // score a game on what the held store reads, or refuse. Each test starts

@@ -5,8 +5,19 @@
 .scoreline {
   margin-top: var(--s-6);
 }
+/* The heading row: the label at the left; its right end is kept for a
+   "syncing" indicator once sync pulls data (not built), at a fixed height
+   so it won't move the cells. */
+.scoreline__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  height: 20px;
+  margin-bottom: 4px;
+}
 .scoreline__label {
-  margin: 0 0 var(--s-2);
+  margin: 0;
   font: 600 var(--text-xs) / 1 var(--font-ui);
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -20,6 +31,12 @@
   margin: 0;
   padding: 0;
   list-style: none;
+}
+/* Each cell is a container: a narrow one (a best of 7 on a phone) stacks
+   its score, below. */
+.scoreline__cell {
+  position: relative;
+  container-type: inline-size;
 }
 .scoreline__body {
   display: flex;
@@ -65,4 +82,58 @@ a.scoreline__body:focus-visible {
 }
 .scoreline__dash {
   color: var(--fg-3);
+}
+/* A cell too narrow for "21 – 19" on one line (black-box #10): the two
+   numbers one over the other, yours on top, with no dash. */
+@container (max-width: 56px) {
+  .scoreline__score {
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+  .scoreline__dash {
+    display: none;
+  }
+}
+
+/* A game that changed elsewhere (Scoreline.tsx, `updates`): the cell tinted
+   in the rest colour, fill and edge, over it, on each change: in over
+   0.25s, held to 2.4s, gone at 4s. */
+.scoreline__mark {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--rest);
+  border-radius: var(--r-md);
+  background: var(--rest-soft);
+  pointer-events: none;
+  animation: scoreline-updated 4s ease-out forwards;
+}
+@keyframes scoreline-updated {
+  0% {
+    opacity: 0;
+  }
+  6.25%,
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Reduced motion: no fade. The tint shows as it is for about 3 seconds,
+   then goes at once (a step, not a motion). This beats the theme's rule
+   that shortens every animation to nothing. */
+@media (prefers-reduced-motion: reduce) {
+  .scoreline__mark {
+    animation: scoreline-shown 3s steps(1, end) forwards !important;
+  }
+}
+@keyframes scoreline-shown {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
 }

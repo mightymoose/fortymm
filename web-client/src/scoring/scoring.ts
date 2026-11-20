@@ -72,10 +72,31 @@ export function gamesWon(games: Games): [number, number] {
   return won
 }
 
+// The game that decided the match: the first, in game order, by which one
+// side has won `gamesToWin` of the saved games; null while undecided. A game
+// before it was played, saved or not (an empty one is a game cleared by
+// mistake, or not entered yet); a game after it can't be.
+export function decidingGame(games: Games, bestOf: BestOf): number | null {
+  const won: [number, number] = [0, 0]
+  for (const [index, score] of games.entries()) {
+    if (score === null) continue
+    won[score[0] > score[1] ? 0 : 1] += 1
+    if (Math.max(...won) >= gamesToWin(bestOf)) return index + 1
+  }
+  return null
+}
+
 // Whether the match is decided: one side has won `gamesToWin` games, in
 // whichever slots they sit.
 export function isDecided(games: Games, bestOf: BestOf): boolean {
-  return Math.max(...gamesWon(games)) >= gamesToWin(bestOf)
+  return decidingGame(games, bestOf) !== null
+}
+
+// Whether game `game` comes after the game that decided the match, so it
+// can't be played.
+export function pastDecider(games: Games, bestOf: BestOf, game: number): boolean {
+  const decider = decidingGame(games, bestOf)
+  return decider !== null && game > decider
 }
 
 // The number of the next game to score: the lowest empty game while the
@@ -94,8 +115,12 @@ export type SaveRefusal = {
 
 // Why saving `score` as game `game` would be refused, or null when it may be
 // saved. A saved game may be corrected at any time, whatever the correction
-// does to the match. An empty game may be scored, in any order, only while
-// the match is undecided: nothing is played past the decider.
+// does to the match. An empty game, in any order, is judged by the match its
+// save would make: refused when a saved game would then come after the
+// deciding game (`decidingGame`), since nothing is played past it. So an
+// empty game after the decider is refused whatever its score, and one
+// before it (a game cleared by mistake) takes any score that leaves every
+// saved game at or before the decider.
 export function saveRefusal(
   games: Games,
   bestOf: BestOf,
@@ -107,13 +132,26 @@ export function saveRefusal(
       reason: 'past-best-of',
       message: `This match is best of ${bestOf}; game ${game} can't exist.`,
     }
-  if (savedScore(games, game) === null && isDecided(games, bestOf))
+  const empty = savedScore(games, game) === null
+  if (empty && pastDecider(games, bestOf, game))
     return {
       reason: 'past-decider',
       message: `The match is already decided; game ${game} can't be played.`,
     }
   const illegal = illegalGameReason(score)
   if (illegal !== null) return { reason: 'illegal', message: illegal }
+  if (empty) {
+    const after = withGame(games, game, score)
+    const decider = decidingGame(after, bestOf)
+    // The first saved game after the decider (slot index `decider` is game
+    // decider + 1).
+    const later = decider === null ? -1 : after.findIndex((saved, index) => index >= decider && saved !== null)
+    if (decider !== null && later !== -1)
+      return {
+        reason: 'past-decider',
+        message: `With this score the match is decided in game ${decider}, so game ${later + 1} can't have been played.`,
+      }
+  }
   return null
 }
 

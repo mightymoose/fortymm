@@ -2,9 +2,9 @@ import type { BestOf, Games, SaveRefusal, Score } from '../scoring/scoring.ts'
 
 // Where matches are kept: the type both match stores (match.ts, matches.ts)
 // read and write through (PLAN-match-store-and-sync.md §2). The stores know
-// nothing else about it. Today the app's source is a memory
-// (match-memory.ts); the device's storage and journal will be another
-// (task G2), with no change to the stores.
+// nothing else about it. The app's source is the device's storage and
+// journal (match-device.ts); component tests put a memory in its place
+// (src/test/match-memory.ts).
 //
 // Every call is a promise that never rejects: a read or a write the device
 // refuses is a typed answer. A source knows no rules: a save hands it

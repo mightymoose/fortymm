@@ -6,7 +6,7 @@ import { MatchDetailsScreenPage } from '../../components/match-details/MatchDeta
 import { MatchUnavailableScreenPage } from '../../components/match/MatchUnavailableScreen.page.tsx'
 import { NotFoundScreenPage } from '../../components/NotFoundScreen.page.tsx'
 import { ScoringScreenPage } from '../../components/scoring/ScoringScreen.page.tsx'
-import { matchMemory } from '../../stores/match-memory.ts'
+import { matchMemory } from '../../test/match-memory.ts'
 import { createMatch } from '../../test/match.ts'
 import { renderRoute } from '../../test/render-route.tsx'
 

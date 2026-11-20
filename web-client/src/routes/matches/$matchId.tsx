@@ -4,9 +4,8 @@ import { matchStore } from '../../stores/match.ts'
 
 // The layout route of every page of one match (matches/$matchId/*). Its
 // loader reads the match into the match store, once for every page of it; a
-// match not on this device is not found. Matches are kept in memory for now
-// (stores/match-memory.ts), so a reload gives not found too (the user's
-// decision). A match the device won't read is no error here: the layout
+// match not on this device is not found ($matchId is the core's match id in
+// hex; any other string is no match). A match the device won't read is no error here: the layout
 // (Match) says so in place of the page, and reads it again.
 export const Route = createFileRoute('/matches/$matchId')({
   loader: async ({ params }) => {

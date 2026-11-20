@@ -1,7 +1,7 @@
 import userEvent from '@testing-library/user-event'
 import { expect, onTestFinished, test, vi } from 'vitest'
 import { showNewVersionOf, watchForNewVersion } from '../new-version.ts'
-import { matchMemory } from '../stores/match-memory.ts'
+import { matchMemory } from '../test/match-memory.ts'
 import { matchesStore } from '../stores/matches.ts'
 import { renderScreen } from '../test/render-screen.tsx'
 import { NewMatch } from './NewMatch.tsx'

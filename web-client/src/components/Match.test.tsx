@@ -7,7 +7,7 @@ import {
 } from '@tanstack/react-router'
 import { render, screen } from '@testing-library/react'
 import { expect, test } from 'vitest'
-import { matchMemory } from '../stores/match-memory.ts'
+import { matchMemory } from '../test/match-memory.ts'
 import { matchStore, useMatch } from '../stores/match.ts'
 import { createMatch } from '../test/match.ts'
 import { Match } from './Match.tsx'

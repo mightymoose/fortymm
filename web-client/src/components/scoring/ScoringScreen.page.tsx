@@ -97,6 +97,27 @@ export class ScoringScreenPage {
     return screen.findByRole('link', { name: 'Dashboard' })
   }
 
+  // The scoreline's polite live region, which reads out "Game N updated."
+  // on each change made elsewhere; empty before the first.
+  async updated() {
+    return within(await this.scoreline()).findByRole('status')
+  }
+
+  // The notice that this empty game's match was finished elsewhere: its
+  // title.
+  finished() {
+    return screen.findByText('This match was finished since you opened this page.')
+  }
+
+  queryFinished() {
+    return screen.queryByText('This match was finished since you opened this page.')
+  }
+
+  // The finished notice's link to the match's page.
+  goToMatch() {
+    return screen.findByRole('link', { name: 'Go to the match' })
+  }
+
   // "Leave without saving?", and its answers.
   leaveDialog() {
     return screen.findByRole('dialog', { name: 'Leave without saving?' })

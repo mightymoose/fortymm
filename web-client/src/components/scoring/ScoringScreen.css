@@ -18,6 +18,11 @@
   color: var(--fg-1);
 }
 
+/* Under the title: what another tab changed, when it did. */
+.scoring__elsewhere:not(:empty) {
+  margin-bottom: var(--s-4);
+}
+
 .scoring__card {
   overflow: hidden;
   border: 1px solid var(--border-subtle);

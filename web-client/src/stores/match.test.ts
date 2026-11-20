@@ -3,7 +3,7 @@ import { useEffect } from 'react'
 import { expect, test, vi } from 'vitest'
 import type { MatchToCreate } from './match-source.ts'
 import type { Games, Score } from '../scoring/scoring.ts'
-import { createMatchMemory } from './match-memory.ts'
+import { createMatchMemory } from '../test/match-memory.ts'
 import { createMatchStore, matchStore, useMatch } from './match.ts'
 import { createMatchesStore, matchesStore } from './matches.ts'
 
@@ -110,13 +110,13 @@ test.each<{ name: string; length: 1 | 3 | 5 | 7; saved: Games; game: number; sco
     message: 'At 10–10 the game enters deuce — the winner must lead by 2.',
   },
   {
-    name: 'an empty game of a decided match',
+    name: 'an empty game whose win would decide the match before a saved game',
     length: 3,
     saved: [[11, 7], null, [11, 8]],
     game: 2,
     score: [11, 9],
     reason: 'past-decider',
-    message: "The match is already decided; game 2 can't be played.",
+    message: "With this score the match is decided in game 2, so game 3 can't have been played.",
   },
   {
     name: 'a game past the best of',
@@ -220,6 +220,33 @@ test('a watched match’s entry is read again after another store writes it', as
   )
 })
 
+// A page watches the match only once it is drawn (Match.tsx's effect), after
+// its loader read it: another tab's change can land in between, or while
+// that read is still on its way (it then answers with the match as it was).
+test.each([
+  { name: 'between the load and the watch', during: false },
+  { name: 'while the load’s read is on its way', during: true },
+])('a change made $name shows once the match is watched', async ({ during }) => {
+  const { memory, matchId } = await matchWith(5)
+  const store = createMatchStore(memory)
+  const other = createMatchStore(memory)
+  const release = during ? memory.holdNextRead() : () => {}
+
+  const loading = store.getState().load(matchId)
+  if (during) await other.getState().setGameScore(matchId, 1, [11, 7])
+  release()
+  await loading
+  if (!during) await other.getState().setGameScore(matchId, 1, [11, 7])
+  store.getState().watchMatch(matchId)
+
+  await vi.waitFor(() =>
+    expect(store.getState().matches[matchId]).toEqual({
+      status: 'ready',
+      match: { bestOf: 5, rated: false, games: [[11, 7]] },
+    }),
+  )
+})
+
 test('a match nobody watches is dropped after another store writes it, and read fresh on the next load', async () => {
   const { memory, matchId } = await matchWith(5)
   const unwatched = createMatchStore(memory)
@@ -240,6 +267,28 @@ const noGames = { bestOf: 5, rated: false, games: [] }
 
 // Lets everything that can run without the held call run.
 const settle = () => new Promise((resolve) => setTimeout(resolve))
+
+// Round 4, bug 3: a loader opening another page of a match a page watches
+// (another game, while a clear goes on in the background) doesn't wait
+// behind the write: the store keeps a watched entry current.
+test('load of a watched match already read answers at once with its entry, even while a write is on its way', async () => {
+  const { memory, store, matchId } = await matchWith(5, [[11, 7]])
+  await store.getState().load(matchId)
+  const stop = store.getState().watchMatch(matchId)
+  await settle()
+  const release = memory.holdNextWrite()
+  const clearing = store.getState().clearGameScore(matchId, 1)
+
+  const loaded = await Promise.race([
+    store.getState().load(matchId),
+    settle().then(() => 'still waiting'),
+  ])
+
+  expect(loaded).toEqual({ status: 'ready', match: { ...noGames, games: [[11, 7]] } })
+  release()
+  expect(await clearing).toEqual({ ok: true })
+  stop()
+})
 
 test('a save shows in the store only once the write has succeeded', async () => {
   const { memory, store, matchId } = await matchWith(5)
@@ -292,8 +341,10 @@ test('load of a match the device refuses to read is unavailable', async () => {
 test('a watched match already read keeps its entry when a read again after a change is refused', async () => {
   const { memory, store, matchId } = await matchWith(5)
   await store.getState().load(matchId)
-  const before = store.getState().matches[matchId]
   store.getState().watchMatch(matchId)
+  // The read a watch starts with.
+  await settle()
+  const before = store.getState().matches[matchId]
   memory.failNextRead('storage-unavailable')
 
   memory.announceAll()

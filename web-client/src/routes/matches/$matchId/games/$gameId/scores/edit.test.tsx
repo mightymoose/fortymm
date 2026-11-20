@@ -1,10 +1,10 @@
 import userEvent from '@testing-library/user-event'
-import { expect, test } from 'vitest'
+import { expect, onTestFinished, test, vi } from 'vitest'
 import { DashboardScreenPage } from '../../../../../../components/DashboardScreen.page.tsx'
 import { NotFoundScreenPage } from '../../../../../../components/NotFoundScreen.page.tsx'
 import { ScoringScreenPage } from '../../../../../../components/scoring/ScoringScreen.page.tsx'
 import { matchStore } from '../../../../../../stores/match.ts'
-import { matchMemory } from '../../../../../../stores/match-memory.ts'
+import { matchMemory } from '../../../../../../test/match-memory.ts'
 import { createMatch } from '../../../../../../test/match.ts'
 import { renderRoute } from '../../../../../../test/render-route.tsx'
 
@@ -44,13 +44,49 @@ test('game 3 opens before game 2 is saved, with no redirect', async () => {
   expect(router.state.location.pathname).toBe(edit(matchId, 3))
 })
 
-test('an unscored game of a decided match redirects to the dashboard, replacing it', async () => {
-  const matchId = await createMatch(3, [[11, 1], null, [11, 2]])
-  const { router } = renderRoute(edit(matchId, 2))
+test('an unscored game after the game that decided the match redirects to the dashboard, replacing it', async () => {
+  const matchId = await createMatch(3, [
+    [11, 1],
+    [11, 2],
+  ])
+  const { router } = renderRoute(edit(matchId, 3))
 
   expect(await new DashboardScreenPage().heading()).toBeVisible()
   expect(router.state.location.pathname).toBe('/')
   expect(router.history.length).toBe(1)
+})
+
+// F2: a game cleared by mistake can be scored again. G2 of a best of 3 won
+// 2–1 in game 3 was played, so with it empty its page opens for scoring and
+// the lost score saves the match back to 2–1, final.
+test('after game 2 of a best of 3 won 2–1 is cleared, its page opens for scoring and saving 2–11 makes the match 2–1 again', async () => {
+  const user = userEvent.setup()
+  const matchId = await createMatch(3, [
+    [11, 1],
+    [2, 11],
+    [11, 3],
+  ])
+  const page = new ScoringScreenPage()
+  const first = renderRoute(edit(matchId, 2))
+  expect(await page.heading()).toHaveTextContent('Edit game 2 score.')
+  await user.click(page.clear()!)
+  expect(await page.heading()).toHaveTextContent('Enter game 2 score.')
+  // Opened again, as after a reload.
+  first.unmount()
+
+  const { router } = renderRoute(edit(matchId, 2))
+  expect(await page.heading()).toHaveTextContent('Enter game 2 score.')
+  expect(router.state.location.pathname).toBe(edit(matchId, 2))
+  await user.type(await page.yours(), '2')
+  await user.type(await page.theirs(), '11')
+  await user.click(await page.submit())
+
+  expect(await new DashboardScreenPage().heading()).toBeVisible()
+  expect(await gamesOf(matchId)).toEqual([
+    [11, 1],
+    [2, 11],
+    [11, 3],
+  ])
 })
 
 test('Clear on a game’s page empties it and stays there', async () => {
@@ -70,7 +106,7 @@ test('Clear on a game’s page empties it and stays there', async () => {
   expect(router.state.location.pathname).toBe(edit(matchId, 1))
 })
 
-test('with a score typed and not saved, moving to another game of the match asks nothing', async () => {
+test('with a score typed and not saved, moving to another game of the match asks “Leave without saving?”; Discard & leave opens it', async () => {
   const user = userEvent.setup()
   const matchId = await createMatch(5, [[11, 7]])
   const { router } = renderRoute(edit(matchId, 2))
@@ -78,9 +114,11 @@ test('with a score typed and not saved, moving to another game of the match asks
   await user.type(await page.yours(), '5')
 
   await user.click((await page.cellLink(1))!)
+  await page.leaveDialog()
+  expect(router.state.location.pathname).toBe(edit(matchId, 2))
+  await user.click(await page.discardAndLeave())
 
   expect(await page.heading()).toHaveTextContent('Edit game 1 score.')
-  expect(page.queryLeaveDialog()).toBeNull()
   expect(router.state.location.pathname).toBe(edit(matchId, 1))
 })
 
@@ -176,6 +214,29 @@ test('a match not on this device is not found even when one of its reads is refu
   renderRoute(edit('not-a-match', 1))
 
   expect(await new NotFoundScreenPage().heading()).toBeVisible()
+})
+
+// Round 4, bug 3 (R4.8), through the app's routes: the loaders of the game
+// tapped don't wait behind the clear going on in the background.
+test('a tap on another game while a clear is on its way opens it at once, through the routes’ loaders; the clear is kept', async () => {
+  const user = userEvent.setup()
+  const matchId = await createMatch(5, [[11, 7], [9, 11]])
+  const { router } = renderRoute(edit(matchId, 1))
+  const page = new ScoringScreenPage()
+  expect(await page.heading()).toHaveTextContent('Edit game 1 score.')
+  const release = matchMemory.holdNextWrite()
+  onTestFinished(release)
+
+  await user.click(page.clear()!)
+  await user.click((await page.cellLink(2))!)
+
+  expect(await page.heading()).toHaveTextContent('Edit game 2 score.')
+  expect(router.state.location.pathname).toBe(edit(matchId, 2))
+  release()
+  await vi.waitFor(async () =>
+    expect(await page.cellLink(1)).toHaveAccessibleName('Game 1, not yet played'),
+  )
+  expect(await gamesOf(matchId)).toEqual([null, [9, 11]])
 })
 
 async function gamesOf(matchId: string) {

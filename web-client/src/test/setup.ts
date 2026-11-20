@@ -22,6 +22,18 @@ vi.mock('../core/load.ts', async () => {
   return { loadCore: vi.fn(() => core) }
 })
 
+// Where the app's match stores keep matches: in place of the device's
+// storage and journal (src/stores/match-device.ts), which need IndexedDB,
+// Web Locks and a real key that jsdom lacks, the memory beside this file,
+// match-memory.ts. The app's stores (matchStore, matchesStore) then read and
+// write `matchMemory`, the same instance a test imports to make it wait or
+// refuse. The device source's own claims are in the browser suite
+// (e2e/tests/matches.spec.ts).
+vi.mock('../stores/match-device.ts', async () => {
+  const { matchMemory } = await import('./match-memory.ts')
+  return { matchDevice: matchMemory }
+})
+
 // The router resets scroll on navigation; jsdom has no layout and only logs
 // "Not implemented" for scrollTo.
 window.scrollTo = () => {}

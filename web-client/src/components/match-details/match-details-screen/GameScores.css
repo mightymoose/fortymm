@@ -1,8 +1,9 @@
 /* The games, after fortymm-real's per-game grid (.md-games) on the theme's
    tokens: a card (bg-group, a border-subtle edge) holding a table whose
    points are in the number font, the game's winner's points in fg-1 and the
-   loser's in fg-3. Four narrow columns, so it fits a 320px phone without
-   scrolling; long names wrap. */
+   loser's in fg-3. Four columns, each as wide as its longest word needs
+   ("Anonymous"), so it fits a 320px phone without scrolling and never
+   breaks a word (black-box #10: "Anonymou / s"). */
 .game-scores {
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-lg);
@@ -22,14 +23,14 @@
 }
 .game-scores__table {
   width: 100%;
-  table-layout: fixed;
+  table-layout: auto;
   border-collapse: collapse;
 }
 .game-scores__table th,
 .game-scores__table td {
   padding: var(--s-3) var(--s-2);
   text-align: center;
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
 }
 .game-scores__table :is(th, td):first-child {
   padding-left: 0;

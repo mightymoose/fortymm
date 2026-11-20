@@ -1,6 +1,7 @@
 import { tanstackRouter } from '@tanstack/router-plugin/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
+import { noTestCode } from './build/no-test-code.ts'
 import { keepOnDevice } from './offline/plugin.ts'
 
 // https://vite.dev/config/
@@ -16,6 +17,10 @@ export default defineConfig({
     // Build only: writes dist/sw.js, which keeps the whole build on the device
     // (offline/plugin.ts).
     keepOnDevice(),
+    // Build only: fails the build if any module under src/test/ (the
+    // component tests' stand-ins, such as the in-memory match source) is in
+    // it (build/no-test-code.ts).
+    noTestCode(),
   ],
   // The core's browser build, which core:wasm writes to the core-cache volume,
   // mounted read-only at /opt/core (compose.dev.yaml): the app imports the
@@ -41,10 +46,10 @@ export default defineConfig({
     },
   },
   // Component tests (web-client:test): src/**/*.test.tsx, in jsdom; and the
-  // build step's tests, offline/*.test.ts.
+  // build steps' tests, offline/*.test.ts and build/*.test.ts.
   test: {
     environment: 'jsdom',
-    include: ['src/**/*.test.{ts,tsx}', 'offline/**/*.test.ts'],
+    include: ['src/**/*.test.{ts,tsx}', 'offline/**/*.test.ts', 'build/**/*.test.ts'],
     setupFiles: ['./src/test/setup.ts'],
   },
 })

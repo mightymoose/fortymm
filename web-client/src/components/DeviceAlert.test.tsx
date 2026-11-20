@@ -80,6 +80,76 @@ test('a refused correction says first that the saved score is still saved', asyn
   expect(await findAlert()).toHaveTextContent(`Your saved score is still 11–7. ${storage}`)
 })
 
+// A clear refused after the person moved to another game shows on that
+// game's page, so it names the game it was for (the user, 2026-11-20).
+test.each<{
+  reason: DeviceRefusal['reason']
+  waiting: boolean
+  unsaved: boolean
+  title: string
+  body: string
+  button: string | null
+}>([
+  {
+    reason: 'storage-unavailable',
+    waiting: false,
+    unsaved: false,
+    title: 'Couldn’t clear game 2’s score',
+    body: `Game 2 is still saved as 11–7. ${storage}`,
+    button: null,
+  },
+  {
+    reason: 'signing-unavailable',
+    waiting: false,
+    unsaved: false,
+    title: unsupported.title,
+    body: `Game 2 is still saved as 11–7. ${unsupported.body}`,
+    button: null,
+  },
+  {
+    reason: 'core-unavailable',
+    waiting: false,
+    unsaved: false,
+    title: 'Couldn’t clear game 2’s score',
+    body: 'Game 2 is still saved as 11–7. Part of FortyMM didn’t load. Open game 2 and clear it again.',
+    button: null,
+  },
+  {
+    reason: 'core-unavailable',
+    waiting: true,
+    unsaved: false,
+    title: 'Couldn’t clear game 2’s score',
+    body: 'Game 2 is still saved as 11–7. Reload FortyMM, then clear game 2’s score again.',
+    button: 'Reload',
+  },
+  {
+    reason: 'core-unavailable',
+    waiting: true,
+    unsaved: true,
+    title: 'Couldn’t clear game 2’s score',
+    body: 'Game 2 is still saved as 11–7. Reload FortyMM, then clear game 2’s score again. Your unsaved changes will be lost.',
+    button: 'Reload',
+  },
+])(
+  'a clear of another game refused for $reason (new version waiting: $waiting, unsaved: $unsaved): “$title”, “$body”',
+  async ({ reason, waiting, unsaved, title, body, button }) => {
+    render(
+      <DeviceAlert
+        refusal={{ action: 'clear', reason } as DeviceRefusal}
+        newVersion={{ waiting, reload: () => {} }}
+        saved="11–7"
+        game={2}
+        unsaved={unsaved}
+      />,
+    )
+
+    const alert = await findAlert()
+    expect(alert).toHaveAccessibleName(title)
+    expect(alert).toHaveTextContent(`${title}${body}${button ?? ''}`, { normalizeWhitespace: true })
+    expect(screen.queryAllByRole('button').map((b) => b.textContent)).toEqual(button === null ? [] : [button])
+  },
+)
+
 test.each<{ refusal: DeviceRefusal; unsaved: boolean; body: string }>([
   {
     refusal: { action: 'save', reason: 'core-unavailable' },

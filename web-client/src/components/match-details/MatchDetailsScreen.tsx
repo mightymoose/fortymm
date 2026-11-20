@@ -1,6 +1,6 @@
 import { Link, type LinkOptions } from '@tanstack/react-router'
 import { useId } from 'react'
-import { gamesWon, isDecided, nextGame } from '../../scoring/scoring.ts'
+import { decidingGame, gamesWon, isDecided, nextGame } from '../../scoring/scoring.ts'
 import type { MatchState } from '../../stores/match.ts'
 import { Avatar } from '../Avatar.tsx'
 import { buttonClassName } from '../button-class.ts'
@@ -19,8 +19,8 @@ export type ScoreLink = (game: number) => LinkOptions
 // match is undecided, a Score button to the next game's scoring screen; then
 // the scoreboard: the match's state (in progress, with the next game, or the
 // winner), its format, both players and the tally in games; then each game
-// up to the last saved one, its score and who won it, or "Not played" for a
-// gap.
+// up to the last saved one, its score and who won it, or, for a gap, "Not
+// entered" before the game that decided the match and "Not played" otherwise.
 //
 // Who has won what, and which game is next, are the scoring rules'
 // (src/scoring/scoring.ts): games won wherever they sit, the match decided
@@ -110,7 +110,7 @@ export function MatchDetailsScreen({
         </div>
       </section>
 
-      <GameScores games={games} />
+      <GameScores games={games} decider={decidingGame(games, bestOf)} />
     </div>
   )
 }

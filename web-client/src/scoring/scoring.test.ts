@@ -98,11 +98,88 @@ describe('a match with gaps', () => {
     expect(saveRefusal([[11, 7]], 5, 3, [11, 4])).toBeNull()
   })
 
-  test('an empty game of a match decided with gaps is refused as past the decider', () => {
+  test('an empty game before the decider whose win would decide the match earlier, before a saved game, is refused', () => {
     expect(saveRefusal(decided, 5, 2, [11, 3])).toEqual({
       reason: 'past-decider',
-      message: "The match is already decided; game 2 can't be played.",
+      message: "With this score the match is decided in game 3, so game 5 can't have been played.",
     })
+  })
+})
+
+// F1: an empty game is judged by the match its save would make. The game
+// that decides a match is the first, in game order, by which a side has won
+// more than half of best of; a game before it was played, saved or not (a
+// game cleared by mistake), and a game after it can't be. So an empty game's
+// save is refused only when, after it, a saved game comes after the decider.
+// Corrections of a saved game are not judged here (unchanged).
+describe('an empty game, judged by the match its save would make', () => {
+  test.each<{ name: string; bestOf: 3 | 5; games: Games; game: number; score: Score; refused: string | null }>([
+    {
+      name: 'best of 3 won in game 3, game 2 cleared: game 2 lost saves (2–1 again)',
+      bestOf: 3,
+      games: [[11, 1], null, [11, 3]],
+      game: 2,
+      score: [2, 11],
+      refused: null,
+    },
+    {
+      name: 'best of 3 won in game 3, game 2 cleared: game 2 won would decide it in game 2, before the saved game 3',
+      bestOf: 3,
+      games: [[11, 1], null, [11, 3]],
+      game: 2,
+      score: [11, 2],
+      refused: "With this score the match is decided in game 2, so game 3 can't have been played.",
+    },
+    {
+      name: 'best of 3 won 2–0 in games 1 and 2: game 3 is after the decider',
+      bestOf: 3,
+      games: [[11, 1], [11, 2]],
+      game: 3,
+      score: [2, 11],
+      refused: "The match is already decided; game 3 can't be played.",
+    },
+    {
+      name: 'best of 5 won 3–1 in game 4, game 2 cleared: game 2 lost saves (3–1 again)',
+      bestOf: 5,
+      games: [[11, 1], null, [11, 3], [11, 4]],
+      game: 2,
+      score: [2, 11],
+      refused: null,
+    },
+    {
+      name: 'best of 5 won 3–1 in game 4, game 2 cleared: game 2 won would decide it in game 3, before the saved game 4',
+      bestOf: 5,
+      games: [[11, 1], null, [11, 3], [11, 4]],
+      game: 2,
+      score: [11, 2],
+      refused: "With this score the match is decided in game 3, so game 4 can't have been played.",
+    },
+    {
+      name: 'best of 5 won 3–1 in game 4, game 2 cleared: game 5 is after the decider',
+      bestOf: 5,
+      games: [[11, 1], null, [11, 3], [11, 4]],
+      game: 5,
+      score: [2, 11],
+      refused: "The match is already decided; game 5 can't be played.",
+    },
+    {
+      name: 'best of 5 undecided, games 1 and 3 saved: game 2 won saves (unchanged)',
+      bestOf: 5,
+      games: [[11, 1], null, [2, 11]],
+      game: 2,
+      score: [11, 2],
+      refused: null,
+    },
+    {
+      name: 'best of 5 undecided, games 1 and 3 saved: game 2 lost saves (unchanged)',
+      bestOf: 5,
+      games: [[11, 1], null, [2, 11]],
+      game: 2,
+      score: [2, 11],
+      refused: null,
+    },
+  ])('$name', ({ bestOf, games, game, score, refused }) => {
+    expect(saveRefusal(games, bestOf, game, score)?.message ?? null).toBe(refused)
   })
 })
 

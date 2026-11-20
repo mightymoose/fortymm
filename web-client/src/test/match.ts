@@ -2,9 +2,9 @@ import type { BestOf, Games } from '../scoring/scoring.ts'
 import { matchStore } from '../stores/match.ts'
 import { matchesStore } from '../stores/matches.ts'
 
-// For tests of what opens a match: a match in the app's own
-// stores (in memory), with these games saved (a null slot left empty), in
-// game order. Gives its id.
+// For tests of what opens a match: a match in the app's own stores (on the
+// memory setup.ts puts in place of the device's source), with these games
+// saved (a null slot left empty), in game order. Gives its id.
 export async function createMatch(bestOf: BestOf, games: Games = []): Promise<string> {
   const created = await matchesStore.getState().createMatch({
     format: { bestOf },
