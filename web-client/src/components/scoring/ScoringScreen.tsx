@@ -157,7 +157,10 @@ type Background = {
 // A React Hook Form form whose rules are `scoreSchema` (web-client/
 // CLAUDE.md, "Forms"), wrapping the scoring rules. The fields keep digits
 // only; Enter or ArrowRight in yours moves to theirs, ArrowLeft back, and a
-// field that gets focus selects its score, so typing replaces it. Submit is
+// field that gets focus selects its score, so typing replaces it. Enter in
+// theirs saves, so a phone's keyboard, which covers Save, saves from its
+// action key, labelled Next in yours and Go in theirs (`enterKeyHint`; an
+// iPhone's number pad has no action key). Submit is
 // off only while a save or a clear is on its way (Clear too), and when the
 // match was finished elsewhere; an invalid score never turns it off: it
 // shows the one error line (the rules' reason, or "Enter both scores to save
@@ -614,6 +617,7 @@ function ScoringGame({
                       }
                       aria-describedby={message === undefined ? undefined : errorId}
                       inputMode="numeric"
+                      enterKeyHint={side === 'yours' ? 'next' : 'go'}
                       autoComplete="off"
                       placeholder="0"
                     />
