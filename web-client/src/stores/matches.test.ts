@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest'
 import type { MatchToCreate } from './match-source.ts'
-import { createMatchMemory } from './match-memory.ts'
+import { createMatchMemory } from '../test/match-memory.ts'
 import { createMatchStore } from './match.ts'
 import { createMatchesStore } from './matches.ts'
 
@@ -71,6 +71,35 @@ test('a watched list is read again after another store writes a match', async ()
     expect(watched.getState().matches).toEqual({
       status: 'ready',
       matches: [{ matchId: created.matchId, bestOf: 5, rated: true }],
+    }),
+  )
+})
+
+// A page watches the list only once it is drawn (MatchList.tsx's effect),
+// after its loader read it: another tab's create can land in between, or
+// while that read is still on its way (it then answers with the list as it
+// was).
+test.each([
+  { name: 'between the load and the watch', during: false },
+  { name: 'while the load’s read is on its way', during: true },
+])('a match created $name shows once the list is watched', async ({ during }) => {
+  const memory = createMatchMemory()
+  const list = createMatchesStore(memory)
+  const other = createMatchesStore(memory)
+  const release = during ? memory.holdNextRead() : () => {}
+
+  const loading = list.getState().load()
+  const created = during ? await other.getState().createMatch(ratedBestOf5) : null
+  release()
+  await loading
+  const made = created ?? (await other.getState().createMatch(ratedBestOf5))
+  list.getState().watchMatches()
+
+  if (!made.ok) throw new Error('not created')
+  await vi.waitFor(() =>
+    expect(list.getState().matches).toEqual({
+      status: 'ready',
+      matches: [{ matchId: made.matchId, bestOf: 5, rated: true }],
     }),
   )
 })
@@ -151,9 +180,13 @@ test('a watched list is read again after a change of ‘all’', async () => {
 test('a watched list the device wouldn’t read is read again when the page is shown again', async () => {
   const memory = createMatchMemory()
   const matches = createMatchesStore(memory)
-  memory.failNextRead('storage-unavailable')
+  const readable = memory.failReads('storage-unavailable')
   await matches.getState().load()
   const stop = matches.getState().watchMatches()
+  // The read a watch starts with, refused too.
+  await new Promise((settled) => setTimeout(settled))
+  expect(matches.getState().matches).toEqual({ status: 'unavailable', reason: 'storage-unavailable' })
+  readable()
 
   document.dispatchEvent(new Event('visibilitychange'))
 
@@ -169,6 +202,8 @@ test('a watched list already read is not read again when the page is shown again
   const matches = createMatchesStore(memory)
   await matches.getState().load()
   const stop = matches.getState().watchMatches()
+  // The read a watch starts with.
+  await new Promise((settled) => setTimeout(settled))
   memory.failNextRead('storage-unavailable')
 
   document.dispatchEvent(new Event('visibilitychange'))

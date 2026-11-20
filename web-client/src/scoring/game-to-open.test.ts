@@ -35,9 +35,16 @@ test('the empty game in a gap opens: game 2 with games 1 and 3 saved', () => {
   expect(gameToOpen('2', match(5, [[11, 7], null, [11, 4]]))).toEqual({ status: 'open', game: 2 })
 })
 
-test('an unscored game of a decided match is decided: the dashboard', () => {
+test('an unscored game after the game that decided the match is decided: the dashboard', () => {
   expect(gameToOpen('3', match(3, [[11, 1], [11, 2]]))).toEqual({ status: 'decided' })
-  expect(gameToOpen('2', match(3, [[11, 1], null, [11, 2]]))).toEqual({ status: 'decided' })
+  expect(gameToOpen('5', match(5, [[11, 1], null, [11, 3], [11, 4]]))).toEqual({ status: 'decided' })
+})
+
+// A game before the decider was played: a game cleared by mistake opens,
+// so its score can be entered again.
+test('an unscored game before the game that decided the match opens', () => {
+  expect(gameToOpen('2', match(3, [[11, 1], null, [11, 2]]))).toEqual({ status: 'open', game: 2 })
+  expect(gameToOpen('2', match(5, [[11, 1], null, [11, 3], [11, 4]]))).toEqual({ status: 'open', game: 2 })
 })
 
 test('a saved game of a decided match opens', () => {

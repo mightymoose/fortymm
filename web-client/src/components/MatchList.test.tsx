@@ -1,6 +1,6 @@
 import userEvent from '@testing-library/user-event'
-import { expect, test } from 'vitest'
-import { matchMemory } from '../stores/match-memory.ts'
+import { expect, onTestFinished, test } from 'vitest'
+import { matchMemory } from '../test/match-memory.ts'
 import { matchesStore } from '../stores/matches.ts'
 import { createMatch } from '../test/match.ts'
 import { renderScreen } from '../test/render-screen.tsx'
@@ -35,11 +35,16 @@ test('with no matches kept, the empty state shows; a match kept while the page i
 
 test('a list the device wouldn’t read says so, not the pending view; Try again, once it reads, shows the list', async () => {
   const user = userEvent.setup()
-  matchMemory.failNextRead('storage-unavailable')
+  const readable = matchMemory.failReads('storage-unavailable')
+  onTestFinished(readable)
   await matchesStore.getState().load()
   renderScreen(<MatchList />, { path: '/matches' })
 
   expect(await page.unavailable()).toBeVisible()
+  // The read the page's watch starts with, refused too.
+  await new Promise((settled) => setTimeout(settled))
+  expect(page.unavailableNow()).not.toBeNull()
+  readable()
 
   await user.click(await page.tryAgain())
 

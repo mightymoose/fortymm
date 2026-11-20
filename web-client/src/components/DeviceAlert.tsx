@@ -35,11 +35,18 @@ type Write = Exclude<DeviceRefusal['action'], 'read'>
 // For a write, the form's own button tries again; `saved` (a correction's
 // saved score, "11–7") says first that it is still saved. A read gives its
 // own `title` and `onRetry`, a Try again button.
+//
+// A clear refused after the person moved to another game shows on that
+// game's page, so `game` names the game it was for (the user, 2026-11-20):
+// "Couldn't clear game 2's score", "Game 2 is still saved as 11–7.", and a
+// next step that opens that game first, since the page's own Clear is
+// another game's.
 export function DeviceAlert({
   refusal,
   newVersion,
   title,
   saved,
+  game,
   unsaved = false,
   heading = false,
   onReload,
@@ -51,6 +58,8 @@ export function DeviceAlert({
   // A read's title: what couldn't be loaded.
   title?: string
   saved?: string
+  // A clear's: the game it was for, when the page is another game's.
+  game?: number
   // Whether a reload would drop what is typed or chosen.
   unsaved?: boolean
   // The title is the page's heading (Alert).
@@ -68,8 +77,14 @@ export function DeviceAlert({
   const words =
     refusal.action === 'read'
       ? readWords(refusal.reason, reload)
-      : writeWords(refusal.action, refusal.reason, reload, unsaved)
-  const body = [saved !== undefined ? `Your saved score is still ${saved}.` : undefined, words.body]
+      : writeWords(refusal.action === 'clear' && game !== undefined ? game : refusal.action, refusal.reason, reload, unsaved)
+  const stillSaved =
+    saved === undefined
+      ? undefined
+      : game === undefined
+        ? `Your saved score is still ${saved}.`
+        : `Game ${game} is still saved as ${saved}.`
+  const body = [stillSaved, words.body]
     .filter((sentence) => sentence !== undefined)
     .join(' ')
   return (
@@ -120,13 +135,21 @@ const failed: Record<Write, { title: string; again: string; redo: string }> = {
   },
 }
 
+// The words for a clear of another game than the page's.
+const clearOf = (game: number) => ({
+  title: `Couldn’t clear game ${game}’s score`,
+  again: `Open game ${game} and clear it again.`,
+  redo: `clear game ${game}’s score again`,
+})
+
+// `action`: a game's number for a clear of that game, from another's page.
 function writeWords(
-  action: Write,
+  action: Write | number,
   reason: Failure['reason'],
   reload: boolean,
   unsaved: boolean,
 ): { title?: string; body?: string } {
-  const { title, again, redo } = failed[action]
+  const { title, again, redo } = typeof action === 'number' ? clearOf(action) : failed[action]
   switch (reason) {
     case 'storage-unavailable':
       return {

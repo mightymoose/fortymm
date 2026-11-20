@@ -97,9 +97,12 @@
   color: var(--accent);
 }
 
+/* Each side at least as wide as its longest word, so a name never breaks
+   inside a word ("Anonymous" at 320px); the tally is centred whenever both
+   sides fit in equal halves, and moves toward the shorter name when not. */
 .match-details__players {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(min-content, 1fr) auto minmax(min-content, 1fr);
   align-items: center;
   gap: var(--s-3);
 }
@@ -119,7 +122,6 @@
   max-width: 100%;
   font: 700 var(--text-md) / var(--lh-tight) var(--font-ui);
   color: var(--fg-1);
-  overflow-wrap: anywhere;
 }
 .match-details__player--won .match-details__name {
   color: var(--accent);

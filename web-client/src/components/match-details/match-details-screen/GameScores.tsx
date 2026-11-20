@@ -7,10 +7,12 @@ import './GameScores.css'
 // that never scrolls sideways: a row per game from game 1 to the last saved
 // one, with your points, the opponent's and who won it. Games may be saved in
 // any order, so a game before the last saved one can be empty: its row says
-// "Not played". Each row's header is the game ("Game 1"), so a screen reader
+// "Not entered" when it comes before `decider`, the game that decided the
+// match (it was played; its score was cleared or never entered), and "Not
+// played" otherwise. Each row's header is the game ("Game 1"), so a screen reader
 // reads a row as one game. With no game saved, a line saying so instead.
 // The opponent is named "Anonymous" (components/opponent.ts).
-export function GameScores({ games }: { games: Games }) {
+export function GameScores({ games, decider }: { games: Games; decider: number | null }) {
   const headingId = useId()
   return (
     <section className="game-scores" aria-labelledby={headingId}>
@@ -38,7 +40,9 @@ export function GameScores({ games }: { games: Games }) {
                     <th scope="row">Game {game}</th>
                     <td>–</td>
                     <td>–</td>
-                    <td className="game-scores__winner">Not played</td>
+                    <td className="game-scores__winner">
+                      {decider !== null && game < decider ? 'Not entered' : 'Not played'}
+                    </td>
                   </tr>
                 )
               const [yours, theirs] = score

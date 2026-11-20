@@ -76,7 +76,7 @@ test('a match the opponent won names the opponent as the winner', async () => {
   expect(await page.tally()).toHaveTextContent('0 – 2')
 })
 
-test('a match decided by games saved out of order, with a game before them not played, is final', async () => {
+test('a match decided by games saved out of order is final, and an empty game before the deciding game says it is not entered', async () => {
   const page = new MatchDetailsScreenPage()
   page.render({
     match: {
@@ -88,7 +88,7 @@ test('a match decided by games saved out of order, with a game before them not p
 
   expect(await page.scoreboard()).toHaveAccessibleName('Final · You won')
   expect(await page.tally()).toHaveTextContent('2 – 0')
-  expect(await page.game(1)).toHaveAccessibleName('Game 1 – – Not played')
+  expect(await page.game(1)).toHaveAccessibleName('Game 1 – – Not entered')
   expect(page.queryScore()).toBeNull()
 })
 

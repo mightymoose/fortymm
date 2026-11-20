@@ -1,4 +1,4 @@
-import { fireEvent, screen } from '@testing-library/react'
+import { act, fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { expect, test, vi } from 'vitest'
 import type { Games, Score } from '../../scoring/scoring.ts'
@@ -27,8 +27,10 @@ function props(overrides: Partial<ScoringScreenProps> = {}): ScoringScreenProps 
       params: { matchId: 'm', gameId: String(n) },
     }),
     onSave: vi.fn(kept),
+    onSaved: vi.fn(),
     onClear: vi.fn(kept),
     newVersion: noNewVersion,
+    matchPage: { to: '/matches/$matchId', params: { matchId: 'm' } },
     ...overrides,
   }
 }
@@ -89,6 +91,28 @@ test('a valid score calls onSave once with the game and the score, inside the su
   expect(onSave).toHaveBeenCalledWith(3, [11, 8])
 })
 
+// A phone's keyboard covers Save: its action key saves instead, labelled
+// for what it does (enterkeyhint). A real phone's keyboard can't be run
+// here, so this is the label it is given and what its Enter does.
+test('the keyboard’s action key is Next in your field, which moves to theirs, and Go in theirs, which saves', async () => {
+  const user = userEvent.setup()
+  const onSave = vi.fn(kept)
+  const page = new ScoringScreenPage()
+  page.render(props({ games: twoGames, game: 3, onSave }))
+  const yours = await page.yours()
+  const theirs = await page.theirs()
+  expect(yours).toHaveAttribute('enterkeyhint', 'next')
+  expect(theirs).toHaveAttribute('enterkeyhint', 'go')
+
+  await user.click(yours)
+  await user.keyboard('11{Enter}')
+  expect(theirs).toHaveFocus()
+  await user.keyboard('8{Enter}')
+
+  expect(onSave).toHaveBeenCalledTimes(1)
+  expect(onSave).toHaveBeenCalledWith(3, [11, 8])
+})
+
 test.each([
   {
     score: '11–10',
@@ -140,7 +164,7 @@ test.each([
   expect(onSave).not.toHaveBeenCalled()
 })
 
-test('the submit is never disabled, and after a refused submit the error follows what is typed', async () => {
+test('with nothing on its way, the submit is on, an invalid score included, and after a refused submit the error follows what is typed', async () => {
   const user = userEvent.setup()
   const page = new ScoringScreenPage()
   page.render(props())
@@ -319,6 +343,13 @@ test.each([
     subtitle: 'Save this game to continue to game 4.',
   },
   {
+    state: 'an empty game before the game that decided the match',
+    overrides: { games: [[11, 1], null, [11, 3], [11, 4]] as Games, game: 2 },
+    typed: null,
+    label: 'Save game',
+    subtitle: 'The match was decided in game 4; this game was played before it.',
+  },
+  {
     state: 'a saved game',
     overrides: { games: twoGames, game: 1 },
     typed: null,
@@ -366,13 +397,13 @@ test('the scoreline: a cell per game, every game of an undecided match linking, 
   }
 })
 
-test('in a decided match, saved games link and empty games are inert', async () => {
+test('in a decided match, saved games link and an empty game after the deciding game is inert', async () => {
   const page = new ScoringScreenPage()
-  page.render(props({ bestOf: 3, games: [[11, 7], null, [11, 4]], game: 1 }))
+  page.render(props({ bestOf: 3, games: [[11, 7], [11, 4]], game: 1 }))
 
-  expect(await page.cellLink(3)).toHaveAccessibleName('Game 3, 11–4')
-  expect(await page.cellLink(2)).toBeNull()
-  expect(await page.cell(2)).toHaveTextContent('Game 2, not yet played')
+  expect(await page.cellLink(2)).toHaveAccessibleName('Game 2, 11–4')
+  expect(await page.cellLink(3)).toBeNull()
+  expect(await page.cell(3)).toHaveTextContent('Game 3, not yet played')
 })
 
 test.each([1, 2])('Clear is in the action row of saved game %i, the highest or not; the scoreline has no ✕', async (game) => {
@@ -405,6 +436,79 @@ test('Clear calls onClear with the game at once, asking nothing', async () => {
   expect(screen.queryByRole('dialog')).toBeNull()
 })
 
+// A save or a clear the test answers by hand: `action` is the handler, and
+// `answer` gives the store's answer to its latest call.
+function answeredByHand() {
+  let give: (result: ActionResult) => void = () => {}
+  const action = vi.fn(
+    () =>
+      new Promise<ActionResult>((resolve) => {
+        give = resolve
+      }),
+  )
+  return { action, answer: (result: ActionResult) => give(result) }
+}
+
+// The user's decision, 2026-11-18: from the press until the store answers,
+// Save and Clear can't be pressed, so one press keeps one signed record.
+test.each([
+  { action: 'save', answer: 'kept' },
+  { action: 'save', answer: 'refused' },
+  { action: 'clear', answer: 'kept' },
+  { action: 'clear', answer: 'refused' },
+] as const)(
+  'while a $action is on its way, Save and Clear are off; once it is $answer, they are on and Save saves again',
+  async ({ action, answer }) => {
+    const user = userEvent.setup()
+    const { action: handler, answer: give } = answeredByHand()
+    const page = new ScoringScreenPage()
+    page.render(props({ games: twoGames, game: 1, onSave: handler, onClear: handler }))
+    await page.heading()
+
+    await user.click(action === 'save' ? await page.submit() : page.clear()!)
+
+    expect(await page.submit()).toBeDisabled()
+    expect(page.clear()).toBeDisabled()
+    give(answer === 'kept' ? { ok: true } : { ok: false, reason: 'storage-unavailable' })
+    await vi.waitFor(async () => expect(await page.submit()).toBeEnabled())
+    expect(page.clear()).toBeEnabled()
+    // A kept clear empties the fields: a score to save.
+    await user.clear(await page.yours())
+    await user.type(await page.yours(), '11')
+    await user.clear(await page.theirs())
+    await user.type(await page.theirs(), '7')
+    await user.click(await page.submit())
+    expect(handler).toHaveBeenCalledTimes(2)
+  },
+)
+
+// Two presses in one go, before React has drawn the first one's disabled
+// buttons: a double tap, or Enter pressed again at once.
+test.each(['Save', 'Clear'])(
+  '%s pressed twice before the first is answered calls the store once',
+  async (button) => {
+    const onSave = answeredByHand().action
+    const onClear = answeredByHand().action
+    const page = new ScoringScreenPage()
+    page.render(props({ games: twoGames, game: 1, onSave, onClear }))
+    const form = await screen.findByRole('form', { name: 'Game 1 score' })
+    const clear = page.clear()!
+
+    act(() => {
+      if (button === 'Save') {
+        fireEvent.submit(form)
+        fireEvent.submit(form)
+      } else {
+        clear.click()
+        clear.click()
+      }
+    })
+
+    expect(onSave).toHaveBeenCalledTimes(button === 'Save' ? 1 : 0)
+    expect(onClear).toHaveBeenCalledTimes(button === 'Clear' ? 1 : 0)
+  },
+)
+
 test('in a match, Clear empties that game and stays on it, its fields empty', async () => {
   const user = userEvent.setup()
   const page = new ScoringScreenPage()
@@ -421,7 +525,9 @@ test('in a match, Clear empties that game and stays on it, its fields empty', as
   expect(screen.queryByRole('dialog')).toBeNull()
 })
 
-test('switching to another game with a score typed and not saved asks nothing and drops what was typed', async () => {
+// Black-box #8 (approved 2026-11-18): moving to another game with a typed
+// score asks, as leaving the match does.
+test('moving to another game with a score typed and not saved asks “Leave without saving?”; Keep editing stays with what is typed', async () => {
   const user = userEvent.setup()
   const page = new ScoringScreenPage()
   page.renderMatch({ bestOf: 5, games: twoGames })
@@ -429,12 +535,40 @@ test('switching to another game with a score typed and not saved asks nothing an
   await user.keyboard('5')
 
   await user.click((await page.cellLink(2))!)
+  await page.leaveDialog()
+  await user.click(await page.keepEditing())
 
   expect(page.queryLeaveDialog()).toBeNull()
+  expect(await page.heading()).toHaveTextContent('Edit game 1 score.')
+  expect(await page.yours()).toHaveValue('5')
+})
+
+test('moving to another game with a score typed, Discard & leave opens that game and drops what was typed', async () => {
+  const user = userEvent.setup()
+  const page = new ScoringScreenPage()
+  page.renderMatch({ bestOf: 5, games: twoGames })
+  await user.click((await page.cellLink(1))!)
+  await user.keyboard('5')
+
+  await user.click((await page.cellLink(2))!)
+  await user.click(await page.discardAndLeave())
+
   expect(await page.heading()).toHaveTextContent('Edit game 2 score.')
   await user.click((await page.cellLink(1))!)
   expect(await page.yours()).toHaveValue('11')
   expect(await page.theirs()).toHaveValue('7')
+})
+
+test('moving to another game with nothing typed asks nothing', async () => {
+  const user = userEvent.setup()
+  const page = new ScoringScreenPage()
+  page.renderMatch({ bestOf: 5, games: twoGames })
+  await user.click((await page.cellLink(1))!)
+
+  await user.click((await page.cellLink(2))!)
+
+  expect(page.queryLeaveDialog()).toBeNull()
+  expect(await page.heading()).toHaveTextContent('Edit game 2 score.')
 })
 
 test('leaving scoring with a score typed and not saved asks “Leave without saving?”; Keep editing stays with it', async () => {
@@ -451,6 +585,26 @@ test('leaving scoring with a score typed and not saved asks “Leave without sav
   expect(page.queryLeaveDialog()).toBeNull()
   expect(await page.heading()).toHaveTextContent('Enter game 3 score.')
   expect(await page.yours()).toHaveValue('11')
+})
+
+// Black-box #17: staying puts focus back on the score field it left.
+test.each([
+  { how: 'Escape', field: 'yours' },
+  { how: 'Keep editing', field: 'theirs' },
+] as const)('$how on “Leave without saving?” puts focus back on the score field ($field)', async ({ how, field }) => {
+  const user = userEvent.setup()
+  const page = new ScoringScreenPage()
+  page.renderMatch({ bestOf: 5, games: twoGames })
+  await user.type(await page.yours(), '11')
+  if (field === 'theirs') await user.type(await page.theirs(), '4')
+
+  await user.click(await page.dashboardLink())
+  await page.leaveDialog()
+  if (how === 'Escape') await user.keyboard('{Escape}')
+  else await user.click(await page.keepEditing())
+
+  expect(page.queryLeaveDialog()).toBeNull()
+  expect(await page[field]()).toHaveFocus()
 })
 
 test('leaving scoring, Discard & leave leaves', async () => {
@@ -681,6 +835,62 @@ test('a clear refused for the core, with nothing typed, says nothing of unsaved 
   expect(alert).toHaveTextContent('Reload FortyMM, then clear your score again.')
   expect(alert).not.toHaveTextContent('unsaved')
 })
+
+// An empty game of a decided match: on the scoring page, only when the
+// match was finished elsewhere while the page was open (the route sends a
+// person who opens one to the dashboard). Approved default 2, 2026-11-18.
+test('an empty game of a decided match: the finished notice links to the match, Save is off, and what is typed stays', async () => {
+  const user = userEvent.setup()
+  const page = new ScoringScreenPage()
+  const onSave = vi.fn(kept)
+  page.render(props({ bestOf: 3, games: [[11, 7], [11, 5]], game: 3, onSave }))
+
+  expect(await page.finished()).toBeInTheDocument()
+  expect(screen.getByText('Game 3 can’t be played, so this score can’t be saved.')).toBeInTheDocument()
+  expect(await page.goToMatch()).toHaveAttribute('href', '/matches/m')
+  await user.type(await page.yours(), '11')
+  await user.type(await page.theirs(), '3{Enter}')
+  expect(await page.submit()).toBeDisabled()
+  expect(await page.yours()).toHaveValue('11')
+  expect(await page.theirs()).toHaveValue('3')
+  expect(onSave).not.toHaveBeenCalled()
+})
+
+// A game before the one that decided the match was played (a game cleared
+// by mistake): no finished notice, and its score saves.
+test('an empty game before the game that decided the match has no finished notice, and its score saves', async () => {
+  const user = userEvent.setup()
+  const page = new ScoringScreenPage()
+  const onSave = vi.fn(kept)
+  page.render(props({ bestOf: 3, games: [[11, 1], null, [11, 3]], game: 2, onSave }))
+
+  expect(await page.heading()).toHaveTextContent('Enter game 2 score.')
+  expect(page.queryFinished()).toBeNull()
+  await user.type(await page.yours(), '2')
+  await user.type(await page.theirs(), '11{Enter}')
+  expect(onSave).toHaveBeenCalledWith(2, [2, 11])
+})
+
+test('on a decided match, the scoreline links an empty game before the decider and not one after it', async () => {
+  const page = new ScoringScreenPage()
+  page.render(props({ bestOf: 5, games: [[11, 1], null, [11, 3], [11, 4]], game: 1 }))
+
+  expect(await page.cellLink(2)).not.toBeNull()
+  expect(await page.cellLink(5)).toBeNull()
+})
+
+test('a saved game of a decided match has no finished notice, and saves', async () => {
+  const user = userEvent.setup()
+  const page = new ScoringScreenPage()
+  const onSave = vi.fn(kept)
+  page.render(props({ bestOf: 3, games: [[11, 7], [11, 5]], game: 1, onSave }))
+  await page.heading()
+
+  expect(page.queryFinished()).toBeNull()
+  await user.click(await page.submit())
+  expect(onSave).toHaveBeenCalledWith(1, [11, 7])
+})
+
 
 // Whether the browser would ask before the page goes (the leave guard's
 // beforeunload handler cancels the event).

@@ -213,6 +213,8 @@ export class NewMatchPage {
   readonly heading: Locator
   readonly form: Locator
   readonly startMatch: Locator
+  // The alert of a Start match the device refused for its storage.
+  readonly notStarted: Locator
   private readonly page: Page
 
   constructor(page: Page) {
@@ -221,6 +223,7 @@ export class NewMatchPage {
     this.heading = main.getByRole('heading', { level: 1, name: 'New match' })
     this.form = main.getByRole('form', { name: 'New match' })
     this.startMatch = this.form.getByRole('button', { name: 'Start match' })
+    this.notStarted = main.getByRole('alert', { name: 'Couldn’t start the match' })
   }
 
   // The match's length: the radio "Best of `n`" (1, 3, 5 or 7).
@@ -230,6 +233,109 @@ export class NewMatchPage {
 
   async goto() {
     await this.page.goto('/matches/new')
+  }
+}
+
+// The address of a match's page, and of the scoring page of one of its
+// games. A match's id is the core's match id in hex.
+const matchPath = (matchId: string) => `/matches/${matchId}`
+const scoringPath = (matchId: string, game: number) =>
+  `${matchPath(matchId)}/games/${game}/scores/edit`
+
+// The id of the match whose scoring page the page shows: where Start match
+// goes, game 1's.
+export async function scoredMatchId(page: Page): Promise<string> {
+  await expect(page).toHaveURL(/\/matches\/[0-9a-f]{64}\/games\/\d+\/scores\/edit$/)
+  return new URL(page.url()).pathname.split('/')[2]!
+}
+
+// A match's details page, at /matches/<id>: its title ("You vs
+// Anonymous"), the format line, and its games' table.
+export class MatchDetailsPage {
+  readonly heading: Locator
+  // The line with the format, "Best of 5 · Unrated · Game 1 next".
+  readonly format: Locator
+  readonly games: Locator
+  // "No games yet.", in place of the table.
+  readonly noGames: Locator
+  // In place of the match, when the device won't read it.
+  readonly unreadable: Locator
+  private readonly page: Page
+
+  constructor(page: Page) {
+    this.page = page
+    const main = page.getByRole('main')
+    this.heading = main.getByRole('heading', { level: 1, name: /^You vs / })
+    this.format = main.getByText(/^(Best of \d|Single game) · /)
+    this.games = main.getByRole('table', { name: 'Games' })
+    this.noGames = main.getByText('No games yet.')
+    this.unreadable = main.getByRole('heading', { level: 1, name: 'Couldn’t load this match' })
+  }
+
+  // Game n's row: its header "Game n", the two scores, and who won it (or
+  // "Not played").
+  game(n: number): Locator {
+    return this.games.getByRole('row', { name: new RegExp(`^Game ${n} `) })
+  }
+
+  async goto(matchId: string) {
+    await this.page.goto(matchPath(matchId))
+  }
+}
+
+// The scoring page of one game, at /matches/<id>/games/<n>/scores/edit.
+export class ScoringPage {
+  readonly heading: Locator
+  readonly yours: Locator
+  readonly theirs: Locator
+  // The submit: "Save game & next", "Finish match"...
+  readonly save: Locator
+  readonly clear: Locator
+  // The alert of a save or a clear refused for a browser feature missing.
+  readonly unsupported: Locator
+  // The score card: the fields, the one error line (a save the rules
+  // refused), the actions.
+  readonly form: Locator
+  // The scoreline's polite read-out of what changed elsewhere ("Game 1
+  // updated."), empty before the first change.
+  readonly updated: Locator
+  // The scoreline's tint on a game that changed elsewhere: decorative
+  // (aria-hidden), so found by its class. It is removed once it has faded.
+  readonly tint: Locator
+  // Under the heading: the notice that this empty game's match was finished
+  // elsewhere (its title), and its link to the match's page.
+  readonly finished: Locator
+  readonly goToMatch: Locator
+  private readonly page: Page
+
+  constructor(page: Page) {
+    this.page = page
+    const main = page.getByRole('main')
+    this.heading = main.getByRole('heading', {
+      level: 1,
+      name: /^(Enter|Edit) game \d+ score\.$/,
+    })
+    this.yours = main.getByRole('textbox', { name: 'Your score' })
+    this.theirs = main.getByRole('textbox', { name: 'Opponent’s score' })
+    this.save = main.getByRole('button', { name: /^(Save|Finish)/ })
+    this.clear = main.getByRole('button', { name: 'Clear' })
+    this.unsupported = main.getByRole('alert', { name: 'Your browser doesn’t support saving matches' })
+    this.form = main.getByRole('form', { name: /^Game \d+ score$/ })
+    const scoreline = main.getByRole('navigation', { name: 'Scoreline' })
+    this.updated = scoreline.getByRole('status')
+    this.tint = scoreline.locator('.scoreline__mark')
+    this.finished = main.getByText('This match was finished since you opened this page.')
+    this.goToMatch = main.getByRole('link', { name: 'Go to the match' })
+  }
+
+  // Types a score, yours first, ready to save.
+  async enter([yours, theirs]: [number, number]) {
+    await this.yours.fill(String(yours))
+    await this.theirs.fill(String(theirs))
+  }
+
+  async goto(matchId: string, game: number) {
+    await this.page.goto(scoringPath(matchId, game))
   }
 }
 
@@ -245,6 +351,10 @@ export class MatchesPage {
   readonly columnHeaders: Locator
   // The list's own New match, in main (the bottom bar has its own).
   readonly newMatch: Locator
+  // In place of the list, when the device won't read it.
+  readonly unreadable: Locator
+  // The empty state: no matches on this device.
+  readonly empty: Locator
   private readonly page: Page
 
   constructor(page: Page) {
@@ -255,6 +365,8 @@ export class MatchesPage {
     this.rows = this.table.locator('tbody tr')
     this.columnHeaders = this.table.getByRole('columnheader')
     this.newMatch = main.getByRole('link', { name: 'New match' })
+    this.unreadable = main.getByRole('alert', { name: 'Couldn’t load your matches' })
+    this.empty = main.getByText('No matches yet.')
   }
 
   async goto() {

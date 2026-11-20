@@ -5,15 +5,16 @@ import {
   type MatchSource,
   type StoredMatch,
   type Unavailable,
-} from './match-source.ts'
+} from '../stores/match-source.ts'
 
-// This tab's matches, in memory: the source (match-source.ts) the match
-// stores read and write until the plan's IndexedDB storage and journal exist
-// (tasks D to G2). It stands where they will: the one source of truth both
-// stores read, and the one place that says a match changed, after each
-// write. Nothing is kept past the page: a reload loses every match (the
-// user's decision), and nothing is written to IndexedDB, localStorage or
-// sessionStorage.
+// Matches in memory: the source (src/stores/match-source.ts) the match
+// stores read and write in component tests, where jsdom has no IndexedDB.
+// setup.ts puts the app's one memory, matchMemory, in place of the device's
+// source (src/stores/match-device.ts). It stands where the device's storage
+// does: the one source of truth both stores read, and the one place that
+// says a match changed, after each write. Nothing is kept past the test
+// file. Test code only: the app never imports it, and the build fails if it
+// does (build/no-test-code.ts).
 //
 // It knows no rules: a save runs the `decide` it is handed, on the match as
 // kept when the write happens.
@@ -96,6 +97,14 @@ export function createMatchMemory(): MatchMemory {
       if (match === undefined) return { ok: false, ...missingMatch }
       const decided = decide(match)
       if ('reason' in decided) return { ok: false, ...decided }
+      // As the device: a save of the score the game already has keeps
+      // nothing, so nothing changed. (A game here holds one score, never the
+      // two current entries the device can hold.)
+      const kept = match.games[game - 1]
+      const { score } = decided
+      if (score !== null && kept != null && kept[0] === score[0] && kept[1] === score[1]) {
+        return { ok: true }
+      }
       matches.set(matchId, { ...match, games: withGame(match.games, game, decided.score) })
       changed([matchId])
       return { ok: true }

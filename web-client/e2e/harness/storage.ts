@@ -3,6 +3,7 @@ import { loadCore } from '../../src/core/load.ts'
 import { compressedPublicKey, storedSignature, withDeviceKey } from '../../src/device-key.ts'
 import { environment } from '../../src/first-launch.ts'
 import { commit, type Draft } from '../../src/journal.ts'
+import { matchStore } from '../../src/stores/match.ts'
 import type { Refusal } from '../../src/stores/match-source.ts'
 import {
   appendLock,
@@ -529,6 +530,34 @@ const harness = {
       verifies: core.verify(record),
       signer: hex(core.signer(record)),
     }))
+  },
+
+  // Every `match` record kept: its id and its sides (player ids), in hex,
+  // as the core reads them from the record.
+  async keptMatchRecords() {
+    const core = await loadCore()
+    const database = await openExisting()
+    if (database === null) return []
+    let kept: Uint8Array[]
+    try {
+      kept = (await request(
+        database.transaction(recordStore).objectStore(recordStore).getAll(),
+      )) as Uint8Array[]
+    } finally {
+      database.close()
+    }
+    return kept
+      .filter((record) => core.kind(record) === 'match')
+      .map((record) => {
+        const sides = core.sides(record)!
+        return { id: hex(core.id(record)), sides: [sides[0].map(hex), sides[1].map(hex)] }
+      })
+  },
+
+  // A save through the app's own match store (src/stores/match.ts), on the
+  // app's source, the device's: what setGameScore answered.
+  setGameScore(matchId: string, game: number, score: [number, number]) {
+    return matchStore.getState().setGameScore(matchId, game, score)
   },
 
   // This device's own player id (hex), made from its key.

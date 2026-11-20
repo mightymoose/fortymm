@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { nextGame, withGame, type BestOf, type Games } from '../../scoring/scoring.ts'
 import { ScoringScreen } from './ScoringScreen.tsx'
 
@@ -20,6 +20,8 @@ export function Match({
   games: Games
 }) {
   const [games, setGames] = useState<Games>(saved)
+  // The games as the last save left them, for the move on after it.
+  const latest = useRef(games)
   const pathname = useLocation({ select: (location) => location.pathname })
   const navigate = useNavigate()
   const opened = /^\/matches\/m\/games\/(\d+)\/scores\/edit$/.exec(pathname)?.[1]
@@ -36,10 +38,14 @@ export function Match({
           params: { matchId: 'm', gameId: String(n) },
         })}
         newVersion={{ waiting: false, reload: () => {} }}
+        matchPage={{ to: '/matches/$matchId', params: { matchId: 'm' } }}
         onSave={async (n, score) => {
-          const next = withGame(games, n, score)
-          setGames(next)
-          const after = nextGame(next, bestOf)
+          latest.current = withGame(games, n, score)
+          setGames(latest.current)
+          return { ok: true }
+        }}
+        onSaved={() => {
+          const after = nextGame(latest.current, bestOf)
           void navigate(
             after === null
               ? { to: '/', ignoreBlocker: true }
@@ -49,7 +55,6 @@ export function Match({
                   ignoreBlocker: true,
                 },
           )
-          return { ok: true }
         }}
         onClear={async (n) => {
           setGames(withGame(games, n, null))

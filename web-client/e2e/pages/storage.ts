@@ -227,6 +227,21 @@ export class StorageHarness {
     return this.invoke('keptRecords')
   }
 
+  // Every `match` record kept, with its sides as the core reads them.
+  keptMatchRecords(): Promise<{ id: string; sides: [string[], string[]] }[]> {
+    return this.invoke('keptMatchRecords')
+  }
+
+  // A save through the app's own match store, on the device: what
+  // setGameScore answered.
+  setGameScore(
+    matchId: string,
+    game: number,
+    score: [number, number],
+  ): Promise<{ ok: true } | ({ ok: false } & ({ reason: string } | Refusal))> {
+    return this.invoke('setGameScore', matchId, game, score)
+  }
+
   // A hello signed by this device's key (hex), not stored.
   hello(): Promise<string> {
     return this.invoke('hello')

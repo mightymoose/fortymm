@@ -1,6 +1,6 @@
 import { createStore, useStore } from 'zustand'
 import { mayClear, saveRefusal, type BestOf, type Games, type Score } from '../scoring/scoring.ts'
-import { matchMemory } from './match-memory.ts'
+import { matchDevice } from './match-device.ts'
 import type { ActionResult, MatchSource, StoredMatch, Unavailable } from './match-source.ts'
 import { createQueue } from './queue.ts'
 
@@ -9,9 +9,9 @@ export type { ActionResult, Failure, Refusal } from './match-source.ts'
 // One entry per match id, for the pages that open a match (the scoring screen
 // first), and the scoring actions. The interface is the plan's match store
 // (PLAN-match-store-and-sync.md §2). It reads and writes through a source
-// (match-source.ts) and knows nothing about where matches are kept: until
-// IndexedDB and the journal exist (tasks D to G2) the app's source is a
-// memory (match-memory.ts), so a reload loses them.
+// (match-source.ts) and knows nothing about where matches are kept: the
+// app's source is the device's (match-device.ts), so matches outlive a
+// reload.
 //
 // A write goes to the source first. Only when it has succeeded does the
 // store change, by reading the match again; a write the source refuses is
@@ -20,7 +20,10 @@ export type { ActionResult, Failure, Refusal } from './match-source.ts'
 // Only watched matches reload, as in the plan: after a write to a match, an
 // entry a mounted page watches (watchMatch) is read again, so the page shows
 // it; an entry nobody watches is dropped, and the next page that opens it
-// reads it fresh through its loader (load).
+// reads it fresh through its loader (load). A page watches only once it is
+// drawn, after its loader's read, and a change can land in between (or
+// while that read is on its way, which then answers with the match as it
+// was): so watching starts with a read again.
 
 // What a screen shows of a match.
 export type MatchState = {
@@ -32,8 +35,7 @@ export type MatchState = {
 
 // A match as this store holds it.
 // - ready: the match.
-// - missing: no match of that id on this device (in memory: nobody created
-//   it in this page's life; a reload loses every match).
+// - missing: no match of that id on this device.
 // - unavailable: the source refused the read.
 export type MatchEntry =
   | { status: 'ready'; match: MatchState }
@@ -45,8 +47,9 @@ export type MatchStore = {
   // For loaders: reads the match, puts it in the store and gives its entry
   // (missing for an id nobody created). Never rejects.
   load(matchId: string): Promise<MatchEntry>
-  // While a page shows the match: keeps its entry current after every write
-  // to it. Gives the function that stops watching.
+  // While a page shows the match: reads it again at once, then keeps its
+  // entry current after every write to it. Gives the function that stops
+  // watching.
   watchMatch(matchId: string): () => void
   // Saves `score` as game `game` (1 is the first), a new game or a
   // correction, unless the scoring rules refuse it (saveRefusal).
@@ -57,8 +60,8 @@ export type MatchStore = {
 }
 
 // A store of its own over `source`. The app has one, matchStore, over the
-// app's memory; a test builds a fresh one over a fresh memory.
-export function createMatchStore(source: MatchSource = matchMemory) {
+// device's source; a test builds a fresh one over a fresh memory.
+export function createMatchStore(source: MatchSource = matchDevice) {
   const queue = createQueue()
   // How many mounted pages watch each match.
   const watching = new Map<string, number>()
@@ -74,8 +77,11 @@ export function createMatchStore(source: MatchSource = matchMemory) {
   // A read the device refuses leaves an entry already read as it is, so a
   // page showing it stays, with whatever is typed on it (the user's
   // decision, 2026-11-16); only a loader's read (load) records the refusal.
-  const readAgain = async (matchId: string) => {
+  // `watched`: only if a page still watches it when the read answers (the
+  // read a watch starts with).
+  const readAgain = async (matchId: string, { watched = false } = {}) => {
     const entry = entryOf(await source.read(matchId))
+    if (watched && !watching.has(matchId)) return
     store.setState((state) =>
       entry.status === 'unavailable' && state.matches[matchId]?.status === 'ready'
         ? state
@@ -98,9 +104,18 @@ export function createMatchStore(source: MatchSource = matchMemory) {
 
   const store = createStore<MatchStore>()(() => ({
     matches: {},
-    load: (matchId) => queue(() => read(matchId)),
+    // A match a page watches, already read, is kept current by the store:
+    // a loader opening another of its pages (another game, while a clear
+    // goes on in the background) takes it as held, without waiting behind
+    // a write on its way.
+    load: (matchId): Promise<MatchEntry> => {
+      const held: MatchEntry | undefined = store.getState().matches[matchId]
+      if (watching.has(matchId) && held?.status === 'ready') return Promise.resolve(held)
+      return queue(() => read(matchId))
+    },
     watchMatch(matchId) {
       watching.set(matchId, (watching.get(matchId) ?? 0) + 1)
+      void queue(() => readAgain(matchId, { watched: true }))
       let stopped = false
       return () => {
         if (stopped) return

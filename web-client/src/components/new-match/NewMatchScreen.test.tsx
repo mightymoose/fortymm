@@ -55,6 +55,38 @@ test('Start match hands the length chosen, unrated', async () => {
   expect(onSubmit).toHaveBeenCalledWith({ format: { bestOf: 3 }, rated: false })
 })
 
+test('Start match pressed again while the first is on its way, or after it was kept, hands nothing more', async () => {
+  const user = userEvent.setup()
+  let release = () => {}
+  const onSubmit = vi.fn(async () => {
+    await new Promise<void>((resolve) => (release = resolve))
+    return { ok: true as const }
+  })
+  const page = new NewMatchScreenPage()
+  page.render({ onSubmit })
+
+  await user.dblClick(await page.startMatch())
+  await user.click(await page.startMatch())
+  release()
+  await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+  await user.click(await page.startMatch())
+
+  expect(onSubmit).toHaveBeenCalledTimes(1)
+})
+
+test('after a Start match the device refused, the next press hands the match again', async () => {
+  const user = userEvent.setup()
+  const onSubmit = vi.fn(refused('storage-unavailable'))
+  const page = new NewMatchScreenPage()
+  page.render({ onSubmit })
+  await user.click(await page.startMatch())
+  await page.alert()
+
+  await user.click(await page.startMatch())
+
+  await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2))
+})
+
 test('the summary says who plays, You vs Anonymous, the length chosen, and Unrated', async () => {
   const user = userEvent.setup()
   const page = new NewMatchScreenPage()

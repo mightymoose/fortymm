@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useBlocker } from '@tanstack/react-router'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Controller, useForm, useWatch } from 'react-hook-form'
 import type { Failure } from '../../stores/match-source.ts'
 import { BestOfField } from './new-match-screen/BestOfField.tsx'
@@ -8,6 +8,7 @@ import { Button } from '../Button.tsx'
 import { ButtonLink } from '../ButtonLink.tsx'
 import { DeviceAlert, type NewVersionOffer } from '../DeviceAlert.tsx'
 import { DiscardChangesDialog } from './new-match-screen/DiscardChangesDialog.tsx'
+import { dropKeys, keepKeys } from '../type-ahead.ts'
 import { Icon } from '../Icon.tsx'
 import { opponentLabel } from '../opponent.ts'
 import {
@@ -35,7 +36,8 @@ export type { NewMatch }
 // above the summary, read out at once (DeviceAlert: what failed, what we know, what to do),
 // with the form as chosen. The next Start match takes it away the moment it
 // is pressed; a refusal again shows it anew. Where a kept match goes is the
-// caller's.
+// caller's. Start match pressed again while the first is on its way, or
+// once it was kept, does nothing: one press, at most one match.
 //
 // Leaving a changed form (one that isn't as it opened) asks first, "Discard
 // changes?", whether by Cancel, any other link, or the browser's back;
@@ -65,6 +67,21 @@ export function NewMatchScreen({
   const [answers, setAnswers] = useState(0)
   // Set once the person asked for the new version: that reload doesn't ask.
   const reloading = useRef(false)
+  // Set from Start match's press until the device refuses it: a kept match
+  // can't be taken back, so a second press while the first is on its way,
+  // or after it was kept, starts nothing (a double tap keeps one match).
+  // Set in the press itself, before the form's asynchronous validation.
+  const starting = useRef(false)
+  // Set once the match is kept: game 1's page, which takes the kept keys,
+  // opens next. Until then, leaving this page drops them: keys typed on
+  // another page are that page's, never the new match's.
+  const kept = useRef(false)
+  useEffect(
+    () => () => {
+      if (!kept.current) dropKeys()
+    },
+    [],
+  )
 
   // The one leave guard: the form's own dirty state, against its defaults.
   const blocker = useBlocker({
@@ -87,13 +104,29 @@ export function NewMatchScreen({
         className="new-match__card"
         aria-label="New match"
         noValidate
-        onSubmit={handleSubmit(async (match) => {
-          setRefused(null)
-          const result = await onSubmit(match)
-          if (result.ok) return
-          setAnswers((n) => n + 1)
-          setRefused(result.reason)
-        })}
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (starting.current) return
+          starting.current = true
+          // Keys typed while the match is being kept are for game 1's page.
+          keepKeys()
+          void handleSubmit(
+            async (match) => {
+              setRefused(null)
+              const result = await onSubmit(match)
+              kept.current = result.ok
+              if (result.ok) return
+              dropKeys()
+              starting.current = false
+              setAnswers((n) => n + 1)
+              setRefused(result.reason)
+            },
+            () => {
+              dropKeys()
+              starting.current = false
+            },
+          )(event)
+        }}
       >
         <div className="new-match__settings">
           <Controller

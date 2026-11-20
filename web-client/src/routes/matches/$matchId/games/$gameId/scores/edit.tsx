@@ -7,8 +7,8 @@ import { matchStore } from '../../../../../../stores/match.ts'
 // match. There is no route at /games/$gameId or /scores: those are not found.
 // Which game opens is gameToOpen's to decide (scoring/game-to-open.ts); this
 // loader turns its answer into the router's: not found, or, for an empty game
-// of a decided match, a redirect to the dashboard. Any other game opens, in
-// any order.
+// after the game that decided the match, a redirect to the dashboard. Any
+// other game opens, in any order.
 export const Route = createFileRoute('/matches/$matchId/games/$gameId/scores/edit')({
   // A route's loader runs alongside its parent's, so this one reads the match
   // itself (the store queues the reads) rather than wait for the layout's.

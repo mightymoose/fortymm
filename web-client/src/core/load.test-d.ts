@@ -29,6 +29,8 @@ export async function makesAndReadsTheMatchKindsAsTheCoresTypesSay() {
   expectTypeOf(
     core.matchBody(2, key, random, [[id], [id, id]], new Uint8Array(), Date.now()),
   ).toEqualTypeOf<Uint8Array>()
+  // An anonymous side: a side with no players (core/FORMAT.md section 5).
+  expectTypeOf(core.matchBody(2, key, random, [[id], []], new Uint8Array())).toEqualTypeOf<Uint8Array>()
   expectTypeOf(
     core.scoreBody(2, key, random, id, 1, new Uint8Array(), [id], Date.now()),
   ).toEqualTypeOf<Uint8Array>()
