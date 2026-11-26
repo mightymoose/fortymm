@@ -1,0 +1,3 @@
+# Tools for the requirements container. The Dafny release zip bundles the Z3 it is tested against.
+[tools]
+"github:dafny-lang/dafny" = "4.11.0"
