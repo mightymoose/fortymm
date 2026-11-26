@@ -1,0 +1,19 @@
+name: fortymm
+
+services:
+  # Checks the product requirements in requirements/*.dfy with Dafny + Z3.
+  # Run via ./bin/mise run check-requirements (see mise.toml).
+  check-requirements:
+    build:
+      context: .
+      dockerfile: requirements/Dockerfile
+    # Dafny ships no linux/arm64 build; runs under Rosetta on Apple Silicon.
+    platform: linux/amd64
+    volumes:
+      - ./requirements:/app/requirements
+    profiles: ["tools"]
+
+  # Coming next:
+  # db:   postgres
+  # api:  python server
+  # web:  vite + react
