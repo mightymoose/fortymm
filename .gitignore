@@ -1,2 +1,4 @@
 .mise/
 .env
+core/target/
+core/bindings/wasm/pkg/

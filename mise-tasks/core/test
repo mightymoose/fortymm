@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Run the core's Rust tests in the core container, e.g. `./bin/mise run core:test -- hello`"
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+exec docker compose run --rm --build core cargo test --locked --workspace "$@"

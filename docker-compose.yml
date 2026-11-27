@@ -6,6 +6,9 @@ x-web-client: &web-client
     context: .
     dockerfile: web-client/Dockerfile
     target: dev
+    # The core's wasm package, built by core/Dockerfile's wasm stage.
+    additional_contexts:
+      core-wasm: service:core-wasm
   volumes:
     - ./web-client:/app/web-client
     # Keep the image's node_modules (Linux builds) instead of the host directory.
@@ -25,6 +28,9 @@ x-api: &api
     context: .
     dockerfile: api/Dockerfile
     target: dev
+    # The core's Python wheel, built by core/Dockerfile's python stage.
+    additional_contexts:
+      core-python: service:core-python
   volumes:
     - ./api:/app/api
     # Keep the image's .venv (Linux builds) instead of the host directory.
@@ -125,8 +131,37 @@ services:
     ports:
       - "80"
 
+  # The shared core library (Rust). A library, so nothing to serve: core:test and core:cargo
+  # run one command in this container and exit. Build output is in the core-target volume.
+  core:
+    build:
+      context: .
+      dockerfile: core/Dockerfile
+      target: dev
+    volumes:
+      - ./core:/app/core
+      - core-target:/opt/core-target
+    profiles: ["tools"]
+
+  # Build-only: the core's bindings, which the api and web-client images copy in through
+  # additional_contexts. `docker compose build api web-client` rebuilds them from ./core.
+  # No profile: a service: build context must name an active service. Nothing starts them,
+  # because every task names the services it runs.
+  core-wasm:
+    build:
+      context: .
+      dockerfile: core/Dockerfile
+      target: wasm
+
+  core-python:
+    build:
+      context: .
+      dockerfile: core/Dockerfile
+      target: python
+
   # Coming next:
   # db:   postgres
 
 volumes:
   tailscale-state:
+  core-target:

@@ -21,6 +21,7 @@ check() {
 # One throwaway container per check, on the compose network, using the image dev just built.
 in_web_client() { docker compose run --rm --no-deps "$@"; }
 in_api() { docker compose run --rm --no-deps api "$@"; }
+in_core() { docker compose run --rm --build core "$@"; }
 # oasdiff: does api/openapi.json break clients of the spec on main, as of where this branch split off?
 api_breaking() {
   local base
@@ -51,6 +52,11 @@ check api-test      in_api pytest
 # Drift: the committed api/openapi.json must match what the app generates (./bin/mise run api:openapi).
 check api-openapi-drift in_api sh -c 'python -m scripts.export_openapi | diff -u openapi.json - && echo "openapi.json is current" || { echo "openapi.json is stale: run ./bin/mise run api:openapi" >&2; exit 1; }'
 check api-breaking  api_breaking
+# The core itself. Its bindings are exercised by `unit` and `api-test`: dev builds them into the
+# web-client and api images.
+check core-lint     in_core cargo clippy --locked --workspace --all-targets -- -D warnings
+check core-format   in_core cargo fmt --check
+check core-test     in_core cargo test --locked --workspace
 
 if [ ${#failed[@]} -gt 0 ]; then
   echo "verify failed: ${failed[*]}" >&2
