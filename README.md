@@ -15,6 +15,16 @@ docker compose build check-requirements            # after changing requirements
 See `requirements/Example.dfy` for the pattern: requirements as predicates, a consistency witness,
 and operations proven to preserve every requirement from every valid state.
 
+## Dev and verify
+
+```sh
+./bin/mise run dev                                 # every dev server (web client, design system reference), URLs printed; Ctrl-C stops
+./bin/mise run dev --detach                        # same, but return once they are healthy
+./bin/mise run verify                              # dev servers up, then lint + typecheck + e2e against them
+```
+
+`verify` runs every check, then fails if any did. It reuses servers `dev` already started, and only stops the ones it started.
+
 ## Web client (Vite + React + TypeScript)
 
 The app lives in `web-client/`. Node is installed in the image by mise from `web-client/mise.toml`; nothing runs on the host.
@@ -24,6 +34,8 @@ The app lives in `web-client/`. Node is installed in the image by mise from `web
 ./bin/mise run web-client:npm -- install <pkg>     # any npm command in the container
 ./bin/mise run web-client:npm -- run build
 ./bin/mise run web-client:npm -- run lint
+./bin/mise run web-client:e2e                      # Playwright e2e tests (Chromium, in the container)
+./bin/mise run web-client:e2e -- --grep home       # any playwright test args
 ```
 
 Each `web-client:dev` gets its own container and host port, so several can run at once. `./bin/mise run ports` lists them.

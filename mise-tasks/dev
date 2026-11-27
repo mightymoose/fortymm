@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+#MISE description="Start every dev server (web client, design system reference), print their URLs, and follow logs. --detach returns once they're up"
+#USAGE flag "--detach" help="Return once the servers are healthy instead of following their logs"
+# Host-side: one container per server, on random host ports, waiting on their healthchecks.
+# In the foreground, Ctrl-C stops them; with --detach they keep running (stop with `docker compose stop`).
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+
+# Every long-running dev server. Add new ones (db, api, ...) here.
+services=(web-client design-system)
+
+# Rebuild first so package.json / lockfile changes are picked up (cached otherwise).
+docker compose build "${services[@]}" >&2
+# Fresh anonymous volumes, so node_modules comes from the rebuilt image, not the last container.
+docker compose up --detach --wait --renew-anon-volumes "${services[@]}" >&2
+
+url() { echo "http://localhost:$(docker compose port "$1" "$2" | sed 's/.*://')"; }
+echo "web-client dev server:   $(url web-client 5173)"
+echo "design system reference: $(url design-system 80)"
+
+[ "${usage_detach:-false}" = true ] && exit 0
+trap 'docker compose stop "${services[@]}" >/dev/null 2>&1 || true' EXIT
+docker compose logs --follow "${services[@]}"

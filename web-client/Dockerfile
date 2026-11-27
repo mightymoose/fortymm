@@ -19,4 +19,8 @@ ENTRYPOINT ["/app/bin/mise", "exec", "--"]
 FROM toolchain AS dev
 COPY web-client/package.json web-client/package-lock.json ./
 RUN /app/bin/mise exec -- npm ci
+# Playwright browser (Chromium) and its system libraries, at the version in the lockfile.
+# Baked into the image so e2e tests run in this same container.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN /app/bin/mise exec -- npx playwright install --with-deps chromium
 CMD ["npm", "run", "dev"]

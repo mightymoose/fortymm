@@ -10,6 +10,12 @@ x-web-client: &web-client
     - ./web-client:/app/web-client
     # Keep the image's node_modules (Linux builds) instead of the host directory.
     - /app/web-client/node_modules
+  # Lets `docker compose up --wait` (the dev task) know when Vite is serving.
+  healthcheck:
+    test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:5173/"]
+    interval: 30s
+    start_period: 60s
+    start_interval: 1s
 
 services:
   # Checks the product requirements in requirements/*.dfy with Dafny + Z3.
@@ -73,6 +79,11 @@ services:
       dockerfile: requirements/design-system/Dockerfile
     volumes:
       - ./requirements/design-system/reference:/srv/design-system:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 30s
+      start_period: 30s
+      start_interval: 1s
     # Container port only: Docker picks a free host port.
     ports:
       - "80"

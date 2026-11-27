@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+#MISE description="Start the dev servers, then run the web-client static analysis (lint, typecheck) and e2e tests against them"
+# Host-side. Runs every check even if one fails, then exits non-zero if any did.
+# Leaves the dev servers as it found them: stops them at the end only if it started them.
+set -uo pipefail
+cd "$MISE_PROJECT_ROOT"
+
+# Only the service's own container counts (the one dev starts, reachable as `web-client`), not
+# one-off `run` containers such as web-client:dev's (named <project>-web-client-run-<id>).
+if ! docker compose ps --status running --format '{{.Name}}' web-client | grep -qv -- '-run-'; then
+  trap 'docker compose stop web-client design-system >/dev/null 2>&1 || true' EXIT
+  ./bin/mise run dev --detach || exit 1
+fi
+
+failed=()
+check() {
+  local name=$1; shift
+  echo "==> $name" >&2
+  "$@" || failed+=("$name")
+}
+# One throwaway container per check, on the compose network, using the image dev just built.
+in_web_client() { docker compose run --rm --no-deps "$@"; }
+
+check lint      in_web_client web-client npm run lint
+check typecheck in_web_client web-client npm run typecheck
+# The tests reach the running dev server by its compose service name.
+check e2e       in_web_client -e E2E_BASE_URL=http://web-client:5173 web-client npx playwright test
+
+if [ ${#failed[@]} -gt 0 ]; then
+  echo "verify failed: ${failed[*]}" >&2
+  exit 1
+fi
+echo "verify passed" >&2
