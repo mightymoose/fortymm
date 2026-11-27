@@ -5,9 +5,10 @@ description: Commit the current work in this repo by filling in the commit messa
 
 # Commit
 
-1. Run `git status` and `git diff` (staged and unstaged) to see what is being committed. If on `main`, create a branch first.
-2. Stage the files by path. Leave out anything unrelated to this change and anything that may hold secrets (`.env`, credentials).
-3. Fill in the template below and commit it with a heredoc: `git commit -F - <<'EOF' … EOF`.
+1. Run `./bin/mise run verify` (lint, typecheck, unit and e2e tests). If it fails, stop: report the failures and don't commit until they are fixed or the user says to commit anyway.
+2. Run `git status` and `git diff` (staged and unstaged) to see what is being committed. If on `main`, create a branch first.
+3. Stage the files by path. Leave out anything unrelated to this change and anything that may hold secrets (`.env`, credentials).
+4. Fill in the template below and commit it with a heredoc: `git commit -F - <<'EOF' … EOF`.
 
 ## Template
 
