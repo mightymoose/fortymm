@@ -8,6 +8,11 @@ describe('App', () => {
     expect(app.home.heading).toBeInTheDocument()
   })
 
+  it('shows the health screen at /health', async () => {
+    const app = await AppPage.render('/health')
+    expect(app.health.heading).toBeInTheDocument()
+  })
+
   it('shows the not-found screen at an unknown path', async () => {
     const app = await AppPage.render('/no-such-page')
     expect(app.notFound.heading).toBeInTheDocument()

@@ -40,6 +40,8 @@ api_breaking() {
 check lint      in_web_client web-client npm run lint
 check typecheck in_web_client web-client npm run typecheck
 check unit      in_web_client web-client npm test
+# Drift: the committed src/api/generated.ts must match what orval generates from api/openapi.json.
+check api-client-drift in_web_client -e ORVAL_TARGET=/tmp/generated.ts web-client sh -c 'npx orval >/dev/null && diff -u src/api/generated.ts /tmp/generated.ts && echo "generated.ts is current" || { echo "src/api/generated.ts is stale: run ./bin/mise run web-client:api-client" >&2; exit 1; }'
 # The tests reach the running dev server by its compose service name.
 check e2e       in_web_client -e E2E_BASE_URL=http://web-client:5173 web-client npx playwright test
 check api-lint      in_api ruff check
