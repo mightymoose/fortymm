@@ -27,3 +27,13 @@ RUN /app/bin/mise exec -- npm ci
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN /app/bin/mise exec -- npx playwright install --with-deps chromium
 CMD ["npm", "run", "dev"]
+
+# The production build (tsc -b, then vite build into dist/), for preview's nginx.
+FROM dev AS build
+COPY web-client/ ./
+RUN /app/bin/mise exec -- npm run build
+
+# Preview (web-client-public): nginx serves the build and proxies /api (see nginx.conf).
+FROM nginx:1.27-alpine AS serve
+COPY web-client/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/web-client/dist /usr/share/nginx/html

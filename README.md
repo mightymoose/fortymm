@@ -60,9 +60,10 @@ finds a breaking change against the spec on `main` (as of where the branch split
 
 ## Preview (Tailscale Funnel)
 
-`./bin/mise run preview` starts everything. For now that's the dev server (with `/api` proxied to the api), behind a Tailscale sidecar that serves it
-on the internet at `https://fortymm.<tailnet>.ts.net` via Funnel. No host ports are published; `web-client:dev` is unchanged.
-The sidecar's config is `tailscale/serve.json` (Funnel on 443 → Vite on `127.0.0.1:5173`).
+`./bin/mise run preview` builds and starts everything: the web client's production build, served by nginx (`web-client/nginx.conf`,
+with `/api` proxied to the api), behind a Tailscale sidecar that serves it on the internet at `https://fortymm.<tailnet>.ts.net`
+via Funnel. There is no hot reload: re-run `preview` to pick up changes. No host ports are published; `web-client:dev` is unchanged.
+The sidecar's config is `tailscale/serve.json` (Funnel on 443 → nginx on `127.0.0.1:5173`).
 
 One-time setup in the [Tailscale admin console](https://login.tailscale.com/admin):
 
