@@ -13,6 +13,7 @@ Nothing runs on the host except `./bin/mise` and `docker`. No `node`, `npm`, `da
 ## Services
 
 - `check-requirements` — verifies the Dafny specs in `requirements/`. `./bin/mise run requirements:check`, `./bin/mise run requirements:dafny -- <args>`
+- `design-system` — nginx serving the design system reference boards in `requirements/design-system/reference/`, the reference for the Playwright screenshot tests. `./bin/mise run requirements:design-system:reference:serve` serves them on a random host port (printed at startup).
 - `web-client` — Vite + React + TypeScript app in `web-client/`. `./bin/mise run web-client:dev` starts the dev server on a random host port (printed at startup), so many can run at once.
 - `tailscale` + `web-client-public` (profile `public`) — the dev server on the internet via Tailscale Funnel, no host ports. `./bin/mise run preview`; setup in README.
 

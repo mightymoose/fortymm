@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+#MISE description="Serve the design system reference (requirements/design-system/reference/) on a random host port (printed at startup)"
+# Host-side: start an nginx container serving the design system reference and follow its logs.
+# Ctrl-C stops it.
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+
+docker compose build design-system >&2
+id=$(docker compose run --detach --rm --service-ports design-system)
+trap 'docker stop "$id" >/dev/null 2>&1 || true' EXIT
+
+port=$(docker port "$id" 80/tcp | head -n1 | sed 's/.*://')
+echo "design system reference: http://localhost:$port  (container $id)"
+docker logs --follow "$id"

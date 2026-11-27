@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FortyMM showcase · Containers and feedback</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="ds/fortymm/colors_and_type.css">
+<link rel="stylesheet" href="ds/fortymm/ui_kits/components/kit.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#0B0D12}
+.doc{box-sizing:border-box;width:1280px;padding:64px 64px 96px;background:var(--bg-app);color:var(--fg-1);font-family:var(--font-ui)}
+.doc-cat+.doc-cat{margin-top:112px}
+.doc-cat>h2{margin:0;font:600 30px/1.2 var(--font-ui);letter-spacing:-0.01em;color:var(--fg-1)}
+.doc-cat>p{margin:10px 0 0;max-width:700px;font:400 16px/1.55 var(--font-ui);color:var(--fg-3)}
+.doc-ex{margin-top:56px;display:grid;grid-template-columns:250px minmax(0,1fr);gap:20px 56px}
+.doc-ex>header h3{margin:0 0 8px;font:600 18px/1.3 var(--font-ui);color:var(--fg-1)}
+.doc-ex>header p{margin:0 0 8px;font:400 14px/1.6 var(--font-ui);color:var(--fg-3)}
+.doc-stage{min-width:0;display:flex;flex-direction:column;gap:28px}
+.doc-row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.doc-grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:32px;align-items:start}
+.doc-status{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:32px}
+.doc-status h4{margin:14px 0 4px;font:600 14px var(--font-ui);color:var(--fg-1)}
+.doc-status p{margin:0;font:400 13px/1.5 var(--font-ui);color:var(--fg-3)}
+.doc-vo{display:inline-flex;font:500 12px var(--font-ui);color:var(--fg-3);box-shadow:inset 0 0 0 1px var(--border-subtle);border-radius:4px;padding:3px 7px;align-self:flex-start;margin:0}
+code{font:500 13px var(--font-num);color:var(--fg-1)}
+</style>
+</helmet>
+<main class="doc" data-testid="page-containers">
+
+<section class="doc-cat" data-testid="section-containers"><h2>Containers</h2><p>Enclose only when it marks a real boundary. Inside a card, whitespace and alignment do the grouping.</p>
+
+<div class="doc-ex" data-testid="ex-card"><header><h3>Card</h3><p>Persistent information: a title row with status at the right, grouped details, actions at the bottom left with the primary first. No border — the lighter surface is the edge.</p></header><div class="doc-stage"><div class="doc-grid2">
+<section class="fm-card" aria-labelledby="c1t"><div class="fm-card__head"><div><h3 class="fm-card__title" id="c1t">Table 3</h3><p class="fm-card__sub">Open singles · Round of 32</p></div><span class="live-marker">Live</span></div>
+<div class="fm-card__body">
+<article class="fm-match" data-state="live" aria-label="Patel, Meera vs Wójcik-Szymańska, Agnieszka">
+<div class="fm-match__p fm-match__cols" aria-hidden="true"><span></span><span></span><span>Games</span><span>Points</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Patel, Meera</span><span></span><span class="fm-match__games" aria-label="2 games won">2</span><span class="fm-match__pts" aria-label="9 points in this game">9</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Wójcik-Szymańska, Agnieszka</span><span><span class="serve-marker" role="img" aria-label="Serving"></span></span><span class="fm-match__games" aria-label="2 games won">2</span><span class="fm-match__pts" aria-label="9 points in this game">9</span></div>
+<button class="fm-match__toggle" aria-expanded="false">Game scores<span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></span></button>
+</article></div>
+<div class="fm-card__foot"><a class="fm-btn fm-btn--secondary" href="Match.dc.html">Open scoring</a><button class="fm-btn fm-btn--ghost">Move table</button></div></section>
+<section class="fm-card" aria-labelledby="c2t"><div class="fm-card__head"><div><h3 class="fm-card__title" id="c2t">Wójcik-Szymańska, Agnieszka</h3><p class="fm-card__sub">Northside · seed 3</p></div></div>
+<div class="fm-card__body"><dl class="fm-dl"><div><dt>Rating</dt><dd class="num">2,088</dd></div><div><dt>Today</dt><dd>Won 2, lost 0</dd></div><div><dt>Next</dt><dd>12:40 · Table 1</dd></div><div><dt>Events</dt><dd>Open singles, Open doubles</dd></div></dl></div>
+<div class="fm-card__foot"><button class="fm-btn fm-btn--secondary">View matches</button><button class="fm-btn fm-btn--ghost">Message</button></div></section>
+</div></div></div>
+
+<div class="doc-ex" data-testid="ex-scroll-area"><header><h3>Scroll area</h3><p>Lives inside its card — no extra frame. The column heading sticks; the scrollbar is the only extra chrome.</p></header><div class="doc-stage">
+<section class="fm-card" style="max-width:520px" aria-labelledby="sct"><div class="fm-card__head"><div><h3 class="fm-card__title" id="sct">Check-in</h3><p class="fm-card__sub">12 of 16 players here</p></div><button class="fm-btn fm-btn--secondary fm-btn--sm">Check in all</button></div>
+<div class="fm-card__body" style="padding-top:8px"><div class="fm-scroll" style="max-height:236px" tabindex="0" aria-label="Players"><div class="fm-scroll__head">Player</div>
+<ul class="fm-list" style="padding-right:8px">
+<li><label class="fm-check" style="width:100%"><input type="checkbox" checked="{{ yes }}">Nguyen, Thanh</label></li>
+<li><label class="fm-check" style="width:100%"><input type="checkbox" checked="{{ yes }}">Okafor-Adeyemi, Daniel</label></li>
+<li><label class="fm-check" style="width:100%"><input type="checkbox" checked="{{ yes }}">Johansen-Whitfield, Annika</label></li>
+<li><label class="fm-check" style="width:100%"><input type="checkbox" checked="{{ yes }}">Patel, Meera</label></li>
+<li><label class="fm-check" style="width:100%"><input type="checkbox" checked="{{ yes }}">Park, Ji-ho</label></li>
+<li><label class="fm-check" style="width:100%"><input type="checkbox" checked="{{ yes }}">Wójcik-Szymańska, Agnieszka</label></li>
+<li><label class="fm-check" style="width:100%"><input type="checkbox" checked="{{ yes }}">Chen, Wei</label></li>
+<li><label class="fm-check" style="width:100%"><input type="checkbox" checked="{{ yes }}">Ali, Rashid</label></li>
+<li><label class="fm-check" style="width:100%"><input type="checkbox" checked="{{ yes }}">Moreau, Élodie</label></li>
+<li><label class="fm-check" style="width:100%"><input type="checkbox">Kim, Hyun-woo</label></li>
+<li><label class="fm-check" style="width:100%"><input type="checkbox">Lindqvist, Erik</label></li>
+<li><label class="fm-check" style="width:100%"><input type="checkbox">Fernández-Castillo, Marisol</label></li>
+</ul></div></div></section></div></div>
+
+<div class="doc-ex" style="grid-template-columns:minmax(0,1fr)" data-testid="ex-split-view"><header style="max-width:640px"><h3>Split view</h3><p>Schedule beside match details, with the conflict on Table 2 selected. Panes are separated by space; the handle is the one drawn element. Now is fixed at 11:47.</p></header><div class="doc-stage">
+<div class="fm-split-host"><div class="fm-split" style="--split:66%">
+<div style="min-width:0"><div class="fm-scroll" tabindex="0" aria-label="Schedule timeline" style="padding-bottom:8px">
+<div class="fm-timeline" aria-label="Schedule, 10:30 to 13:00"><span aria-hidden="true"></span>
+<div class="fm-timeline__ruler" aria-hidden="true" style="width:calc(150 * var(--ppm))"><span style="left:calc(0 * var(--ppm))">10:30</span><span style="left:calc(30 * var(--ppm))">11:00</span><span style="left:calc(60 * var(--ppm))">11:30</span><span style="left:calc(90 * var(--ppm))">12:00</span><span style="left:calc(120 * var(--ppm))">12:30</span><span class="now" style="left:calc(77 * var(--ppm))">Now 11:47</span></div>
+
+<div class="fm-timeline__table">Table 1</div><div class="fm-timeline__track" role="group" aria-label="Table 1" style="width:calc(150 * var(--ppm))">
+<button class="fm-slot" data-state="final" aria-pressed="false" style="left:calc(0 * var(--ppm));width:calc(35 * var(--ppm) - 6px)"><span class="fm-slot__status">Final <span class="num">3–1</span></span><span class="fm-slot__names"><span>Nguyen</span><span>Silva</span></span><span class="fm-slot__time">10:30–11:05</span><span class="fm-sr">Nguyen, Thanh vs Silva, Rafael · Table 1 · 10:30–11:05</span></button>
+<button class="fm-slot" data-state="live" aria-pressed="false" style="left:calc(40 * var(--ppm));width:calc(35 * var(--ppm) - 6px)"><span class="fm-slot__status live-marker">Live</span><span class="fm-slot__names"><span>Okafor-Adeyemi</span><span>Johansen-Whitfield</span></span><span class="fm-slot__time">since 11:10</span><span class="fm-sr">Okafor-Adeyemi, Daniel vs Johansen-Whitfield, Annika · Table 1 · since 11:10</span></button>
+<button class="fm-slot" data-state="upcoming" aria-pressed="false" style="left:calc(90 * var(--ppm));width:calc(35 * var(--ppm) - 6px)"><span class="fm-slot__names"><span>Chen</span><span>Ali</span></span><span class="fm-slot__time">12:00–12:35</span><span class="fm-sr">Chen, Wei vs Ali, Rashid · Table 1 · 12:00–12:35</span></button>
+<span class="fm-timeline__now" style="left:calc(77 * var(--ppm))"></span></div>
+
+<div class="fm-timeline__table">Table 2</div><div class="fm-timeline__track" role="group" aria-label="Table 2" style="width:calc(150 * var(--ppm))">
+<button class="fm-slot" data-state="final" aria-pressed="false" style="left:calc(0 * var(--ppm));width:calc(30 * var(--ppm) - 6px)"><span class="fm-slot__status">Final <span class="num">3–0</span></span><span class="fm-slot__names"><span>Lindqvist</span><span>Haddad</span></span><span class="fm-slot__time">10:30–11:00</span><span class="fm-sr">Lindqvist, Erik vs Haddad, Youssef · Table 2 · 10:30–11:00</span></button>
+<div class="fm-slot" data-state="free" style="left:calc(35 * var(--ppm));width:calc(40 * var(--ppm) - 6px)"><span class="fm-slot__status">Free</span><span class="fm-slot__time">11:05–11:45</span></div>
+<button class="fm-slot" data-state="conflict" aria-pressed="true" style="left:calc(80 * var(--ppm));width:calc(35 * var(--ppm) - 6px)"><span class="fm-slot__status">Needs decision</span><span class="fm-slot__names"><span>Patel</span><span>Park</span></span><span class="fm-slot__time">11:50–12:25</span><span class="fm-sr">Patel, Meera vs Park, Ji-ho · Table 2 · 11:50–12:25 · Patel would rest 5 min</span></button>
+<span class="fm-timeline__now" style="left:calc(77 * var(--ppm))"></span></div>
+
+<div class="fm-timeline__table">Table 3</div><div class="fm-timeline__track" role="group" aria-label="Table 3" style="width:calc(150 * var(--ppm))">
+<button class="fm-slot" data-state="final" aria-pressed="false" style="left:calc(0 * var(--ppm));width:calc(35 * var(--ppm) - 6px)"><span class="fm-slot__status">Final <span class="num">3–2</span></span><span class="fm-slot__names"><span>Moreau</span><span>Kim</span></span><span class="fm-slot__time">10:30–11:05</span><span class="fm-sr">Moreau, Élodie vs Kim, Hyun-woo · Table 3 · 10:30–11:05</span></button>
+<button class="fm-slot" data-state="live" aria-pressed="false" style="left:calc(35 * var(--ppm));width:calc(40 * var(--ppm) - 6px)"><span class="fm-slot__status live-marker">Live</span><span class="fm-slot__names"><span>Patel</span><span>Wójcik-Szymańska</span></span><span class="fm-slot__time">since 11:05</span><span class="fm-sr">Patel, Meera vs Wójcik-Szymańska, Agnieszka · Table 3 · since 11:05</span></button>
+<button class="fm-slot" data-state="upcoming" aria-pressed="false" style="left:calc(105 * var(--ppm));width:calc(35 * var(--ppm) - 6px)"><span class="fm-slot__status rest">Lindqvist rests to <span class="num">12:10</span></span><span class="fm-slot__names"><span>Dubois</span><span>Lindqvist</span></span><span class="fm-slot__time">12:15–12:50</span><span class="fm-sr">Dubois, Camille vs Lindqvist, Erik · Table 3 · 12:15–12:50</span></button>
+<span class="fm-timeline__now" style="left:calc(77 * var(--ppm))"></span></div>
+
+<div class="fm-timeline__table">Table 4</div><div class="fm-timeline__track" role="group" aria-label="Table 4" style="width:calc(150 * var(--ppm))">
+<button class="fm-slot" data-state="offline" aria-pressed="false" style="left:calc(30 * var(--ppm));width:calc(40 * var(--ppm) - 6px)"><span class="fm-slot__status">Scorer offline</span><span class="fm-slot__names"><span>Rossi / Haddad</span><span>Fernández-Castillo / Kim</span></span><span class="fm-slot__time">since 11:00</span><span class="fm-sr">Rossi, Giulia / Haddad, Youssef vs Fernández-Castillo, Marisol / Kim, Hyun-woo · Table 4 · since 11:00</span></button>
+<button class="fm-slot" data-state="upcoming" aria-pressed="false" style="left:calc(95 * var(--ppm));width:calc(35 * var(--ppm) - 6px)"><span class="fm-slot__names"><span>Moreau</span><span>Silva</span></span><span class="fm-slot__time">12:05–12:40</span><span class="fm-sr">Moreau, Élodie vs Silva, Rafael · Table 4 · 12:05–12:40</span></button>
+<span class="fm-timeline__now" style="left:calc(77 * var(--ppm))"></span></div>
+</div></div></div>
+<button class="fm-split__handle" role="separator" aria-orientation="vertical" aria-label="Resize schedule and match details" aria-valuemin="35" aria-valuemax="72" aria-valuenow="66"></button>
+<div>
+<section class="fm-card" aria-labelledby="dt-b3"><div class="fm-card__head"><div><h3 class="fm-card__title" id="dt-b3">Patel vs Park</h3><p class="fm-card__sub">Open singles · Round of 16</p></div><span class="fm-status fm-status--conflict"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg></span>Needs decision</span></div>
+<div class="fm-card__body">
+<article class="fm-match fm-match--lg" data-state="conflict" aria-label="Patel, Meera vs Park, Ji-ho"><div class="fm-match__p"><span class="fm-match__name">Patel, Meera<small>Riverside TT</small></span></div><div class="fm-match__p"><span class="fm-match__name">Park, Ji-ho<small>Eastgate</small></span></div></article>
+<div class="fm-alert fm-alert--warning" role="group" aria-label="Scheduling conflict"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg></span><p class="fm-alert__title">Patel would get 5 minutes’ rest</p><p class="fm-alert__body">Her match on Table 3 is running 10 minutes over. Starting at 12:05 keeps the 15-minute minimum.</p><div class="fm-alert__actions"><button class="fm-btn fm-btn--primary fm-btn--sm">Move to 12:05</button><button class="fm-btn fm-btn--secondary fm-btn--sm">Keep 11:50</button></div></div>
+<dl class="fm-dl"><div><dt>Event</dt><dd>Open singles</dd></div><div><dt>Round</dt><dd>Round of 16</dd></div><div><dt>Table</dt><dd>Table 2</dd></div><div><dt>Start</dt><dd>11:50</dd></div></dl></div>
+<div class="fm-card__foot"><button class="fm-btn fm-btn--primary">Call to table</button><button class="fm-btn fm-btn--ghost">Reschedule</button><button class="fm-btn fm-btn--danger end">Withdraw a player…</button></div></section>
+</div>
+</div></div></div></div>
+</section>
+
+<section class="doc-cat" data-testid="section-feedback"><h2>Feedback</h2><p>Match the weight of the message to what you need to do about it.</p>
+
+<div class="doc-ex" data-testid="ex-toast"><header><h3>Toast</h3><p>Confirms something you just did. Compact, raised, bottom centre. Undo when the action can be reversed. Leaves after 6 s; never for errors.</p></header><div class="doc-stage">
+<div class="fm-toast" role="status"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><span class="fm-toast__msg">Chen vs Ali called to Table 1</span><button class="fm-btn fm-btn--sm fm-toast__action">Undo</button><button class="fm-btn fm-btn--sm fm-toast__close" aria-label="Dismiss"><span class="fm-ic fm-ic--sm"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></span></button></div>
+<div class="fm-toast" role="status" data-testid="toast-no-undo"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><span class="fm-toast__msg">Table 4 marked free</span><button class="fm-btn fm-btn--sm fm-toast__close" aria-label="Dismiss"><span class="fm-ic fm-ic--sm"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></span></button></div>
+<div class="fm-toast fm-toast--info" role="status" data-testid="toast-info"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg></span><span class="fm-toast__msg">Works on the tournament screen, not in this gallery</span></div>
+<p class="doc-vo">Visual only</p></div></div>
+
+<div class="doc-ex" data-testid="ex-inline-notice"><header><h3>Inline notice</h3><p>A sentence with an icon, inside the content it's about. No box. Use for rest times, timing info and quiet confirmations.</p></header><div class="doc-stage"><div style="display:flex;flex-direction:column;gap:14px;max-width:560px">
+<p class="fm-notice fm-notice--rest"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg></span><span><b>Lindqvist rests until 12:10.</b> Table 3 can start after that.</span></p>
+<p class="fm-notice"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg></span><span>Scores update live for spectators; ratings update when a result is saved.</span></p>
+<p class="fm-notice fm-notice--success"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><span>Schedule updated. Expected finish 18:45.</span></p>
+<p class="fm-notice fm-notice--warning"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg></span><span>Kept at 11:50 by the organizer. Patel gets 5 minutes’ rest, under the 15-minute minimum.</span></p>
+</div></div></div>
+
+<div class="doc-ex" data-testid="ex-warning-and-error"><header><h3>Warning and error</h3><p>The title says what's wrong, the body why, the buttons fix it. They stay until resolved. Errors use <code>role="alert"</code>; warnings don't interrupt.</p></header><div class="doc-stage" style="max-width:620px">
+<div class="fm-alert fm-alert--warning"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg></span><p class="fm-alert__title">Okafor-Adeyemi is booked on two tables at 12:00</p><p class="fm-alert__body">His doubles on Table 4 overlaps his singles on Table 1.</p><div class="fm-alert__actions"><button class="fm-btn fm-btn--primary fm-btn--sm">Move doubles to 12:40</button><button class="fm-btn fm-btn--secondary fm-btn--sm">Choose another time</button></div></div>
+<div class="fm-alert fm-alert--error" role="alert"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h.01"></path><path d="M8.5 16.429a5 5 0 0 1 7 0"></path><path d="M5 12.859a10 10 0 0 1 5.17-2.69"></path><path d="M19 12.859a10 10 0 0 0-2.007-1.523"></path><path d="M2 8.82a15 15 0 0 1 4.177-2.643"></path><path d="M22 8.82a15 15 0 0 0-11.288-3.764"></path><path d="m2 2 20 20"></path></svg></span><p class="fm-alert__title">Table 4 scorer is offline</p><p class="fm-alert__body">Last score arrived at 11:42. Points entered on that device will sync when it reconnects.</p><div class="fm-alert__actions"><button class="fm-btn fm-btn--primary fm-btn--sm">Score from this device</button><button class="fm-btn fm-btn--secondary fm-btn--sm" aria-busy="true">Sending…</button></div></div>
+</div></div>
+
+<div class="doc-ex" data-testid="ex-status-set"><header><h3>Status set</h3><p>Reviewed together so no two read alike. Each has its own hue, a non-colour cue and a place it belongs.</p></header><div class="doc-stage"><div class="doc-status">
+<div><span class="live-marker">Live</span><h4>Live</h4><p>Red dot + word. Static. One per match, never on the border.</p></div>
+<div><span class="fm-status fm-status--danger"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4"></path><path d="M12 16h.01"></path></svg></span>Didn't sync</span><h4>Error</h4><p>Something failed. Red icon + sentence + recovery action. Persists.</p></div>
+<div><button class="fm-btn fm-btn--danger fm-btn--sm">Withdraw…</button><h4>Destructive</h4><p>Red outline on the action only. Always confirmed in a dialog.</p></div>
+<div><span class="fm-rest"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg></span>Rest until <span class="num">12:10</span></span><h4>Rest</h4><p>Blue clock + the end time. Information, not a problem.</p></div>
+<div><span class="fm-status fm-status--conflict"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg></span>Needs decision</span><h4>Conflict</h4><p>Amber triangle. Organizer screens, always with a suggested fix.</p></div>
+<div><span class="fm-status fm-status--offline">Scorer offline</span><h4>Disconnected</h4><p>Hollow grey dot. Scores shown greyed with the last update time.</p></div>
+</div></div></div>
+</section>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":2900}}'>
+class Component extends DCLogic {
+renderVals() {
+return { yes: true };
+}
+}
+</script>
+</body>
+</html>

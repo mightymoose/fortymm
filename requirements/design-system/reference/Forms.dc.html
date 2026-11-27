@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FortyMM showcase · Fields, choices and selection</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="ds/fortymm/colors_and_type.css">
+<link rel="stylesheet" href="ds/fortymm/ui_kits/components/kit.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#0B0D12}
+.doc{box-sizing:border-box;width:1280px;padding:64px 64px 96px;background:var(--bg-app);color:var(--fg-1);font-family:var(--font-ui)}
+.doc-cat+.doc-cat{margin-top:112px}
+.doc-cat>h2{margin:0;font:600 30px/1.2 var(--font-ui);letter-spacing:-0.01em;color:var(--fg-1)}
+.doc-cat>p{margin:10px 0 0;max-width:700px;font:400 16px/1.55 var(--font-ui);color:var(--fg-3)}
+.doc-ex{margin-top:56px;display:grid;grid-template-columns:250px minmax(0,1fr);gap:20px 56px}
+.doc-ex>header h3{margin:0 0 8px;font:600 18px/1.3 var(--font-ui);color:var(--fg-1)}
+.doc-ex>header p{margin:0 0 8px;font:400 14px/1.6 var(--font-ui);color:var(--fg-3)}
+.doc-stage{min-width:0;display:flex;flex-direction:column;gap:28px}
+.doc-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:32px}
+.doc-grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:32px;align-items:start}
+.doc-cap{margin:0 0 10px;font:500 13px var(--font-ui);color:var(--fg-3)}
+.doc-use{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:36px 40px;margin-top:48px}
+.doc-use h4{margin:16px 0 6px;font:600 15px var(--font-ui);color:var(--fg-1)}
+.doc-use p{margin:0;font:400 14px/1.55 var(--font-ui);color:var(--fg-3)}
+</style>
+</helmet>
+<main class="doc" data-testid="page-forms">
+
+<section class="doc-cat" data-testid="section-forms"><h2>Fields and choices</h2><p>Field and control edges are brighter than dividers, so you can find where to tap on a dark table-side screen.</p>
+
+<div class="doc-ex" data-testid="ex-text-field"><header><h3>Text field</h3><p>Label above, help below. An error adds a red edge, an icon and a sentence that says how to fix it — all three stay while the field is focused.</p></header><div class="doc-stage"><div class="doc-grid">
+<div class="fm-field"><label class="fm-label" for="f1">Player name</label><input id="f1" class="fm-input" value="Johansen-Whitfield, Annika" aria-describedby="f1h"><p class="fm-help" id="f1h">Surname first, as it should appear on the draw.</p></div>
+<div class="fm-field"><label class="fm-label" for="f2">Club <span class="opt">(optional)</span></label><input id="f2" class="fm-input" placeholder="Search clubs"></div>
+<div class="fm-field"><label class="fm-label" for="f3">Table</label><input id="f3" class="fm-input fm-input--num" value="9" inputmode="numeric" aria-invalid="true" aria-describedby="f3e"><p class="fm-error" id="f3e"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4"></path><path d="M12 16h.01"></path></svg></span><span>This venue has 6 tables. Enter 1–6.</span></p></div>
+<div class="fm-field"><label class="fm-label" for="f4" style="color:var(--fg-3)">Entry fee</label><input id="f4" class="fm-input" value="Free" disabled="{{ yes }}" aria-describedby="f4h"><p class="fm-help" id="f4h">Set by the club. Can't be changed here.</p></div>
+<div class="fm-field"><label class="fm-label" for="f5">Event</label><select id="f5" class="fm-select"><option>Open singles</option><option>Under 18 singles</option><option>Over 40 singles</option><option>Open doubles</option></select></div>
+<div class="fm-field"><label class="fm-label" for="f6">Note for players</label><textarea id="f6" class="fm-textarea" value="Warm-up on tables 5 and 6 from 9:00."></textarea></div>
+</div></div></div>
+
+<div class="doc-ex" data-testid="ex-code-input"><header><h3>Code input</h3><p>Joining a tournament with the organizer's 6-character code. Characters spread across the boxes; letters and numbers only.</p></header><div class="doc-stage"><div class="doc-grid2">
+<div class="fm-field" data-testid="code-input"><span class="fm-label" id="code1l">Tournament code</span>
+<div class="fm-code" role="group" aria-labelledby="code1l"><input class="fm-input" value="S" aria-label="Character 1 of 6"><input class="fm-input" value="P" aria-label="Character 2 of 6"><input class="fm-input" value="2" aria-label="Character 3 of 6"><span class="fm-code__sep" aria-hidden="true"></span><input class="fm-input" value="6" aria-label="Character 4 of 6"><input class="fm-input" value="R" aria-label="Character 5 of 6"><input class="fm-input" value="V" aria-label="Character 6 of 6"></div>
+<p class="fm-notice fm-notice--success"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><span><b>Spring Open 2026</b> · Riverside Sports Hall · 11 April</span></p></div>
+<div class="fm-field" data-testid="code-input-error"><span class="fm-label" id="code3l">Tournament code</span>
+<div class="fm-code" role="group" aria-labelledby="code3l"><input class="fm-input" value="S" aria-invalid="true" aria-label="Character 1 of 6"><input class="fm-input" value="P" aria-invalid="true" aria-label="Character 2 of 6"><input class="fm-input" value="2" aria-invalid="true" aria-label="Character 3 of 6"><span class="fm-code__sep" aria-hidden="true"></span><input class="fm-input" value="6" aria-invalid="true" aria-label="Character 4 of 6"><input class="fm-input" value="R" aria-invalid="true" aria-label="Character 5 of 6"><input class="fm-input" value="X" aria-invalid="true" aria-label="Character 6 of 6"></div>
+<p class="fm-error"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4"></path><path d="M12 16h.01"></path></svg></span><span>No tournament uses that code. Check the poster or ask the desk.</span></p></div>
+<div class="fm-field" data-testid="code-input-disabled"><span class="fm-label" id="code2l" style="color:var(--fg-3)">Tournament code</span>
+<div class="fm-code" role="group" aria-labelledby="code2l"><input class="fm-input" disabled="{{ yes }}" aria-label="Character 1 of 6"><input class="fm-input" disabled="{{ yes }}" aria-label="Character 2 of 6"><input class="fm-input" disabled="{{ yes }}" aria-label="Character 3 of 6"><span class="fm-code__sep" aria-hidden="true"></span><input class="fm-input" disabled="{{ yes }}" aria-label="Character 4 of 6"><input class="fm-input" disabled="{{ yes }}" aria-label="Character 5 of 6"><input class="fm-input" disabled="{{ yes }}" aria-label="Character 6 of 6"></div>
+<p class="fm-help">Entries for this tournament have closed.</p></div>
+</div></div></div>
+
+<div class="doc-ex" data-testid="ex-combobox"><header><h3>Combobox</h3><p>Searchable player picker, shown open with “ngu” typed. Matches are bolded; club and rating tell same-name players apart.</p></header><div class="doc-stage"><div class="doc-grid2">
+<div class="fm-field" style="padding-bottom:150px"><label class="fm-label" for="cb1">Opponent</label>
+<div class="fm-combo" data-testid="combobox-opponent"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg></span><input id="cb1" class="fm-input is-focus" value="ngu" role="combobox" aria-expanded="true" aria-controls="cb1l">
+<ul class="fm-combo__list fm-overlay" id="cb1l" role="listbox" aria-label="Players">
+<li class="fm-combo__opt" role="option" aria-selected="true"><span class="ck"></span><b><mark>Ngu</mark>yen, Thanh</b><small>Riverside TT</small><span class="r">2,145</span></li>
+<li class="fm-combo__opt" role="option" aria-selected="false"><span class="ck"></span><b><mark>Ngu</mark>yen, Linh</b><small>Eastgate</small><span class="r">1,702</span></li>
+</ul></div></div>
+<div class="fm-field"><label class="fm-label" for="cb2">Opponent</label>
+<div class="fm-combo"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg></span><input id="cb2" class="fm-input" placeholder="Search players or clubs" aria-describedby="cb2h"></div>
+<p class="fm-help" id="cb2h">Only checked-in players are listed.</p></div>
+</div></div></div>
+
+<div class="doc-ex" data-testid="ex-date-picker"><header><h3>Date picker</h3><p>Typed or picked. Selected day in orange; today outlined; past days struck through. Today is fixed at 10 April 2026.</p></header><div class="doc-stage"><div class="doc-grid2">
+<div class="fm-field" data-testid="datepicker-field"><label class="fm-label" for="dp1">Tournament date</label><div class="fm-datefield"><input id="dp1" class="fm-input" value="Saturday 11 April 2026" aria-describedby="dp1h"><button class="fm-btn fm-btn--secondary fm-btn--icon" aria-label="Open calendar"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 2v4"></path><path d="M16 2v4"></path><rect width="18" height="18" x="3" y="4" rx="2"></rect><path d="M3 10h18"></path></svg></span></button></div><p class="fm-help" id="dp1h">Players see this on the entry page.</p></div>
+<div data-testid="datepicker-inline"><p class="doc-cap">Inline, for scheduling screens</p>
+<div class="fm-cal fm-cal--inline" role="group" aria-label="Choose date">
+<div class="fm-cal__head"><button class="fm-btn fm-btn--ghost fm-btn--sm fm-btn--icon" aria-label="Previous month"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg></span></button><span class="fm-cal__title">April 2026</span><button class="fm-btn fm-btn--ghost fm-btn--sm fm-btn--icon" aria-label="Next month"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg></span></button></div>
+<table role="grid"><thead><tr><th scope="col" abbr="Monday">Mo</th><th scope="col" abbr="Tuesday">Tu</th><th scope="col" abbr="Wednesday">We</th><th scope="col" abbr="Thursday">Th</th><th scope="col" abbr="Friday">Fr</th><th scope="col" abbr="Saturday">Sa</th><th scope="col" abbr="Sunday">Su</th></tr></thead><tbody>
+<tr><td><button class="fm-cal__day out" disabled="{{ yes }}">30</button></td><td><button class="fm-cal__day out" disabled="{{ yes }}">31</button></td><td><button class="fm-cal__day" disabled="{{ yes }}">1</button></td><td><button class="fm-cal__day" disabled="{{ yes }}">2</button></td><td><button class="fm-cal__day" disabled="{{ yes }}">3</button></td><td><button class="fm-cal__day" disabled="{{ yes }}">4</button></td><td><button class="fm-cal__day" disabled="{{ yes }}">5</button></td></tr>
+<tr><td><button class="fm-cal__day" disabled="{{ yes }}">6</button></td><td><button class="fm-cal__day" disabled="{{ yes }}">7</button></td><td><button class="fm-cal__day" disabled="{{ yes }}">8</button></td><td><button class="fm-cal__day" disabled="{{ yes }}">9</button></td><td><button class="fm-cal__day today" aria-current="date">10</button></td><td><button class="fm-cal__day" aria-selected="true">11</button></td><td><button class="fm-cal__day">12</button></td></tr>
+<tr><td><button class="fm-cal__day">13</button></td><td><button class="fm-cal__day">14</button></td><td><button class="fm-cal__day">15</button></td><td><button class="fm-cal__day">16</button></td><td><button class="fm-cal__day">17</button></td><td><button class="fm-cal__day">18</button></td><td><button class="fm-cal__day">19</button></td></tr>
+<tr><td><button class="fm-cal__day">20</button></td><td><button class="fm-cal__day">21</button></td><td><button class="fm-cal__day">22</button></td><td><button class="fm-cal__day">23</button></td><td><button class="fm-cal__day">24</button></td><td><button class="fm-cal__day">25</button></td><td><button class="fm-cal__day">26</button></td></tr>
+<tr><td><button class="fm-cal__day">27</button></td><td><button class="fm-cal__day">28</button></td><td><button class="fm-cal__day">29</button></td><td><button class="fm-cal__day">30</button></td><td><button class="fm-cal__day out">1</button></td><td><button class="fm-cal__day out">2</button></td><td><button class="fm-cal__day out">3</button></td></tr>
+</tbody></table>
+<div class="fm-cal__foot"><span>Today: Friday 10 April</span><span>Selected: Saturday 11 April</span></div>
+</div></div>
+</div></div></div>
+
+<div class="doc-ex" data-testid="ex-checkbox-radio-and-switch"><header><h3>Checkbox, radio and switch</h3><p>Native inputs, keyboard-operable. Unchecked boxes have a 1.5px bright edge. Switches show state by fill and knob position.</p></header><div class="doc-stage"><div class="doc-grid">
+<fieldset class="fm-choices"><legend>Before the match</legend><label class="fm-check"><input type="checkbox" checked="{{ yes }}">Checked in</label><label class="fm-check"><input type="checkbox">Needs an umpire</label><label class="fm-check"><input type="checkbox" ref="{{ mixedRef }}">All players (12 of 16)</label><label class="fm-check"><input type="checkbox" disabled="{{ yes }}">Paid online (not enabled)</label></fieldset>
+<fieldset class="fm-choices"><legend>Match length</legend><label class="fm-radio"><input type="radio" name="bo">Best of 3</label><label class="fm-radio"><input type="radio" name="bo" checked="{{ yes }}">Best of 5</label><label class="fm-radio"><input type="radio" name="bo">Best of 7</label><label class="fm-radio"><input type="radio" name="bo" disabled="{{ yes }}">Timed (not for this event)</label></fieldset>
+<div class="fm-choices"><span class="fm-label">Calling</span><button class="fm-switch" role="switch" aria-checked="true"><span class="fm-switch__track"></span>Call players automatically</button><button class="fm-switch" role="switch" aria-checked="false"><span class="fm-switch__track"></span>Show ratings to spectators</button><button class="fm-switch" role="switch" aria-checked="false" disabled="{{ yes }}"><span class="fm-switch__track"></span>Text players (needs phone numbers)</button></div>
+</div>
+<div class="fm-field" style="max-width:420px"><label class="fm-label" for="rg">Minimum rest between matches · <span class="num">15 min</span></label><input id="rg" type="range" class="fm-range" min="5" max="30" step="5" value="15"></div></div></div>
+</section>
+
+<section class="doc-cat" data-testid="section-selection"><h2>Selection</h2><p>Four controls that look related but do different jobs.</p>
+<div class="doc-use">
+<div data-testid="ex-tabs"><div class="fm-tabs" role="tablist" aria-label="Tournament sections"><button role="tab" aria-selected="true">Overview</button><button role="tab" aria-selected="false">Schedule</button><button role="tab" aria-selected="false">Standings</button></div>
+<div role="tabpanel" style="padding-top:12px"><p class="fm-help" style="margin:0">32 players · 4 tables · expected finish 18:45</p></div>
+<h4>Tabs</h4><p>Move between sibling sections of one page. The whole content area changes.</p></div>
+<div data-testid="ex-segmented"><div class="fm-seg" role="radiogroup" aria-label="Schedule view"><button role="radio" aria-checked="true">Timeline</button><button role="radio" aria-checked="false">List</button><button role="radio" aria-checked="false">By player</button></div>
+<h4>Segmented control</h4><p>Change how the same data is shown. Exactly one option is always on. Use 2–4 short options.</p></div>
+<div data-testid="ex-filter-chips"><div class="fm-chips" aria-label="Filter by event"><button class="fm-chip" aria-pressed="false">All events</button><button class="fm-chip" aria-pressed="true">Open singles</button><button class="fm-chip" aria-pressed="true">Under 18</button><button class="fm-chip" aria-pressed="false">Doubles</button></div>
+<h4>Filter chips</h4><p>Narrow a list. Several events can be on together. "All events" clears them, and switches back on when none are left.</p><p class="fm-help" style="margin-top:8px">Showing: Open singles, Under 18</p></div>
+<div data-testid="ex-switch"><button class="fm-switch" role="switch" aria-checked="true"><span class="fm-switch__track"></span>Call players automatically</button>
+<h4>Switch</h4><p>A setting that takes effect immediately and stays. Never for filtering or changing views.</p></div>
+</div></section>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":2700}}'>
+class Component extends DCLogic {
+renderVals() {
+return {
+yes: true,
+mixedRef: (el) => { if (el) el.indeterminate = true; }
+};
+}
+}
+</script>
+</body>
+</html>
