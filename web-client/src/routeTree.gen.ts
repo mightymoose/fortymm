@@ -11,6 +11,14 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as HealthRouteImport } from './routes/health'
+import { Route as DesignSystemIndexRouteImport } from './routes/design-system/index'
+import { Route as DesignSystemContainersRouteImport } from './routes/design-system/containers'
+import { Route as DesignSystemFormsRouteImport } from './routes/design-system/forms'
+import { Route as DesignSystemMatchRouteImport } from './routes/design-system/match'
+import { Route as DesignSystemMoreRouteImport } from './routes/design-system/more'
+import { Route as DesignSystemOverlaysRouteImport } from './routes/design-system/overlays'
+import { Route as DesignSystemRolesRouteImport } from './routes/design-system/roles'
+import { Route as DesignSystemStatesRouteImport } from './routes/design-system/states'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -22,31 +30,134 @@ const HealthRoute = HealthRouteImport.update({
   path: '/health',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DesignSystemIndexRoute = DesignSystemIndexRouteImport.update({
+  id: '/design-system/',
+  path: '/design-system/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DesignSystemContainersRoute = DesignSystemContainersRouteImport.update({
+  id: '/design-system/containers',
+  path: '/design-system/containers',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DesignSystemFormsRoute = DesignSystemFormsRouteImport.update({
+  id: '/design-system/forms',
+  path: '/design-system/forms',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DesignSystemMatchRoute = DesignSystemMatchRouteImport.update({
+  id: '/design-system/match',
+  path: '/design-system/match',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DesignSystemMoreRoute = DesignSystemMoreRouteImport.update({
+  id: '/design-system/more',
+  path: '/design-system/more',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DesignSystemOverlaysRoute = DesignSystemOverlaysRouteImport.update({
+  id: '/design-system/overlays',
+  path: '/design-system/overlays',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DesignSystemRolesRoute = DesignSystemRolesRouteImport.update({
+  id: '/design-system/roles',
+  path: '/design-system/roles',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DesignSystemStatesRoute = DesignSystemStatesRouteImport.update({
+  id: '/design-system/states',
+  path: '/design-system/states',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/health': typeof HealthRoute
+  '/design-system/containers': typeof DesignSystemContainersRoute
+  '/design-system/forms': typeof DesignSystemFormsRoute
+  '/design-system/match': typeof DesignSystemMatchRoute
+  '/design-system/more': typeof DesignSystemMoreRoute
+  '/design-system/overlays': typeof DesignSystemOverlaysRoute
+  '/design-system/roles': typeof DesignSystemRolesRoute
+  '/design-system/states': typeof DesignSystemStatesRoute
+  '/design-system/': typeof DesignSystemIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/health': typeof HealthRoute
+  '/design-system/containers': typeof DesignSystemContainersRoute
+  '/design-system/forms': typeof DesignSystemFormsRoute
+  '/design-system/match': typeof DesignSystemMatchRoute
+  '/design-system/more': typeof DesignSystemMoreRoute
+  '/design-system/overlays': typeof DesignSystemOverlaysRoute
+  '/design-system/roles': typeof DesignSystemRolesRoute
+  '/design-system/states': typeof DesignSystemStatesRoute
+  '/design-system': typeof DesignSystemIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/health': typeof HealthRoute
+  '/design-system/containers': typeof DesignSystemContainersRoute
+  '/design-system/forms': typeof DesignSystemFormsRoute
+  '/design-system/match': typeof DesignSystemMatchRoute
+  '/design-system/more': typeof DesignSystemMoreRoute
+  '/design-system/overlays': typeof DesignSystemOverlaysRoute
+  '/design-system/roles': typeof DesignSystemRolesRoute
+  '/design-system/states': typeof DesignSystemStatesRoute
+  '/design-system/': typeof DesignSystemIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/health'
+  fullPaths:
+    | '/'
+    | '/health'
+    | '/design-system/containers'
+    | '/design-system/forms'
+    | '/design-system/match'
+    | '/design-system/more'
+    | '/design-system/overlays'
+    | '/design-system/roles'
+    | '/design-system/states'
+    | '/design-system/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/health'
-  id: '__root__' | '/' | '/health'
+  to:
+    | '/'
+    | '/health'
+    | '/design-system/containers'
+    | '/design-system/forms'
+    | '/design-system/match'
+    | '/design-system/more'
+    | '/design-system/overlays'
+    | '/design-system/roles'
+    | '/design-system/states'
+    | '/design-system'
+  id:
+    | '__root__'
+    | '/'
+    | '/health'
+    | '/design-system/containers'
+    | '/design-system/forms'
+    | '/design-system/match'
+    | '/design-system/more'
+    | '/design-system/overlays'
+    | '/design-system/roles'
+    | '/design-system/states'
+    | '/design-system/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   HealthRoute: typeof HealthRoute
+  DesignSystemContainersRoute: typeof DesignSystemContainersRoute
+  DesignSystemFormsRoute: typeof DesignSystemFormsRoute
+  DesignSystemMatchRoute: typeof DesignSystemMatchRoute
+  DesignSystemMoreRoute: typeof DesignSystemMoreRoute
+  DesignSystemOverlaysRoute: typeof DesignSystemOverlaysRoute
+  DesignSystemRolesRoute: typeof DesignSystemRolesRoute
+  DesignSystemStatesRoute: typeof DesignSystemStatesRoute
+  DesignSystemIndexRoute: typeof DesignSystemIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -65,12 +176,76 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof HealthRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/design-system/': {
+      id: '/design-system/'
+      path: '/design-system'
+      fullPath: '/design-system/'
+      preLoaderRoute: typeof DesignSystemIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/design-system/containers': {
+      id: '/design-system/containers'
+      path: '/design-system/containers'
+      fullPath: '/design-system/containers'
+      preLoaderRoute: typeof DesignSystemContainersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/design-system/forms': {
+      id: '/design-system/forms'
+      path: '/design-system/forms'
+      fullPath: '/design-system/forms'
+      preLoaderRoute: typeof DesignSystemFormsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/design-system/match': {
+      id: '/design-system/match'
+      path: '/design-system/match'
+      fullPath: '/design-system/match'
+      preLoaderRoute: typeof DesignSystemMatchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/design-system/more': {
+      id: '/design-system/more'
+      path: '/design-system/more'
+      fullPath: '/design-system/more'
+      preLoaderRoute: typeof DesignSystemMoreRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/design-system/overlays': {
+      id: '/design-system/overlays'
+      path: '/design-system/overlays'
+      fullPath: '/design-system/overlays'
+      preLoaderRoute: typeof DesignSystemOverlaysRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/design-system/roles': {
+      id: '/design-system/roles'
+      path: '/design-system/roles'
+      fullPath: '/design-system/roles'
+      preLoaderRoute: typeof DesignSystemRolesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/design-system/states': {
+      id: '/design-system/states'
+      path: '/design-system/states'
+      fullPath: '/design-system/states'
+      preLoaderRoute: typeof DesignSystemStatesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   HealthRoute: HealthRoute,
+  DesignSystemContainersRoute: DesignSystemContainersRoute,
+  DesignSystemFormsRoute: DesignSystemFormsRoute,
+  DesignSystemMatchRoute: DesignSystemMatchRoute,
+  DesignSystemMoreRoute: DesignSystemMoreRoute,
+  DesignSystemOverlaysRoute: DesignSystemOverlaysRoute,
+  DesignSystemRolesRoute: DesignSystemRolesRoute,
+  DesignSystemStatesRoute: DesignSystemStatesRoute,
+  DesignSystemIndexRoute: DesignSystemIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

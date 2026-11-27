@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 #MISE description="Run the Playwright e2e tests in the web-client container, e.g. `./bin/mise run web-client:e2e -- --grep home`"
 # Host-side: Playwright, its Chromium, and a Vite dev server all run inside one throwaway container.
-# The HTML report lands in web-client/playwright-report/ (bind-mounted).
+# The design system specs also need the reference server (design-system; its own container, not a
+# one-off `run` like requirements:design-system:reference:serve), started here if it isn't
+# running and stopped afterwards. The HTML report lands in web-client/playwright-report/ (bind-mounted).
 set -euo pipefail
 cd "$MISE_PROJECT_ROOT"
-exec docker compose run --rm --build web-client npx playwright test "$@"
+
+if ! docker compose ps --status running --format '{{.Name}}' design-system | grep -qv -- '-run-'; then
+  trap 'docker compose stop design-system >/dev/null 2>&1 || true' EXIT
+  docker compose up --detach --wait --build design-system >&2
+fi
+docker compose run --rm --build web-client npx playwright test "$@"
