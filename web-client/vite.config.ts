@@ -1,9 +1,14 @@
+import { tanstackRouter } from '@tanstack/router-plugin/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    // Must come before react().
+    tanstackRouter({ target: 'react', autoCodeSplitting: true }),
+    react(),
+  ],
   // Runs in a container (see docker-compose.yml): listen on all interfaces at a fixed
   // container port. Docker maps it to a random host port.
   server: {
