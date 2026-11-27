@@ -34,6 +34,7 @@ The app lives in `web-client/`. Node is installed in the image by mise from `web
 ./bin/mise run web-client:npm -- install <pkg>     # any npm command in the container
 ./bin/mise run web-client:npm -- run build
 ./bin/mise run web-client:npm -- run lint
+./bin/mise run web-client:api-client               # regenerate src/api/generated.ts from api/openapi.json (orval)
 ./bin/mise run web-client:e2e                      # Playwright e2e tests (Chromium, in the container)
 ./bin/mise run web-client:e2e -- --grep home       # any playwright test args
 ```

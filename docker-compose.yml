@@ -10,6 +10,8 @@ x-web-client: &web-client
     - ./web-client:/app/web-client
     # Keep the image's node_modules (Linux builds) instead of the host directory.
     - /app/web-client/node_modules
+    # The api's OpenAPI spec, read by orval to generate src/api/generated.ts (see orval.config.ts).
+    - ./api/openapi.json:/app/api/openapi.json:ro
   # Lets `docker compose up --wait` (the dev task) know when Vite is serving.
   healthcheck:
     test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:5173/"]

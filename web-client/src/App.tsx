@@ -1,6 +1,11 @@
+import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
 import { RouterProvider } from '@tanstack/react-router'
 import type { AppRouter } from './router.ts'
 
-export function App({ router }: { router: AppRouter }) {
-  return <RouterProvider router={router} />
+export function App({ router, queryClient }: { router: AppRouter; queryClient: QueryClient }) {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>
+  )
 }

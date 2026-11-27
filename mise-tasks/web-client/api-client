@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Regenerate web-client/src/api/generated.ts (typed fetch) from api/openapi.json with orval"
+# Run after ./bin/mise run api:openapi. Commit the result; verify checks it is current.
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+exec docker compose run --rm --build --no-deps web-client npx orval
