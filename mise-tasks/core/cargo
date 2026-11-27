@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Run cargo in the core container, e.g. `./bin/mise run core:cargo -- add serde`"
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+exec docker compose run --rm --build core cargo "$@"

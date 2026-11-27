@@ -17,6 +17,9 @@ ENTRYPOINT ["/app/bin/mise", "exec", "--"]
 # Dependencies are baked into the image. Compose mounts the source over /app/web-client
 # with an anonymous volume on node_modules, so each container starts from this copy.
 FROM toolchain AS dev
+# The core's wasm package (core/bindings/wasm), from the core-wasm build context
+# (docker-compose.yml). package.json depends on it as file:../core/bindings/wasm/pkg.
+COPY --from=core-wasm /out/pkg /app/core/bindings/wasm/pkg
 COPY web-client/package.json web-client/package-lock.json ./
 RUN /app/bin/mise exec -- npm ci
 # Playwright browser (Chromium) and its system libraries, at the version in the lockfile.

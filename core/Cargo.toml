@@ -1,0 +1,24 @@
+[package]
+name = "fortymm-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+description = "FortyMM shared core, compiled into the api (Python) and the web client (WebAssembly)"
+publish = false
+
+# The bindings: one crate per host. `cargo test` and `cargo build` without -p act on the
+# library alone; core/Dockerfile's wasm and python stages build the bindings.
+[workspace]
+members = ["bindings/wasm", "bindings/python"]
+default-members = ["."]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints]
+workspace = true
+
+[profile.release]
+lto = true
+codegen-units = 1

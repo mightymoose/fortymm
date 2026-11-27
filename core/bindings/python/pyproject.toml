@@ -1,0 +1,12 @@
+[build-system]
+requires = ["maturin>=1.16,<2"]
+build-backend = "maturin"
+
+[project]
+name = "fortymm-core"
+version = "0.1.0"
+description = "The FortyMM core as a Python module, for the api"
+requires-python = ">=3.12"
+
+[tool.maturin]
+module-name = "fortymm_core"

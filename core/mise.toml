@@ -1,0 +1,7 @@
+# Tools for the core container.
+[tools]
+rust = { version = "1.100.0", targets = "wasm32-unknown-unknown", components = "clippy,rustfmt", profile = "minimal" }
+# Builds bindings/wasm into an npm package for the web client.
+"aqua:wasm-bindgen/wasm-pack" = "0.15.1"
+# Builds bindings/python into a wheel for the api.
+"github:PyO3/maturin" = "1.16.0"

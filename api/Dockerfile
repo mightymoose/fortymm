@@ -21,4 +21,9 @@ ENTRYPOINT ["/app/bin/mise", "exec", "--"]
 FROM toolchain AS dev
 COPY api/pyproject.toml api/uv.lock ./
 RUN /app/bin/mise exec -- uv sync --locked --no-install-project
+# The core's Python module (core/bindings/python), from the core-python build context
+# (docker-compose.yml). Not in uv.lock: a uv sync in a running container removes it until the
+# image is rebuilt.
+COPY --from=core-python /out/wheels /tmp/core-wheels
+RUN /app/bin/mise exec -- uv pip install --no-deps /tmp/core-wheels/*.whl && rm -rf /tmp/core-wheels
 CMD ["fastapi", "dev", "app/main.py", "--host", "0.0.0.0", "--port", "8000"]
