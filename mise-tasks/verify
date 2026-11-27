@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Start the dev servers, then run the web-client static analysis (lint, typecheck) and e2e tests against them"
+#MISE description="Start the dev servers, then run the web-client static analysis (lint, typecheck), unit tests and e2e tests against them"
 # Host-side. Runs every check even if one fails, then exits non-zero if any did.
 # Leaves the dev servers as it found them: stops them at the end only if it started them.
 set -uo pipefail
@@ -23,6 +23,7 @@ in_web_client() { docker compose run --rm --no-deps "$@"; }
 
 check lint      in_web_client web-client npm run lint
 check typecheck in_web_client web-client npm run typecheck
+check unit      in_web_client web-client npm test
 # The tests reach the running dev server by its compose service name.
 check e2e       in_web_client -e E2E_BASE_URL=http://web-client:5173 web-client npx playwright test
 
