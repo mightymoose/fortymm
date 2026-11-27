@@ -22,6 +22,31 @@
           }
         }
       }
+    },
+    "/api/v1/parcels": {
+      "post": {
+        "summary": "Hand the server a parcel, and learn what it did with each record",
+        "operationId": "post_parcels",
+        "requestBody": {
+          "description": "The parcel's bytes, as the core's to_binary writes them.",
+          "content": {
+            "application/octet-stream": {}
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParcelsDocument"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -56,6 +81,130 @@
           "coreHealthy"
         ],
         "title": "Health"
+      },
+      "ParcelsDocument": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/RecordResource"
+            },
+            "type": "array",
+            "title": "Data"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/ParcelsMeta"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "title": "ParcelsDocument",
+        "description": "One entry per record of the parcel, in the parcel's order, and the server's current\nstamp."
+      },
+      "ParcelsMeta": {
+        "properties": {
+          "stamp": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{16}$",
+            "title": "Stamp"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "stamp"
+        ],
+        "title": "ParcelsMeta",
+        "description": "`stamp` is the server's current stamp, 8 bytes in lower-case hex."
+      },
+      "RecordAttributes": {
+        "properties": {
+          "answer": {
+            "type": "string",
+            "enum": [
+              "held",
+              "applied",
+              "malformed",
+              "retry_later"
+            ],
+            "title": "Answer"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "answer"
+        ],
+        "title": "RecordAttributes",
+        "description": "What the server did with the record: `held` (the ledger holds it), `applied` (a request\nthat took effect), `malformed` (it doesn't verify; nothing stored) or `retry_later` (the\nserver can't take it now; nothing stored)."
+      },
+      "RecordResource": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "record",
+            "title": "Type"
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Id"
+          },
+          "attributes": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RecordAttributes"
+              },
+              {
+                "$ref": "#/components/schemas/RefusedRecordAttributes"
+              }
+            ],
+            "title": "Attributes",
+            "discriminator": {
+              "propertyName": "answer",
+              "mapping": {
+                "applied": "#/components/schemas/RecordAttributes",
+                "held": "#/components/schemas/RecordAttributes",
+                "malformed": "#/components/schemas/RecordAttributes",
+                "refused": "#/components/schemas/RefusedRecordAttributes",
+                "retry_later": "#/components/schemas/RecordAttributes"
+              }
+            }
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "id",
+          "attributes"
+        ],
+        "title": "RecordResource",
+        "description": "One record of the parcel and the server's answer to it. `id` is the record id, the\nSHA-256 of its body, in lower-case hex."
+      },
+      "RefusedRecordAttributes": {
+        "properties": {
+          "answer": {
+            "type": "string",
+            "const": "refused",
+            "title": "Answer"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "answer",
+          "reason"
+        ],
+        "title": "RefusedRecordAttributes",
+        "description": "The record, a request, did not take effect and never will. It is still held."
       }
     }
   }

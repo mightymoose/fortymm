@@ -1,7 +1,7 @@
 from fastapi import APIRouter, FastAPI
 from fastapi.routing import APIRoute
 
-from app.v1 import health
+from app.v1 import health, parcels
 
 # Every route lives under /api: the web client's dev server proxies /api here unchanged
 # (see web-client/vite.config.ts), so the docs are at /api/docs too.
@@ -9,6 +9,7 @@ api = APIRouter(prefix="/api")
 
 v1 = APIRouter(prefix="/v1")
 v1.include_router(health.router)
+v1.include_router(parcels.router)
 api.include_router(v1)
 
 
