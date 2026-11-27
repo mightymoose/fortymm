@@ -24,4 +24,16 @@ describe('Toast', () => {
     render(<Toast>Result saved.</Toast>)
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
+
+  it('calls onDismiss when Dismiss is pressed', async ({ user }) => {
+    const onDismiss = vi.fn()
+    render(<Toast onDismiss={onDismiss}>Result saved.</Toast>)
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }))
+    expect(onDismiss).toHaveBeenCalledOnce()
+  })
+
+  it('has no Dismiss button without onDismiss', () => {
+    render(<Toast actionLabel="Undo">Result saved.</Toast>)
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).not.toBeInTheDocument()
+  })
 })

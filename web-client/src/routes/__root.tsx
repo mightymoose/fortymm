@@ -1,7 +1,8 @@
-import { createRootRoute, Outlet } from '@tanstack/react-router'
+import { createRootRoute } from '@tanstack/react-router'
 import { NotFoundScreen } from '../components/NotFoundScreen.tsx'
+import { RootLayout } from '../components/RootLayout.tsx'
 
 export const Route = createRootRoute({
-  component: Outlet,
+  component: RootLayout,
   notFoundComponent: NotFoundScreen,
 })
