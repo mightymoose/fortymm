@@ -2,7 +2,7 @@ name: fortymm
 
 services:
   # Checks the product requirements in requirements/*.dfy with Dafny + Z3.
-  # Run via ./bin/mise run check-requirements (see mise.toml).
+  # Run via ./bin/mise run requirements:check (see mise-tasks/requirements/).
   check-requirements:
     build:
       context: .
@@ -13,7 +13,20 @@ services:
       - ./requirements:/app/requirements
     profiles: ["tools"]
 
+  # Vite + React + TypeScript app. Run via ./bin/mise run web-client:dev (see mise-tasks/web-client/).
+  web-client:
+    build:
+      context: .
+      dockerfile: web-client/Dockerfile
+      target: dev
+    volumes:
+      - ./web-client:/app/web-client
+      # Keep the image's node_modules (Linux builds) instead of the host directory.
+      - /app/web-client/node_modules
+    # Container port only: Docker picks a free host port, so many dev servers can run at once.
+    ports:
+      - "5173"
+
   # Coming next:
   # db:   postgres
   # api:  python server
-  # web:  vite + react

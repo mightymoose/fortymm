@@ -1,0 +1,7 @@
+# web-client
+
+Vite + React + TypeScript. Runs only in Docker (see the root `CLAUDE.md`); never run `node` or `npm` on the host.
+
+- Dev server: use the `web-client-dev` skill, or `./bin/mise run web-client:dev`.
+- npm: `./bin/mise run web-client:npm -- <args>` (e.g. `install <pkg>`, `run build`, `run lint`).
+- Source is in `src/`; the entry point is `src/main.tsx`.

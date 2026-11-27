@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Run any dafny command in the requirements container, e.g. `./bin/mise run requirements:dafny -- --help`"
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+exec docker compose run --rm --entrypoint /app/bin/mise check-requirements exec -- dafny "$@"

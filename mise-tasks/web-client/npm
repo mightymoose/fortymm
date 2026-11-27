@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Run npm in the web-client container, e.g. `./bin/mise run web-client:npm -- install zod`"
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+exec docker compose run --rm --build web-client npm "$@"
