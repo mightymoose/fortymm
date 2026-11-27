@@ -7,7 +7,9 @@ cd "$MISE_PROJECT_ROOT"
 
 # Rebuild first so pyproject.toml / uv.lock changes are picked up (cached otherwise).
 docker compose build api >&2
-id=$(docker compose run --detach --rm --service-ports api)
+# run still rebuilds the images it depends on (the core bindings), printing their build progress
+# to stdout; --quiet-build keeps stdout to the container id.
+id=$(docker compose run --quiet-build --detach --rm --service-ports api)
 trap 'docker stop "$id" >/dev/null 2>&1 || true' EXIT
 
 port=$(docker port "$id" 8000/tcp | head -n1 | sed 's/.*://')
