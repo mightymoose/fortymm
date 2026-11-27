@@ -9,7 +9,8 @@
 /* Colours, type styles, fonts, spacing, radii, shadows, font sizes and line heights
    live in tokens.json, compiled to tokens.css (imported here). */
 @import url('tokens.css');
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
+/* Space Grotesk, self-hosted: the files Google Fonts serves, in fonts/. */
+@import url('space-grotesk.css');
 
 :root{
   --focus-ring:0 0 0 2px var(--ink-950), 0 0 0 4px var(--ball-500); /* @kind shadow */

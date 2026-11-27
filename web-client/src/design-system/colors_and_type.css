@@ -1,0 +1,56 @@
+/* =========================================================================
+   FortyMM — tokens (v2, "club equipment")
+   Every token has one job. If a token you need isn't here, the effect
+   probably isn't part of the system.
+   - No glow shadows, no dot-grid textures, no gradient fills, no idle motion.
+   - Orange = actions + selection. Status colours never reuse orange.
+   ========================================================================= */
+
+/* Colours, type styles, fonts, spacing, radii, shadows, font sizes and line heights
+   live in tokens.json, compiled to tokens.css (imported here). */
+@import url('tokens.css');
+/* Space Grotesk, self-hosted: the files Google Fonts serves, in fonts/. */
+@import url('space-grotesk.css');
+
+:root{
+  --focus-ring:0 0 0 2px var(--ink-950), 0 0 0 4px var(--ball-500); /* @kind shadow */
+
+  /* ---------- Motion: feedback only ---------- */
+  --ease-out:cubic-bezier(0.2,0.8,0.2,1); /* @kind other */
+  --dur-press:100ms;   /* @kind other */ /* button press */
+  --dur-change:160ms;  /* @kind other */ /* hover, toggle, tab switch */
+  --dur-score:600ms;   /* @kind other */ /* one-shot score-update flash */
+}
+
+/* ---------- Base ---------- */
+html,body{background:var(--bg-app);color:var(--fg-1);font-family:var(--font-ui);font-size:var(--text-base);line-height:var(--lh-normal);-webkit-font-smoothing:antialiased}
+a{color:var(--ball-400);text-decoration:underline;text-underline-offset:2px}
+a:hover{color:var(--ball-200)}
+:focus-visible{outline:none;box-shadow:var(--focus-ring)}
+
+/* ---------- Type roles (font, size, weight, leading, tracking: tokens.json type styles) ---------- */
+.h1{color:var(--fg-1)}
+.h2{color:var(--fg-1)}
+.h3{color:var(--fg-1)}
+.body{color:var(--fg-2)}
+p{font:400 var(--text-base)/var(--lh-normal) var(--font-ui);color:var(--fg-2)}
+.meta{color:var(--fg-3)}
+.label{color:var(--fg-3)} /* sentence case, no tracking */
+.num{font-family:var(--font-num);font-variant-numeric:tabular-nums}
+.score{font-variant-numeric:tabular-nums;color:var(--fg-1)}
+/* .scoreboard-display: big screens only */
+
+/* ---------- Status markers (static) ---------- */
+.live-marker{display:inline-flex;align-items:center;gap:6px;font:600 var(--text-sm)/1 var(--font-ui);color:var(--live)}
+.live-marker::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--live)}
+.serve-marker{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--serving)}
+.rating-up{font:600 var(--text-sm) var(--font-num);color:var(--rating-up)}
+.rating-down{font:600 var(--text-sm) var(--font-num);color:var(--rating-down)}
+
+/* ---------- Motion: one-shot feedback ---------- */
+@keyframes fm-score-update{from{background-color:var(--ink-700)}to{background-color:transparent}}
+.score-updated{animation:fm-score-update var(--dur-score) var(--ease-out) 1}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:1ms!important;animation-iteration-count:1!important;transition-duration:1ms!important;scroll-behavior:auto!important}
+}

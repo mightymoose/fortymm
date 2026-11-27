@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Rewrite the design system screenshot baselines from the reference boards"
+# Host-side. Runs only the reference target's design system specs with --update-snapshots, so the
+# baselines in web-client/e2e/design-system/__screenshots__/ are always the reference's, never the app's.
+set -euo pipefail
+exec "$MISE_PROJECT_ROOT/bin/mise" run web-client:e2e -- --grep 'design system \(reference\)' --update-snapshots=all "$@"

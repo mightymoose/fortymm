@@ -6,6 +6,14 @@ const baseURL = process.env.E2E_BASE_URL ?? 'http://localhost:5173'
 
 export default defineConfig({
   testDir: './e2e',
+  // One screenshot per name for every target and platform: the design system specs check the app
+  // against the reference's screenshots (see e2e/design-system/design-system.spec.ts).
+  snapshotPathTemplate: '{testDir}/{testFileDir}/__screenshots__/{arg}{ext}',
+  // Never write a missing screenshot as a side effect: an app run would make itself the baseline.
+  // Baselines come only from the reference (./bin/mise run web-client:screenshots).
+  updateSnapshots: 'none',
+  // Pixel-perfect: any colour difference in any pixel fails (the default lets near colours pass).
+  expect: { toHaveScreenshot: { threshold: 0 } },
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
