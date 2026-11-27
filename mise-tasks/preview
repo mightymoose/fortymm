@@ -12,7 +12,8 @@ compose=(docker compose --profile public)
 
 # Rebuild first so package.json / lockfile changes are picked up (cached otherwise).
 "${compose[@]}" build >&2
-"${compose[@]}" up --detach "${services[@]}" >&2
+# Fresh anonymous volumes, so node_modules comes from the rebuilt image, not the last container.
+"${compose[@]}" up --detach --renew-anon-volumes "${services[@]}" >&2
 trap '"${compose[@]}" stop "${services[@]}" >/dev/null 2>&1 || true' EXIT
 
 # Wait for the node to log in; the first run uses TS_AUTHKEY from .env.
