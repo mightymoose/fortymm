@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FortyMM showcase · More components</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="ds/fortymm/colors_and_type.css">
+<link rel="stylesheet" href="ds/fortymm/ui_kits/components/kit.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#0B0D12}
+.doc{box-sizing:border-box;width:1280px;padding:64px 64px 96px;background:var(--bg-app);color:var(--fg-1);font-family:var(--font-ui)}
+.doc-cat>h2{margin:0;font:600 30px/1.2 var(--font-ui);letter-spacing:-0.01em;color:var(--fg-1)}
+.doc-ex{margin-top:56px;display:grid;grid-template-columns:250px minmax(0,1fr);gap:20px 56px}
+.doc-ex>header h3{margin:0 0 8px;font:600 18px/1.3 var(--font-ui);color:var(--fg-1)}
+.doc-ex>header p{margin:0 0 8px;font:400 14px/1.6 var(--font-ui);color:var(--fg-3)}
+.doc-stage{min-width:0;display:flex;flex-direction:column;gap:28px}
+.doc-row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.doc-vo{display:inline-flex;font:500 12px var(--font-ui);color:var(--fg-3);box-shadow:inset 0 0 0 1px var(--border-subtle);border-radius:4px;padding:3px 7px;align-self:flex-start;margin:0}
+</style>
+</helmet>
+<main class="doc" data-testid="page-more">
+<section class="doc-cat" data-testid="section-more"><h2>More components</h2>
+
+<div class="doc-ex" data-testid="ex-data-table"><header><h3>Data table</h3><p>Mono, right-aligned numbers; signed rating changes. Only the header has a strong rule.</p></header><div class="doc-stage fm-scroll"><table class="fm-table"><thead><tr><th>Player</th><th>Club</th><th class="n">Played</th><th class="n">Rating</th><th class="n">Change</th></tr></thead><tbody>
+<tr><td style="color:var(--fg-1)">Nguyen, Thanh</td><td>Riverside TT</td><td class="n">42</td><td class="n">2,145</td><td class="n"><span class="rating-up">▲ +12</span></td></tr>
+<tr><td style="color:var(--fg-1)">Wójcik-Szymańska, Agnieszka</td><td>Northside</td><td class="n">37</td><td class="n">2,088</td><td class="n"><span class="rating-up">▲ +4</span></td></tr>
+<tr><td style="color:var(--fg-1)">Okafor-Adeyemi, Daniel</td><td>Eastgate</td><td class="n">51</td><td class="n">1,987</td><td class="n"><span class="rating-down">▼ −12</span></td></tr>
+</tbody></table></div></div>
+
+<div class="doc-ex" data-testid="ex-tags-avatar-progress"><header><h3>Tags, avatar, progress</h3><p>Tags are neutral. Avatars are flat initials. The meter is chalk, or blue for rest.</p></header><div class="doc-stage"><div class="doc-row"><span class="fm-tag">Singles</span><span class="fm-tag fm-tag--outline">Seed 4</span><span class="fm-avatar">TN</span><span class="fm-avatar" style="width:28px;height:28px;font-size:11px">MP</span></div>
+<div class="fm-field" style="max-width:420px"><div style="display:flex;justify-content:space-between" class="fm-label"><span>Round of 16</span><span class="num">5 of 8 played</span></div><div class="fm-meter" role="progressbar" aria-label="Round of 16 progress" aria-valuenow="5" aria-valuemax="8"><i style="width:62.5%"></i></div></div></div></div>
+
+<div class="doc-ex" data-testid="ex-navigation"><header><h3>Navigation</h3><p>Breadcrumbs, section nav and pagination. Current item in accent-soft.</p></header><div class="doc-stage">
+<nav class="fm-crumbs" aria-label="Breadcrumb"><a href="More.dc.html">Spring Open</a><span aria-hidden="true">/</span><a href="More.dc.html">Open singles</a><span aria-hidden="true">/</span><span aria-current="page">Round of 16</span></nav>
+<nav class="fm-nav" aria-label="Admin"><a href="More.dc.html" aria-current="page">Tables &amp; schedule</a><a href="More.dc.html">Draws</a><a href="More.dc.html">Players</a><a href="More.dc.html">Results</a></nav>
+<nav class="fm-pages" aria-label="Results pages"><button aria-label="Previous page">‹</button><button aria-current="page">1</button><button>2</button><button>3</button><span class="fm-help">…</span><button>12</button><button aria-label="Next page">›</button></nav>
+</div></div>
+
+<div class="doc-ex" data-testid="ex-menubar"><header><h3>Menubar</h3><p>Dense organizer tools on desktop only; phones use the tab bar. Shown with the Results menu open.</p></header><div class="doc-stage" style="padding-bottom:150px">
+<ul class="fm-menubar" role="menubar" aria-label="Tournament tools">
+<li role="none"><button class="fm-menubar__top" role="menuitem" aria-haspopup="menu" aria-expanded="false">Tournament</button></li>
+<li role="none"><button class="fm-menubar__top" role="menuitem" aria-haspopup="menu" aria-expanded="false">Schedule</button></li>
+<li role="none"><button class="fm-menubar__top" role="menuitem" aria-haspopup="menu" aria-expanded="true" aria-controls="mb3">Results</button>
+<div class="fm-overlay fm-menu" role="menu" id="mb3" aria-label="Results"><button class="fm-menu__item" role="menuitem">Export results (CSV)</button><button class="fm-menu__item" role="menuitem">Publish to spectators</button><hr role="separator"><button class="fm-menu__item fm-menu__item--danger" role="menuitem">Clear all results…</button></div></li>
+</ul></div></div>
+
+<div class="doc-ex" data-testid="ex-carousel"><header><h3>Carousel</h3><p>Only for a short row of peers worth browsing — here, finished matches. Never auto-advances. Buttons step one card.</p></header><div class="doc-stage">
+<section class="fm-carousel" aria-roledescription="carousel" aria-labelledby="car-t"><div class="fm-carousel__head"><h4 class="fm-section-title" id="car-t">Finished this morning</h4><div class="fm-carousel__ctrl"><button class="fm-btn fm-btn--ghost fm-btn--sm fm-btn--icon" aria-label="Previous results" disabled="{{ yes }}"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg></span></button><span class="fm-carousel__pos">1–3 of 5</span><button class="fm-btn fm-btn--ghost fm-btn--sm fm-btn--icon" aria-label="Next results"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg></span></button></div></div>
+<div class="fm-carousel__track" tabindex="0" aria-label="Finished matches, scroll sideways">
+<article class="fm-card"><div class="fm-card__body" style="gap:4px"><article class="fm-match" data-state="final" aria-label="Nguyen, Thanh vs Silva, Rafael"><div class="fm-match__head"><span class="fm-status">Final</span><span>Table 1 · Round of 32</span></div><div class="fm-match__p fm-match__cols" aria-hidden="true"><span></span><span></span><span>Games</span></div><div class="fm-match__p w"><span class="fm-match__name">Nguyen, Thanh</span><span></span><span class="fm-match__games">3</span></div><div class="fm-match__p l"><span class="fm-match__name">Silva, Rafael</span><span></span><span class="fm-match__games">1</span></div></article><p class="fm-match__scores" style="margin:0">11–7, 9–11, 11–8, 11–6</p></div></article>
+<article class="fm-card"><div class="fm-card__body" style="gap:4px"><article class="fm-match" data-state="final" aria-label="Lindqvist, Erik vs Haddad, Youssef"><div class="fm-match__head"><span class="fm-status">Final</span><span>Table 2 · Quarterfinal</span></div><div class="fm-match__p fm-match__cols" aria-hidden="true"><span></span><span></span><span>Games</span></div><div class="fm-match__p w"><span class="fm-match__name">Lindqvist, Erik</span><span></span><span class="fm-match__games">3</span></div><div class="fm-match__p l"><span class="fm-match__name">Haddad, Youssef</span><span></span><span class="fm-match__games">0</span></div></article><p class="fm-match__scores" style="margin:0">11–5, 11–8, 11–4</p></div></article>
+<article class="fm-card"><div class="fm-card__body" style="gap:4px"><article class="fm-match" data-state="final" aria-label="Moreau, Élodie vs Kim, Hyun-woo"><div class="fm-match__head"><span class="fm-status">Final</span><span>Table 3 · Round of 32</span></div><div class="fm-match__p fm-match__cols" aria-hidden="true"><span></span><span></span><span>Games</span></div><div class="fm-match__p w"><span class="fm-match__name">Moreau, Élodie</span><span></span><span class="fm-match__games">3</span></div><div class="fm-match__p l"><span class="fm-match__name">Kim, Hyun-woo</span><span></span><span class="fm-match__games">2</span></div></article><p class="fm-match__scores" style="margin:0">11–9, 7–11, 11–13, 11–8, 12–10</p></div></article>
+<article class="fm-card"><div class="fm-card__body" style="gap:4px"><article class="fm-match" data-state="final" aria-label="Patel, Meera vs Dubois, Camille"><div class="fm-match__head"><span class="fm-status">Final</span><span>Table 2 · Round of 64</span></div><div class="fm-match__p fm-match__cols" aria-hidden="true"><span></span><span></span><span>Games</span></div><div class="fm-match__p w"><span class="fm-match__name">Patel, Meera</span><span></span><span class="fm-match__games">3</span></div><div class="fm-match__p l"><span class="fm-match__name">Dubois, Camille</span><span></span><span class="fm-match__games">1</span></div></article><p class="fm-match__scores" style="margin:0">11–6, 11–9, 8–11, 11–7</p></div></article>
+<article class="fm-card"><div class="fm-card__body" style="gap:4px"><article class="fm-match" data-state="final" aria-label="Haddad, Youssef vs Ali, Rashid"><div class="fm-match__head"><span class="fm-status">Final</span><span>Table 4 · Round of 16</span></div><div class="fm-match__p fm-match__cols" aria-hidden="true"><span></span><span></span><span>Games</span></div><div class="fm-match__p w"><span class="fm-match__name">Haddad, Youssef</span><span></span><span class="fm-match__games">3</span></div><div class="fm-match__p l"><span class="fm-match__name">Ali, Rashid</span><span></span><span class="fm-match__games">2</span></div></article><p class="fm-match__scores" style="margin:0">9–11, 11–7, 11–13, 11–9, 11–8</p></div></article>
+</div></section></div></div>
+
+<div class="doc-ex" data-testid="ex-accordion"><header><h3>Accordion</h3><p>Disclosures for secondary detail. Solver internals live collapsed.</p></header><div class="doc-stage"><div>
+<details class="fm-disclosure" open="{{ yes }}"><summary>How are matches scheduled?</summary><p>FortyMM fits every match onto your tables while keeping each player's rest time, then re-plans when a match runs long.</p></details>
+<details class="fm-disclosure"><summary>Scheduling details</summary><p class="num" style="font-size:13px;color:var(--fg-3)">1,248 variables · 12 rules · solved in 234 ms</p></details>
+</div></div></div>
+</section>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":2000}}'>
+class Component extends DCLogic {
+renderVals() {
+return { yes: true };
+}
+}
+</script>
+</body>
+</html>

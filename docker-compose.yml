@@ -65,6 +65,18 @@ services:
       - tailscale
     profiles: ["public"]
 
+  # nginx serving the design system reference in requirements/design-system/reference/.
+  # Run via ./bin/mise run requirements:design-system:reference:serve (see mise-tasks/requirements/).
+  design-system:
+    build:
+      context: .
+      dockerfile: requirements/design-system/Dockerfile
+    volumes:
+      - ./requirements/design-system/reference:/srv/design-system:ro
+    # Container port only: Docker picks a free host port.
+    ports:
+      - "80"
+
   # Coming next:
   # db:   postgres
   # api:  python server

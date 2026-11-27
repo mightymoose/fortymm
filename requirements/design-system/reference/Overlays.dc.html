@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FortyMM showcase · Overlays</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="ds/fortymm/colors_and_type.css">
+<link rel="stylesheet" href="ds/fortymm/ui_kits/components/kit.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#0B0D12}
+.doc{box-sizing:border-box;width:1280px;padding:64px 64px 96px;background:var(--bg-app);color:var(--fg-1);font-family:var(--font-ui)}
+.doc-cat>h2{margin:0;font:600 30px/1.2 var(--font-ui);letter-spacing:-0.01em;color:var(--fg-1)}
+.doc-cat>p{margin:10px 0 0;max-width:700px;font:400 16px/1.55 var(--font-ui);color:var(--fg-3)}
+.doc-ex{margin-top:56px;display:grid;grid-template-columns:250px minmax(0,1fr);gap:20px 56px}
+.doc-ex>header h3{margin:0 0 8px;font:600 18px/1.3 var(--font-ui);color:var(--fg-1)}
+.doc-ex>header p{margin:0 0 8px;font:400 14px/1.6 var(--font-ui);color:var(--fg-3)}
+.doc-stage{min-width:0;display:flex;flex-direction:column;gap:28px}
+.doc-row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.doc-cap{margin:0 0 10px;font:500 13px var(--font-ui);color:var(--fg-3)}
+.doc-vo{display:inline-flex;font:500 12px var(--font-ui);color:var(--fg-3);box-shadow:inset 0 0 0 1px var(--border-subtle);border-radius:4px;padding:3px 7px;align-self:flex-start;margin:0}
+.backdrop{position:relative;display:flex;box-sizing:border-box;border-radius:8px;background:rgba(11,13,18,0.72);box-shadow:inset 0 0 0 1px var(--border-subtle);overflow:hidden}
+</style>
+</helmet>
+<main class="doc" data-testid="page-overlays">
+<section class="doc-cat" data-testid="section-overlays"><h2>Overlays</h2><p>The only things with a shadow. Each has a clear way out: Esc, the backdrop, or a button. Drawn open in place here so each can be captured without interaction.</p>
+
+<div class="doc-ex" data-testid="ex-tooltip"><header><h3>Tooltip</h3><p>Dark surface, 13px sentence case, wraps past 280px. Appears on hover and keyboard focus; Esc hides it. Supplementary only.</p></header><div class="doc-stage">
+<div class="doc-row" style="align-items:flex-start;gap:40px">
+<div style="display:flex;flex-direction:column;align-items:flex-start;gap:8px"><button class="fm-btn fm-btn--secondary fm-btn--icon" aria-label="Print score sheet"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h.01"></path><path d="M3 12h.01"></path><path d="M3 18h.01"></path><path d="M8 6h13"></path><path d="M8 12h13"></path><path d="M8 18h13"></path></svg></span></button><span class="fm-tooltip fm-tooltip--static" role="tooltip">Print score sheet</span></div>
+<div style="display:flex;flex-direction:column;align-items:flex-start;gap:8px" data-testid="tooltip-trigger"><button class="fm-btn fm-btn--secondary is-focus">Move to free table</button><span class="fm-tooltip fm-tooltip--static" role="tooltip" style="max-width:280px">Moves this match to the next free table and tells both players. Their rest times are kept.</span></div>
+</div><p class="doc-vo">Visual only</p></div></div>
+
+<div class="doc-ex" data-testid="ex-dialog"><header><h3>Dialog</h3><p>States the consequence, offers the safe choice first. Esc, the backdrop and "Keep in draw" all close it; focus returns to the trigger.</p></header><div class="doc-stage">
+<div class="backdrop" style="height:300px;align-items:center;justify-content:center">
+<div class="fm-dialog" role="dialog" aria-labelledby="dlgt" data-testid="dialog-withdraw"><h2 id="dlgt">Withdraw Okafor-Adeyemi from the draw?</h2><p>Johansen-Whitfield advances to the quarterfinal. This can't be undone once her next match starts.</p><div class="fm-dialog__actions"><button class="fm-btn fm-btn--secondary is-focus">Keep in draw</button><button class="fm-btn fm-btn--danger-solid">Withdraw</button></div></div>
+</div><p class="doc-vo">Visual only · backdrop rgba(11, 13, 18, 0.72)</p></div></div>
+
+<div class="doc-ex" data-testid="ex-menu"><header><h3>Menu</h3><p>Destructive items last, in red, after a divider. Hovered item shown on the second row.</p></header><div class="doc-stage">
+<div class="fm-overlay fm-menu" role="menu" aria-label="Match actions" style="align-self:flex-start"><button class="fm-menu__item" role="menuitem">Edit match</button><button class="fm-menu__item" role="menuitem" style="background:var(--bg-hover)">Move to another table</button><button class="fm-menu__item" role="menuitem">Print score sheet<small>⌘P</small></button><hr><button class="fm-menu__item fm-menu__item--danger" role="menuitem">Remove from schedule</button></div>
+<p class="doc-vo">Visual only</p></div></div>
+
+<div class="doc-ex" data-testid="ex-sheet-and-drawer"><header><h3>Sheet and drawer</h3><p>For a task that needs more room than a dialog while keeping the page in view. Drawer from the right on wide screens; bottom sheet for short choices and on phones. Title, scrolling body, actions pinned at the bottom.</p></header><div class="doc-stage">
+<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px;align-items:start">
+<div><p class="doc-cap">Drawer</p>
+<div class="backdrop" style="height:640px;justify-content:flex-end">
+<div class="fm-sheet" role="dialog" aria-labelledby="shm-t" data-testid="sheet-match" style="position:relative;inset:auto;display:flex;width:400px;height:100%">
+<div class="fm-sheet__head"><div><h2 id="shm-t">Patel vs Wójcik-Szymańska</h2><p>Table 3 · Open singles · Round of 32</p></div><button class="fm-btn fm-btn--ghost fm-btn--icon" aria-label="Close"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></span></button></div>
+<div class="fm-sheet__body">
+<article class="fm-match fm-match--lg" data-state="live" aria-label="Patel, Meera vs Wójcik-Szymańska, Agnieszka">
+<div class="fm-match__p fm-match__cols" aria-hidden="true"><span></span><span></span><span>Games</span><span>Points</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Patel, Meera</span><span></span><span class="fm-match__games">2</span><span class="fm-match__pts">9</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Wójcik-Szymańska, Agnieszka</span><span><span class="serve-marker" role="img" aria-label="Serving"></span></span><span class="fm-match__games">2</span><span class="fm-match__pts">9</span></div>
+</article>
+<div><h3 class="fm-section-title" style="margin-bottom:8px">Game scores</h3><div class="fm-scroll"><table class="fm-games"><caption class="fm-sr">Game scores, Patel, Meera vs Wójcik-Szymańska, Agnieszka</caption><thead><tr><th scope="col"><span class="fm-sr">Player</span></th><th scope="col">Game 1</th><th scope="col">Game 2</th><th scope="col">Game 3</th><th scope="col">Game 4</th><th scope="col" class="cur">Game 5 · now</th></tr></thead><tbody><tr><th scope="row">Patel</th><td class="w">11</td><td>6</td><td class="w">11</td><td>9</td><td class="cur">9</td></tr><tr><th scope="row">Wójcik-Szymańska</th><td>8</td><td class="w">11</td><td>9</td><td class="w">11</td><td class="cur">9</td></tr></tbody></table></div></div>
+<dl class="fm-dl"><div><dt>Started</dt><dd>11:05</dd></div><div><dt>Umpire</dt><dd>Haddad, Youssef</dd></div><div><dt>Next on Table 3</dt><dd>Dubois vs Lindqvist, 12:15</dd></div></dl>
+<p class="fm-notice fm-notice--rest"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg></span><span>Patel plays again at 12:05. She gets her 15 minutes’ rest if this ends by 11:50.</span></p>
+</div>
+<div class="fm-sheet__foot"><button class="fm-btn fm-btn--primary">Open scoring</button><button class="fm-btn fm-btn--ghost">Close</button></div>
+</div></div></div>
+<div><p class="doc-cap">Bottom sheet</p>
+<div class="backdrop" style="height:640px;align-items:flex-end;justify-content:center">
+<div class="fm-sheet fm-sheet--bottom" role="dialog" aria-labelledby="shv-t" data-testid="sheet-move" style="position:relative;inset:auto;display:flex;width:100%">
+<div class="fm-sheet__head"><div><h2 id="shv-t">Move to another table</h2><p>Patel vs Wójcik-Szymańska · now on Table 3</p></div><button class="fm-btn fm-btn--ghost fm-btn--icon" aria-label="Close"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></span></button></div>
+<div class="fm-sheet__body"><fieldset class="fm-choices"><legend class="fm-sr">Table</legend>
+<label class="fm-radio"><input type="radio" name="tbl" checked="{{ yes }}"><span>Table 2<span class="fm-help" style="display:block">Free until 11:45</span></span></label>
+<label class="fm-radio"><input type="radio" name="tbl"><span>Table 5<span class="fm-help" style="display:block">Free all morning</span></span></label>
+<label class="fm-radio"><input type="radio" name="tbl" disabled="{{ yes }}"><span>Table 4<span class="fm-help" style="display:block">Scorer offline</span></span></label></fieldset>
+<p class="fm-notice"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg></span><span>Both players are told the new table.</span></p></div>
+<div class="fm-sheet__foot"><button class="fm-btn fm-btn--primary">Move match</button><button class="fm-btn fm-btn--ghost">Cancel</button></div>
+</div></div></div>
+</div><p class="doc-vo">Visual only</p></div></div>
+
+<div class="doc-ex" data-testid="ex-command-palette"><header><h3>Command palette</h3><p>Jump to a section, open an overlay or find a player. ⌘K or Ctrl+K opens it. Shown with “pat” typed.</p></header><div class="doc-stage">
+<div class="backdrop" style="height:500px;justify-content:center;padding-top:40px">
+<div class="fm-palette" role="dialog" aria-label="Command palette" data-testid="command-palette" style="display:flex;flex-direction:column;margin:0;align-self:flex-start">
+<div class="fm-palette__search"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg></span><input value="pat" role="combobox" aria-expanded="true" aria-label="Search commands"></div>
+<div class="fm-palette__list" role="listbox" aria-label="Commands">
+<div class="fm-palette__group" role="presentation">Players</div>
+<div class="fm-palette__opt" role="option" aria-selected="true"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg></span>Patel, Meera<small>Riverside TT</small></div>
+<div class="fm-palette__group" role="presentation">Open</div>
+<div class="fm-palette__opt" role="option" aria-selected="false"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v18"></path><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M3 9h18"></path><path d="M3 15h18"></path></svg></span>Match drawer: Patel vs Wójcik-Szymańska</div>
+<div class="fm-palette__opt" role="option" aria-selected="false"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v18"></path><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M3 9h18"></path><path d="M3 15h18"></path></svg></span>Move Patel’s match to another table</div>
+<div class="fm-palette__group" role="presentation">Go to</div>
+<div class="fm-palette__opt" role="option" aria-selected="false"><span class="fm-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 6h.01"></path><path d="M3 12h.01"></path><path d="M3 18h.01"></path><path d="M8 6h13"></path><path d="M8 12h13"></path><path d="M8 18h13"></path></svg></span>Match components</div>
+</div>
+<div class="fm-palette__foot"><span><span class="fm-kbd">↑</span> <span class="fm-kbd">↓</span> move</span><span><span class="fm-kbd">↵</span> run</span><span><span class="fm-kbd">esc</span> close</span></div>
+</div></div><p class="doc-vo">Visual only</p></div></div>
+</section>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":2100}}'>
+class Component extends DCLogic {
+renderVals() {
+return { yes: true };
+}
+}
+</script>
+</body>
+</html>

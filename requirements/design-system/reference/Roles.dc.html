@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FortyMM showcase · Roles and buttons</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="ds/fortymm/colors_and_type.css">
+<link rel="stylesheet" href="ds/fortymm/ui_kits/components/kit.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#0B0D12}
+.doc{box-sizing:border-box;width:1280px;padding:64px 64px 96px;background:var(--bg-app);color:var(--fg-1);font-family:var(--font-ui)}
+.doc-cat+.doc-cat{margin-top:112px}
+.doc-cat>h2{margin:0;font:600 30px/1.2 var(--font-ui);letter-spacing:-0.01em;color:var(--fg-1)}
+.doc-cat>p{margin:10px 0 0;max-width:700px;font:400 16px/1.55 var(--font-ui);color:var(--fg-3)}
+.doc-ex{margin-top:56px;display:grid;grid-template-columns:250px minmax(0,1fr);gap:20px 56px}
+.doc-ex>header h3{margin:0 0 8px;font:600 18px/1.3 var(--font-ui);color:var(--fg-1)}
+.doc-ex>header p{margin:0 0 8px;font:400 14px/1.6 var(--font-ui);color:var(--fg-3)}
+.doc-stage{min-width:0;display:flex;flex-direction:column;gap:28px}
+.doc-row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.doc-cap{margin:0 0 10px;font:500 13px var(--font-ui);color:var(--fg-3)}
+.doc-roles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:48px 40px;align-items:start;margin-top:48px}
+.doc-vo{display:inline-flex;font:500 12px var(--font-ui);color:var(--fg-3);box-shadow:inset 0 0 0 1px var(--border-subtle);border-radius:4px;padding:3px 7px;align-self:flex-start}
+</style>
+</helmet>
+<main class="doc" data-testid="page-roles">
+
+<section class="doc-cat" data-testid="section-roles"><h2>Roles at a glance</h2><p>Same tokens, different structure. You should know which one you're looking at before you read it.</p>
+<div class="doc-roles">
+<div data-testid="role-card"><p class="doc-cap">Card — persistent, structured</p>
+<section class="fm-card" aria-labelledby="r-card"><div class="fm-card__head"><div><h3 class="fm-card__title" id="r-card">Your next match</h3><p class="fm-card__sub">Open singles · Round of 16</p></div><span class="fm-status"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg></span><span class="num">12:05</span></span></div>
+<div class="fm-card__body"><dl class="fm-dl"><div><dt>Opponent</dt><dd>Park, Ji-ho</dd></div><div><dt>Table</dt><dd>Table 2</dd></div></dl>
+<p class="fm-notice fm-notice--rest"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg></span><span>You rest until <span class="num">11:55</span>. We'll call you after that.</span></p></div>
+<div class="fm-card__foot"><button class="fm-btn fm-btn--primary">I'm at the table</button><button class="fm-btn fm-btn--ghost">Directions</button></div></section></div>
+
+<div><p class="doc-cap">Inline notice — part of the text</p>
+<div style="display:flex;flex-direction:column;gap:12px" data-testid="role-notice-examples"><p class="body" style="margin:0">Round of 16 starts on all four tables once the last Round of 32 match finishes.</p>
+<p class="fm-notice"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg></span><span>Draws are fixed. Seeds come from ratings on 1 April.</span></p>
+<p class="fm-notice fm-notice--success"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><span>Check-in saved at <span class="num">09:42</span>.</span></p></div>
+<p class="doc-cap" style="margin-top:40px">Toast — raised, brief, offers Undo</p>
+<div class="fm-toast" role="status" data-testid="role-toast"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><span class="fm-toast__msg">Result saved. Nguyen <span class="rating-up">▲ +12</span></span><button class="fm-btn fm-btn--sm fm-toast__action">Undo</button></div>
+<p class="doc-cap" style="margin-top:40px">Tooltip — supplementary</p>
+<span class="fm-tooltip fm-tooltip--static" data-testid="role-tooltip">Johansen-Whitfield, Annika vs Rossi, Giulia · 11:05–11:40</span></div>
+
+<div style="display:flex;flex-direction:column;gap:32px">
+<div data-testid="role-warning"><p class="doc-cap">Warning — problem and the fix</p>
+<div class="fm-alert fm-alert--warning"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg></span><p class="fm-alert__title">Patel would get 5 minutes’ rest</p><p class="fm-alert__body">Her Table 3 match is running over. Starting at 12:05 keeps the 15-minute minimum.</p><div class="fm-alert__actions"><button class="fm-btn fm-btn--primary fm-btn--sm">Move to 12:05</button><button class="fm-btn fm-btn--secondary fm-btn--sm">Keep 11:50</button></div></div></div>
+<div data-testid="role-error"><p class="doc-cap">Error — what failed and how to recover</p>
+<div class="fm-alert fm-alert--error" role="alert"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4"></path><path d="M12 16h.01"></path></svg></span><p class="fm-alert__title">Results didn't sync</p><p class="fm-alert__body">You're offline. 3 results are saved on this device.</p><div class="fm-alert__actions"><button class="fm-btn fm-btn--primary fm-btn--sm">Retry now</button></div></div></div>
+</div>
+</div>
+<p class="doc-vo" style="margin-top:24px;margin-bottom:0">Visual only · buttons in this overview are not wired up</p>
+</section>
+
+<section class="doc-cat" data-testid="section-actions"><h2>Buttons</h2><p>Label with the verb that happens. One primary per card or dialog.</p>
+<div class="doc-ex" data-testid="ex-variants"><header><h3>Variants</h3><p>Primary for the main action, secondary for alternatives, ghost for low-weight actions in a row, danger for removal (always confirmed).</p></header><div class="doc-stage">
+<div class="doc-row"><button class="fm-btn fm-btn--primary">Call to table</button><button class="fm-btn fm-btn--secondary">Reschedule</button><button class="fm-btn fm-btn--ghost">Print score sheet</button><button class="fm-btn fm-btn--danger">Withdraw player…</button><button class="fm-btn fm-btn--danger-solid">Withdraw</button><a class="fm-btn fm-btn--link" href="Match.dc.html">View draw</a></div>
+<div class="doc-row"><button class="fm-btn fm-btn--secondary fm-btn--sm">Small</button><button class="fm-btn fm-btn--secondary">Default</button><button class="fm-btn fm-btn--secondary fm-btn--lg">Large</button><button class="fm-btn fm-btn--primary fm-btn--xl">Extra large</button><button class="fm-btn fm-btn--secondary fm-btn--icon" aria-label="More options"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="1"></circle><circle cx="19" cy="12" r="1"></circle><circle cx="5" cy="12" r="1"></circle></svg></span></button><button class="fm-btn fm-btn--ghost fm-btn--sm fm-btn--icon" aria-label="Close"><span class="fm-ic fm-ic--sm"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></span></button></div>
+<div class="doc-row"><button class="fm-btn fm-btn--secondary"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"></path></svg></span>Undo last point</button><button class="fm-btn fm-btn--secondary"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg></span>Search commands<span class="fm-kbd" aria-hidden="true">⌘K</span></button></div>
+<div style="max-width:360px"><button class="fm-btn fm-btn--primary fm-btn--xl fm-btn--block">+1 Patel</button></div>
+</div></div>
+<div class="doc-ex" data-testid="ex-loading-and-disabled"><header><h3>Loading and disabled</h3><p>Loading keeps the button's colours and swaps the label ("Saving…"). Disabled looks the same under the pointer, and says why nearby.</p></header><div class="doc-stage">
+<div class="doc-row"><button class="fm-btn fm-btn--primary" aria-busy="true">Saving…</button><button class="fm-btn fm-btn--secondary" aria-busy="true">Exporting…</button><button class="fm-btn fm-btn--ghost" aria-busy="true">Printing…</button></div>
+<div style="display:flex;flex-direction:column;gap:8px;align-items:flex-start"><button class="fm-btn fm-btn--primary" aria-disabled="true" aria-describedby="why1">Start match</button><p class="fm-help" id="why1">Both players need to check in first. Park hasn't yet.</p></div>
+<div class="doc-row"><button class="fm-btn fm-btn--primary" disabled="{{ yes }}">Call to table</button><button class="fm-btn fm-btn--secondary" disabled="{{ yes }}">Reschedule</button><button class="fm-btn fm-btn--ghost" disabled="{{ yes }}">Print sheet</button><button class="fm-btn fm-btn--danger" disabled="{{ yes }}">Withdraw…</button></div>
+</div></div>
+</section>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1900}}'>
+class Component extends DCLogic {
+renderVals() {
+return { yes: true };
+}
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FortyMM showcase · Match components</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="ds/fortymm/colors_and_type.css">
+<link rel="stylesheet" href="ds/fortymm/ui_kits/components/kit.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#0B0D12}
+.doc{box-sizing:border-box;width:1280px;padding:64px 64px 96px;background:var(--bg-app);color:var(--fg-1);font-family:var(--font-ui)}
+.doc-cat>h2{margin:0;font:600 30px/1.2 var(--font-ui);letter-spacing:-0.01em;color:var(--fg-1)}
+.doc-cat>p{margin:10px 0 0;max-width:700px;font:400 16px/1.55 var(--font-ui);color:var(--fg-3)}
+.doc-ex{margin-top:56px;display:grid;grid-template-columns:250px minmax(0,1fr);gap:20px 56px}
+.doc-ex>header h3{margin:0 0 8px;font:600 18px/1.3 var(--font-ui);color:var(--fg-1)}
+.doc-ex>header p{margin:0 0 8px;font:400 14px/1.6 var(--font-ui);color:var(--fg-3)}
+.doc-stage{min-width:0;display:flex;flex-direction:column;gap:28px}
+.doc-row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.doc-grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:32px;align-items:start}
+</style>
+</helmet>
+<main class="doc" data-testid="page-match">
+<section class="doc-cat" data-testid="section-match"><h2>Match components</h2><p>FortyMM's own parts. Names wrap rather than truncate. Games won sit in a small box; current points are the big number.</p>
+
+<div class="doc-ex" data-testid="ex-match-row"><header><h3>Match row</h3><p>Columns: name · serve · games won · points. Games and Points are labelled once per list. "Game scores" opens the full history; the final match is shown expanded.</p></header><div class="doc-stage"><div class="fm-matches" style="max-width:620px">
+
+<article class="fm-match" data-state="live" aria-label="Okafor-Adeyemi, Daniel vs Johansen-Whitfield, Annika" data-testid="match-live"><div class="fm-match__head"><span class="live-marker">Live</span><span>Table 1 · Round of 16 · Game 4</span></div>
+<div class="fm-match__p fm-match__cols" aria-hidden="true"><span></span><span></span><span>Games</span><span>Points</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Okafor-Adeyemi, Daniel</span><span><span class="serve-marker" role="img" aria-label="Serving"></span></span><span class="fm-match__games" aria-label="2 games won">2</span><span class="fm-match__pts" aria-label="8 points in this game">8</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Johansen-Whitfield, Annika</span><span></span><span class="fm-match__games" aria-label="1 games won">1</span><span class="fm-match__pts" aria-label="6 points in this game">6</span></div>
+<button class="fm-match__toggle" aria-expanded="false">Game scores<span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></span></button></article>
+
+<article class="fm-match" data-state="live" aria-label="Patel, Meera vs Wójcik-Szymańska, Agnieszka"><div class="fm-match__head"><span class="live-marker">Live</span><span>Table 3 · Round of 32 · Game 5</span></div>
+<div class="fm-match__p fm-match__cols" aria-hidden="true"><span></span><span></span><span>Games</span><span>Points</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Patel, Meera</span><span></span><span class="fm-match__games" aria-label="2 games won">2</span><span class="fm-match__pts" aria-label="9 points in this game">9</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Wójcik-Szymańska, Agnieszka</span><span><span class="serve-marker" role="img" aria-label="Serving"></span></span><span class="fm-match__games" aria-label="2 games won">2</span><span class="fm-match__pts" aria-label="9 points in this game">9</span></div>
+<button class="fm-match__toggle" aria-expanded="false">Game scores<span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></span></button></article>
+
+<article class="fm-match" data-state="upcoming" aria-label="Dubois, Camille vs Lindqvist, Erik" data-testid="match-upcoming"><div class="fm-match__head"><span class="fm-status"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg></span><span class="num">12:15</span></span><span>Table 3 · Semifinal</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Dubois, Camille</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Lindqvist, Erik</span></div>
+<p class="fm-notice fm-notice--rest"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg></span><span>Lindqvist rests until <span class="num">12:10</span></span></p></article>
+
+<article class="fm-match" data-state="final" aria-label="Nguyen, Thanh vs Silva, Rafael" data-testid="match-final"><div class="fm-match__head"><span class="fm-status">Final</span><span>Table 1 · Round of 32</span></div>
+<div class="fm-match__p fm-match__cols" aria-hidden="true"><span></span><span></span><span>Games</span></div>
+<div class="fm-match__p w"><span class="fm-match__name">Nguyen, Thanh</span><span></span><span class="fm-match__games" aria-label="3 games won">3</span></div>
+<div class="fm-match__p l"><span class="fm-match__name">Silva, Rafael</span><span></span><span class="fm-match__games" aria-label="1 games won">1</span></div>
+<button class="fm-match__toggle" aria-expanded="true">Game scores<span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></span></button>
+<div><table class="fm-games"><caption class="fm-sr">Game scores, Nguyen, Thanh vs Silva, Rafael</caption><thead><tr><th scope="col"><span class="fm-sr">Player</span></th><th scope="col">Game 1</th><th scope="col">Game 2</th><th scope="col">Game 3</th><th scope="col">Game 4</th></tr></thead><tbody><tr><th scope="row">Nguyen</th><td class="w">11</td><td>9</td><td class="w">11</td><td class="w">11</td></tr><tr><th scope="row">Silva</th><td>7</td><td class="w">11</td><td>8</td><td>6</td></tr></tbody></table></div></article>
+
+<article class="fm-match" data-state="conflict" aria-label="Patel, Meera vs Park, Ji-ho" data-testid="match-conflict"><div class="fm-match__head"><span class="fm-status fm-status--conflict"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg></span>Needs decision</span><span>Table 2 · Round of 16</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Patel, Meera</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Park, Ji-ho</span></div></article>
+</div></div></div>
+
+<div class="doc-ex" data-testid="ex-empty-and-disconnected"><header><h3>Empty and disconnected</h3><p>Say what's happening and what to do next.</p></header><div class="doc-stage"><div class="doc-grid2">
+<div class="fm-empty"><b>No matches on Table 5 yet</b><span>It opens for Round of 16 at about 12:30.</span><button class="fm-btn fm-btn--secondary fm-btn--sm">Assign a match</button></div>
+<div class="fm-matches">
+<article class="fm-match" data-state="offline" aria-label="Rossi, Giulia / Haddad, Youssef vs Fernández-Castillo, Marisol / Kim, Hyun-woo" data-testid="match-offline"><div class="fm-match__head"><span class="fm-status fm-status--offline">Scorer offline</span><span>Table 4 · Quarterfinal · last update <span class="num">11:42</span></span></div>
+<div class="fm-match__p fm-match__cols" aria-hidden="true"><span></span><span></span><span>Games</span><span>Points</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Rossi, Giulia / Haddad, Youssef</span><span></span><span class="fm-match__games" aria-label="1 games won">1</span><span class="fm-match__pts" aria-label="4 points in this game">4</span></div>
+<div class="fm-match__p"><span class="fm-match__name">Fernández-Castillo, Marisol / Kim, Hyun-woo</span><span><span class="serve-marker" role="img" aria-label="Serving"></span></span><span class="fm-match__games" aria-label="1 games won">1</span><span class="fm-match__pts" aria-label="7 points in this game">7</span></div>
+<button class="fm-match__toggle" aria-expanded="false">Game scores<span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></span></button></article>
+</div></div></div></div>
+
+<div class="doc-ex" data-testid="ex-score-entry-and-game-history"><header><h3>Score entry and game history</h3><p>Large targets for the table side: 96px points, 64px “+1” buttons, Undo last point. The current game is highlighted in the history.</p></header><div class="doc-stage">
+<div class="fm-scorepad" style="max-width:560px">
+<div class="fm-scorepad__side"><div class="fm-scorepad__name"><span>Patel, Meera</span></div><div class="fm-scorepad__games">Games <b>2</b></div><div class="fm-scorepad__pts" aria-label="Patel points">9</div><button class="fm-btn fm-btn--primary fm-btn--xl fm-btn--block">+1 Patel</button></div>
+<div class="fm-scorepad__side"><div class="fm-scorepad__name"><span>Wójcik-Szymańska, Agnieszka</span><span class="serve-marker" role="img" aria-label="Serving"></span></div><div class="fm-scorepad__games">Games <b>2</b></div><div class="fm-scorepad__pts" aria-label="Wójcik-Szymańska points">9</div><button class="fm-btn fm-btn--primary fm-btn--xl fm-btn--block">+1 Wójcik-Szymańska</button></div>
+<div class="fm-scorepad__bar"><button class="fm-btn fm-btn--secondary"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"></path></svg></span>Undo last point</button><span class="fm-help">Game 5 · first to 11, win by 2</span></div>
+<div class="fm-scroll" style="grid-column:1/-1;padding-top:8px"><table class="fm-games" data-testid="game-history"><caption class="fm-sr">Game scores, Patel, Meera vs Wójcik-Szymańska, Agnieszka</caption><thead><tr><th scope="col"><span class="fm-sr">Player</span></th><th scope="col">Game 1</th><th scope="col">Game 2</th><th scope="col">Game 3</th><th scope="col">Game 4</th><th scope="col" class="cur">Game 5 · now</th></tr></thead><tbody><tr><th scope="row">Patel</th><td class="w">11</td><td>6</td><td class="w">11</td><td>9</td><td class="cur">9</td></tr><tr><th scope="row">Wójcik-Szymańska</th><td>8</td><td class="w">11</td><td>9</td><td class="w">11</td><td class="cur">9</td></tr></tbody></table></div>
+</div>
+<div class="fm-toast" role="status" style="align-self:flex-start" data-testid="toast-game-won"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><span class="fm-toast__msg">Game 4 to Wójcik-Szymańska, 11–9</span><button class="fm-btn fm-btn--sm fm-toast__action">Undo</button></div>
+</div></div>
+
+<div class="doc-ex" data-testid="ex-schedule-blocks"><header><h3>Schedule blocks</h3><p>Surnames stacked so a 35-minute slot holds the longest names. Scheduled, live, final, conflict, offline, free, and selected (orange edge).</p></header><div class="doc-stage"><div class="doc-row" style="align-items:stretch">
+<button class="fm-slot" data-state="final" aria-pressed="false"><span class="fm-slot__status">Final <span class="num">3–1</span></span><span class="fm-slot__names"><span>Nguyen</span><span>Silva</span></span><span class="fm-slot__time">10:30–11:05</span><span class="fm-sr">Nguyen, Thanh vs Silva, Rafael · Table 1 · 10:30–11:05</span></button>
+<button class="fm-slot" data-state="live" aria-pressed="false"><span class="fm-slot__status live-marker">Live</span><span class="fm-slot__names"><span>Okafor-Adeyemi</span><span>Johansen-Whitfield</span></span><span class="fm-slot__time">since 11:10</span><span class="fm-sr">Okafor-Adeyemi, Daniel vs Johansen-Whitfield, Annika · Table 1 · since 11:10</span></button>
+<button class="fm-slot" data-state="conflict" aria-pressed="false"><span class="fm-slot__status">Needs decision</span><span class="fm-slot__names"><span>Patel</span><span>Park</span></span><span class="fm-slot__time">11:50–12:25</span><span class="fm-sr">Patel, Meera vs Park, Ji-ho · Table 2 · 11:50–12:25 · Patel would rest 5 min</span></button>
+<button class="fm-slot" data-state="upcoming" aria-pressed="false"><span class="fm-slot__status rest">Lindqvist rests to <span class="num">12:10</span></span><span class="fm-slot__names"><span>Dubois</span><span>Lindqvist</span></span><span class="fm-slot__time">12:15–12:50</span><span class="fm-sr">Dubois, Camille vs Lindqvist, Erik · Table 3 · 12:15–12:50</span></button>
+<button class="fm-slot" data-state="offline" aria-pressed="false"><span class="fm-slot__status">Scorer offline</span><span class="fm-slot__names"><span>Rossi / Haddad</span><span>Fernández-Castillo / Kim</span></span><span class="fm-slot__time">since 11:00</span><span class="fm-sr">Rossi, Giulia / Haddad, Youssef vs Fernández-Castillo, Marisol / Kim, Hyun-woo · Table 4 · since 11:00</span></button>
+<div class="fm-slot" data-state="free"><span class="fm-slot__status">Free</span><span class="fm-slot__time">11:05–11:45</span></div>
+<button class="fm-slot" data-state="upcoming" aria-pressed="true" data-testid="slot-selected"><span class="fm-slot__names"><span>Chen</span><span>Ali</span></span><span class="fm-slot__time">12:00–12:35</span><span class="fm-sr">Chen, Wei vs Ali, Rashid · Table 1 · 12:00–12:35</span></button>
+</div></div></div>
+
+<div class="doc-ex" data-testid="ex-rest-indicator"><header><h3>Rest indicator</h3><p>Blue clock and the time rest ends. With a meter where the player is waiting on it.</p></header><div class="doc-stage" style="max-width:360px">
+<span class="fm-rest"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg></span>Rest until <span class="num">12:10</span></span>
+<div class="fm-field"><div style="display:flex;justify-content:space-between;gap:12px"><span class="fm-rest"><span class="fm-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg></span>Rest until <span class="num">11:55</span></span><span class="fm-help num">8 min left</span></div><div class="fm-meter fm-meter--rest" role="progressbar" aria-label="Rest elapsed" aria-valuenow="7" aria-valuemax="15"><i style="width:47%"></i></div></div>
+</div></div>
+</section>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":2900}}'>
+class Component extends DCLogic {
+renderVals() {
+return { yes: true };
+}
+}
+</script>
+</body>
+</html>
