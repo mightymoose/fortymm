@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+#MISE description="Rebuild and recreate the preview's containers in the background (also starts it if it isn't running)"
+# Host-side: picks up code changes without stopping a running `preview`, whose log follow keeps going.
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+
+# Keep in sync with services in preview/_default.
+services=(tailscale api-public web-client-public)
+
+compose=(docker compose --profile public)
+
+"${compose[@]}" build >&2
+# Recreate even if nothing changed, with fresh anonymous volumes (see preview/_default).
+"${compose[@]}" up --detach --force-recreate --renew-anon-volumes --wait "${services[@]}" >&2
+echo "preview restarted. Logs: docker compose --profile public logs --follow ${services[*]}"

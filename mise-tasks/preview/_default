@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$MISE_PROJECT_ROOT"
 
-# Everything `preview` runs. Add new long-running services (db, ...) here.
+# Everything `preview` runs (keep preview/restart in sync). Add new long-running services (db, ...) here.
 services=(tailscale api-public web-client-public)
 
 compose=(docker compose --profile public)
