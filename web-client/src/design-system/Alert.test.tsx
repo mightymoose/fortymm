@@ -20,4 +20,13 @@ describe('Alert', () => {
     )
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
+
+  it('is a group named by its label', () => {
+    render(
+      <Alert tone="warning" label="Scheduling conflict" title="Patel would get 5 minutes’ rest">
+        Her match is running over.
+      </Alert>,
+    )
+    expect(screen.getByRole('group', { name: 'Scheduling conflict' })).toBeInTheDocument()
+  })
 })

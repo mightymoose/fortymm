@@ -24,6 +24,32 @@ export function exampleElement(page: Page, example: string, text: string) {
   return page.getByTestId(example).getByText(text, { exact: true })
 }
 
+// The roles of the named elements exampleNamed finds: a card (a region named by its title), a match
+// row (an article named "A vs B"), a timeline track or a labelled warning (a group), a split view's
+// handle (a separator).
+export type NamedRole = 'region' | 'article' | 'group' | 'separator'
+
+// A named element in an example on a board, whole, by its role and accessible name.
+export function exampleNamed(page: Page, example: string, role: NamedRole, name: string) {
+  return page.getByTestId(example).getByRole(role, { name, exact: true })
+}
+
+// A paragraph in an example on a board, found by (part of) its text, e.g. an inline notice.
+export function exampleParagraph(page: Page, example: string, text: string) {
+  return page.getByTestId(example).getByRole('paragraph').filter({ hasText: text })
+}
+
+// A status message (role="status") in an example on a board, found by its text, e.g. a toast.
+export function exampleStatus(page: Page, example: string, text: string) {
+  return page.getByTestId(example).getByRole('status').filter({ hasText: text })
+}
+
+// A block in an example on a board headed by a heading of the given level, whole, by the heading's
+// name, e.g. exampleHeaded(page, 'ex-status-set', 4, 'Rest').
+export function exampleHeaded(page: Page, example: string, level: number, name: string) {
+  return page.getByTestId(example).getByRole('heading', { level, name, exact: true }).locator('..')
+}
+
 // An image in an example on a board, found by its accessible name, e.g. an icon.
 export function exampleImage(page: Page, example: string, name: string) {
   return page.getByTestId(example).getByRole('img', { name, exact: true })

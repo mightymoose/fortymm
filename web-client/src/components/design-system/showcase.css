@@ -24,6 +24,9 @@
 .doc-use p{margin:0;font:400 14px/1.55 var(--font-ui);color:var(--fg-3)}
 .doc-row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
 .doc-roles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:48px 40px;align-items:start;margin-top:48px}
+.doc-status{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:32px}
+.doc-status h4{margin:14px 0 4px;font:600 14px var(--font-ui);color:var(--fg-1)}
+.doc-status p{margin:0;font:400 13px/1.5 var(--font-ui);color:var(--fg-3)}
 .doc-vo{display:inline-flex;font:500 12px var(--font-ui);color:var(--fg-3);box-shadow:inset 0 0 0 1px var(--border-subtle);border-radius:4px;padding:3px 7px;align-self:flex-start;margin:0}
 .sw{display:flex;flex-direction:column;gap:8px;min-width:0}
 .sw i{display:block;height:64px;border-radius:8px;box-shadow:inset 0 0 0 1px var(--border-subtle)}
