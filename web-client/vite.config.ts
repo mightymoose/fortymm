@@ -16,6 +16,7 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     // Tailscale Funnel serves the dev server at fortymm.<tailnet>.ts.net (see the preview task).
-    allowedHosts: ['.ts.net'],
+    // The verify task's e2e tests reach it on the compose network as http://web-client:5173.
+    allowedHosts: ['.ts.net', 'web-client'],
   },
 })

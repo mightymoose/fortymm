@@ -5,3 +5,4 @@ Vite + React + TypeScript. Runs only in Docker (see the root `CLAUDE.md`); never
 - Dev server: use the `web-client-dev` skill, or `./bin/mise run web-client:dev`.
 - npm: `./bin/mise run web-client:npm -- <args>` (e.g. `install <pkg>`, `run build`, `run lint`).
 - Source is in `src/`; the entry point is `src/main.tsx`.
+- E2E tests: Playwright, in `e2e/`. `./bin/mise run web-client:e2e` runs them in the container (Chromium is baked into the image; Playwright starts its own Vite server there). The HTML report goes to `playwright-report/`.

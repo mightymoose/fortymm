@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#MISE description="Run the Playwright e2e tests in the web-client container, e.g. `./bin/mise run web-client:e2e -- --grep home`"
+# Host-side: Playwright, its Chromium, and a Vite dev server all run inside one throwaway container.
+# The HTML report lands in web-client/playwright-report/ (bind-mounted).
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+exec docker compose run --rm --build web-client npx playwright test "$@"
