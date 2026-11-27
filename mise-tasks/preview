@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+#MISE description="Start everything (public dev server via Tailscale Funnel, no host ports) and follow logs"
+# Host-side: start the whole stack, print the public URL, and follow the logs. Ctrl-C stops it.
+# One-time Tailscale setup is in the README.
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+
+# Everything `preview` runs. Add new long-running services (db, api, ...) here.
+services=(tailscale web-client-public)
+
+compose=(docker compose --profile public)
+
+# Rebuild first so package.json / lockfile changes are picked up (cached otherwise).
+"${compose[@]}" build >&2
+"${compose[@]}" up --detach "${services[@]}" >&2
+trap '"${compose[@]}" stop "${services[@]}" >/dev/null 2>&1 || true' EXIT
+
+# Wait for the node to log in; the first run uses TS_AUTHKEY from .env.
+for _ in $(seq 60); do
+  # The first DNSName in the status JSON is this node's (Self comes before Peer).
+  dns=$("${compose[@]}" exec -T tailscale tailscale status --json 2>/dev/null \
+    | sed -n 's/.*"DNSName": *"\([^"]*\)\.".*/\1/p' | head -n1) || true
+  [ -n "${dns:-}" ] && break
+  sleep 1
+done
+if [ -z "${dns:-}" ]; then
+  echo "tailscale didn't come up. Is TS_AUTHKEY set in .env? Logs:" >&2
+  "${compose[@]}" logs --tail 30 tailscale >&2
+  exit 1
+fi
+
+echo "public dev server: https://$dns"
+echo "(The name can take a few minutes to work the first time.)"
+"${compose[@]}" logs --follow "${services[@]}"

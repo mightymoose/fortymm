@@ -14,5 +14,6 @@ Nothing runs on the host except `./bin/mise` and `docker`. No `node`, `npm`, `da
 
 - `check-requirements` — verifies the Dafny specs in `requirements/`. `./bin/mise run requirements:check`, `./bin/mise run requirements:dafny -- <args>`
 - `web-client` — Vite + React + TypeScript app in `web-client/`. `./bin/mise run web-client:dev` starts the dev server on a random host port (printed at startup), so many can run at once.
+- `tailscale` + `web-client-public` (profile `public`) — the dev server on the internet via Tailscale Funnel, no host ports. `./bin/mise run preview`; setup in README.
 
 `./bin/mise run ports` lists the host ports of this checkout's running containers.
