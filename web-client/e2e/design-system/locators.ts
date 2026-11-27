@@ -42,8 +42,11 @@ export interface Margins {
 // measured. Assumes the page is not scrolled: the item's viewport box is its page box.
 export async function findAreaAround(page: Page, item: Locator, margins: Margins) {
   await item.waitFor()
+  // Fonts start loading only once text is laid out, and until then document.fonts reads as loaded.
+  // Measuring forces that layout; then wait for the fonts it asked for, and measure the settled page.
+  await item.boundingBox()
   // A string: the e2e tsconfig has no DOM types.
-  await page.waitForFunction("document.fonts.status === 'loaded'")
+  await page.evaluate('document.fonts.ready.then(() => null)')
   const box = await item.boundingBox()
   if (!box) throw new Error('item is not visible')
   return {
