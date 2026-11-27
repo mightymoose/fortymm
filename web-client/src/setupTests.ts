@@ -14,6 +14,15 @@ afterAll(() => server.close())
 // The core loads its .wasm from disk (see src/core/__mocks__/load-core.ts).
 vi.mock('./core/load-core.ts')
 
+// jsdom has no service worker, so no new version is ever waiting.
+vi.mock('virtual:pwa-register/react', () => ({
+  useRegisterSW: () => ({
+    needRefresh: [false, () => {}],
+    offlineReady: [false, () => {}],
+    updateServiceWorker: async () => {},
+  }),
+}))
+
 // Globals are off, so Testing Library can't register its own afterEach cleanup.
 afterEach(cleanup)
 
