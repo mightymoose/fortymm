@@ -13,6 +13,81 @@ export interface DocumentHealth {
   data: Health;
 }
 
+export type RecordAttributesAnswer = typeof RecordAttributesAnswer[keyof typeof RecordAttributesAnswer];
+
+
+export const RecordAttributesAnswer = {
+  held: 'held',
+  applied: 'applied',
+  malformed: 'malformed',
+  retry_later: 'retry_later',
+} as const;
+
+/**
+ * What the server did with the record: `held` (the ledger holds it), `applied` (a request
+ * that took effect), `malformed` (it doesn't verify; nothing stored) or `retry_later` (the
+ * server can't take it now; nothing stored).
+ */
+export interface RecordAttributes {
+  answer: RecordAttributesAnswer;
+}
+
+/**
+ * The record, a request, did not take effect and never will. It is still held.
+ */
+export interface RefusedRecordAttributes {
+  answer: 'refused';
+  reason: string;
+}
+
+/**
+ * One record of the parcel and the server's answer to it. `id` is the record id, the
+ * SHA-256 of its body, in lower-case hex.
+ */
+export interface RecordResource {
+  type: 'record';
+  /** @pattern ^[0-9a-f]{64}$ */
+  id: string;
+  attributes: RecordAttributes | RefusedRecordAttributes;
+}
+
+/**
+ * `stamp` is the server's current stamp, 8 bytes in lower-case hex.
+ */
+export interface ParcelsMeta {
+  /** @pattern ^[0-9a-f]{16}$ */
+  stamp: string;
+}
+
+/**
+ * One entry per record of the parcel, in the parcel's order, and the server's current
+ * stamp.
+ */
+export interface ParcelsDocument {
+  data: RecordResource[];
+  meta: ParcelsMeta;
+}
+
+const getHeaders = (...sources: (RequestInit['headers'] | Record<string, string | number | boolean | bigint | readonly string[] | undefined>)[]) => {
+  const seen = new Set<string>();
+  const layers: [string, string | readonly string[]][][] = [];
+  for (const source of sources.reverse()) {
+    if (!source) continue;
+    const entries = source instanceof Headers
+      ? source.entries()
+      : Symbol.iterator in source
+        ? Array.from(source as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string])
+        : Object.entries<string | number | boolean | bigint | readonly string[] | undefined>(source);
+    const layer: [string, string | readonly string[]][] = [];
+    for (const [name, value] of entries) {
+      if (value !== undefined && !seen.has(name.toLowerCase())) layer.push([name, typeof value === 'object' ? value : String(value)]);
+    }
+    for (const [name] of layer) seen.add(name.toLowerCase());
+    layers.push(layer);
+  }
+  return Object.fromEntries(layers.reverse().flat()) as Extract<RequestInit['headers'], Record<string, unknown>>;
+};
+
 export type healthResponse200 = {
   data: DocumentHealth
   status: 200
@@ -52,4 +127,47 @@ export const health = async ( options?: RequestInit): Promise<healthResponse> =>
 
   const data: healthResponse['data'] = body ? JSON.parse(body) : {}
   return { data, status: res.status, headers: res.headers } as healthResponse
+}
+
+
+
+export type postParcelsResponse200 = {
+  data: ParcelsDocument
+  status: 200
+}
+
+export type postParcelsResponseSuccess = (postParcelsResponse200) & {
+  headers: Headers;
+};
+;
+
+export type postParcelsResponse = (postParcelsResponseSuccess)
+
+export const getPostParcelsUrl = () => {
+
+
+
+
+  return `/api/v1/parcels`
+}
+
+/**
+ * @summary Hand the server a parcel, and learn what it did with each record
+ */
+export const postParcels = async (postParcelsBody: Blob, options?: RequestInit): Promise<postParcelsResponse> => {
+
+  const res = await fetch(getPostParcelsUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: getHeaders({ 'Content-Type': 'application/octet-stream' }, options?.headers),
+    body: postParcelsBody
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: postParcelsResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as postParcelsResponse
 }
