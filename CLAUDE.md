@@ -14,9 +14,9 @@ Nothing runs on the host except `./bin/mise` and `docker`. No `node`, `npm`, `da
 
 - `check-requirements` — verifies the Dafny specs in `requirements/`. `./bin/mise run requirements:check`, `./bin/mise run requirements:dafny -- <args>`
 - `design-system` — nginx serving the design system reference boards in `requirements/design-system/reference/`, the reference for the Playwright screenshot tests. `./bin/mise run requirements:design-system:reference:serve` serves them on a random host port (printed at startup).
-- `web-client` — Vite + React + TypeScript app in `web-client/`. `./bin/mise run web-client:dev` starts the dev server on a random host port (printed at startup), so many can run at once. `./bin/mise run web-client:e2e` runs the Playwright tests in the same image.
+- `web-client` — Vite + React + TypeScript app in `web-client/`. `./bin/mise run web-client:dev` starts the dev server on a random host port (printed at startup), so many can run at once. `./bin/mise run web-client:test` runs the Vitest unit tests and `./bin/mise run web-client:e2e` the Playwright tests, in the same image.
 - `tailscale` + `web-client-public` (profile `public`) — the dev server on the internet via Tailscale Funnel, no host ports. `./bin/mise run preview`; setup in README.
 
-`./bin/mise run dev` starts every dev server (web client + design system reference) and prints their URLs; `--detach` returns once they are healthy. `./bin/mise run verify` starts them if needed, then runs lint, typecheck and the e2e tests against them, and stops them afterwards only if it started them.
+`./bin/mise run dev` starts every dev server (web client + design system reference) and prints their URLs; `--detach` returns once they are healthy. `./bin/mise run verify` starts them if needed, then runs lint, typecheck, unit tests and the e2e tests against them, and stops them afterwards only if it started them.
 
 `./bin/mise run ports` lists the host ports of this checkout's running containers.

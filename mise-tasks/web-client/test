@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Run the Vitest unit tests in the web-client container, e.g. `./bin/mise run web-client:test -- HomeScreen`"
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+exec docker compose run --rm --build --no-deps web-client npx vitest run "$@"
