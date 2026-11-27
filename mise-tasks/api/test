@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Run the api pytest tests in the api container, e.g. `./bin/mise run api:test -- -k health`"
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+exec docker compose run --rm --build --no-deps api pytest "$@"

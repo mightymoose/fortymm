@@ -1,0 +1,10 @@
+# Tools for the api container.
+[tools]
+python = "3.15.2"
+uv = "0.13.10"
+# Breaking-change check for openapi.json (see mise-tasks/verify). Not in the mise registry.
+"github:oasdiff/oasdiff" = "1.41.0"
+
+[env]
+# Activate the image's venv, so its python and tools (fastapi, pytest, ruff, mypy) come first on PATH.
+_.python.venv = ".venv"

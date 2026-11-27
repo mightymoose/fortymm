@@ -5,14 +5,14 @@
 set -euo pipefail
 cd "$MISE_PROJECT_ROOT"
 
-# Everything `preview` runs. Add new long-running services (db, api, ...) here.
-services=(tailscale web-client-public)
+# Everything `preview` runs. Add new long-running services (db, ...) here.
+services=(tailscale api-public web-client-public)
 
 compose=(docker compose --profile public)
 
 # Rebuild first so package.json / lockfile changes are picked up (cached otherwise).
 "${compose[@]}" build >&2
-# Fresh anonymous volumes, so node_modules comes from the rebuilt image, not the last container.
+# Fresh anonymous volumes, so node_modules and .venv come from the rebuilt image, not the last container.
 "${compose[@]}" up --detach --renew-anon-volumes "${services[@]}" >&2
 trap '"${compose[@]}" stop "${services[@]}" >/dev/null 2>&1 || true' EXIT
 
@@ -30,6 +30,6 @@ if [ -z "${dns:-}" ]; then
   exit 1
 fi
 
-echo "public dev server: https://$dns"
+echo "public dev server: https://$dns  (/api is proxied to the api)"
 echo "(The name can take a few minutes to work the first time.)"
 "${compose[@]}" logs --follow "${services[@]}"

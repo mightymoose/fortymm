@@ -17,6 +17,22 @@ x-web-client: &web-client
     start_period: 60s
     start_interval: 1s
 
+# Shared api settings. Each service below adds how it is reached.
+x-api: &api
+  build:
+    context: .
+    dockerfile: api/Dockerfile
+    target: dev
+  volumes:
+    - ./api:/app/api
+    # Keep the image's .venv (Linux builds) instead of the host directory.
+    - /app/api/.venv
+  healthcheck:
+    test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8000/api/v1/health"]
+    interval: 30s
+    start_period: 60s
+    start_interval: 1s
+
 services:
   # Checks the product requirements in requirements/*.dfy with Dafny + Z3.
   # Run via ./bin/mise run requirements:check (see mise-tasks/requirements/).
@@ -33,9 +49,25 @@ services:
   # Vite + React + TypeScript app. Run via ./bin/mise run web-client:dev (see mise-tasks/web-client/).
   web-client:
     <<: *web-client
+    # Vite proxies /api to the api service (see web-client/vite.config.ts).
+    depends_on:
+      - api
     # Container port only: Docker picks a free host port, so many dev servers can run at once.
     ports:
       - "5173"
+
+  # FastAPI server. Run via ./bin/mise run api:dev (see mise-tasks/api/). The web client reaches
+  # it as http://api:8000 on the compose network.
+  api:
+    <<: *api
+    # Container port only: Docker picks a free host port.
+    ports:
+      - "8000"
+
+  # The api for preview: no host ports, reached only by web-client-public's /api proxy.
+  api-public:
+    <<: *api
+    profiles: ["public"]
 
   # Tailscale sidecar: puts the public dev server on the tailnet and on the internet via Funnel.
   # Run via ./bin/mise run preview. Setup steps are in the README.
@@ -67,8 +99,11 @@ services:
   web-client-public:
     <<: *web-client
     network_mode: service:tailscale
+    environment:
+      - API_URL=http://api-public:8000
     depends_on:
       - tailscale
+      - api-public
     profiles: ["public"]
 
   # nginx serving the design system reference in requirements/design-system/reference/.
@@ -90,7 +125,6 @@ services:
 
   # Coming next:
   # db:   postgres
-  # api:  python server
 
 volumes:
   tailscale-state:
