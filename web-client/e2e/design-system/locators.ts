@@ -59,6 +59,63 @@ export async function findAreaAround(page: Page, item: Locator, margins: Margins
 
 // A control in an example on a board, found by its role and accessible name, e.g.
 // exampleControl(page, 'ex-variants', 'button', 'Reschedule').
-export function exampleControl(page: Page, example: string, role: 'button' | 'link', name: string) {
+export function exampleControl(page: Page, example: string, role: ControlRole, name: string) {
   return page.getByTestId(example).getByRole(role, { name, exact: true })
+}
+
+// A form field in an example on a board, whole (label, control and help or error), found by its
+// control's accessible name, e.g. exampleField(page, 'ex-text-field', 'Club (optional)').
+export function exampleField(page: Page, example: string, name: string) {
+  return page.getByTestId(example).getByLabel(name, { exact: true }).locator('..')
+}
+
+// The roles of the controls exampleControl finds.
+export type ControlRole = 'button' | 'link' | 'checkbox' | 'radio' | 'switch' | 'tab'
+
+// A choice in an example on a board, whole, by its control's role and name: a checkbox's or radio's
+// label, which holds the input, or a switch, which is its own label.
+export function exampleChoice(
+  page: Page,
+  example: string,
+  role: 'checkbox' | 'radio' | 'switch',
+  name: string,
+) {
+  const control = exampleControl(page, example, role, name)
+  return role === 'switch' ? control : control.locator('..')
+}
+
+// The range field in an example on a board, whole (label and slider), found by its slider.
+export function exampleRangeField(page: Page, example: string) {
+  return page.getByTestId(example).getByRole('slider').locator('..')
+}
+
+// One of the code inputs (fm-code) in an example on a board, whole, by its name and its place among
+// the code inputs with that name: the board draws several states of one field.
+export function exampleCodeInput(page: Page, example: string, name: string, index: number) {
+  return page.getByTestId(example).getByRole('group', { name, exact: true }).nth(index).locator('..')
+}
+
+// A combobox field in an example on a board, whole, by its placeholder: the board draws two
+// comboboxes with the same name.
+export function exampleComboBoxField(page: Page, example: string, placeholder: string) {
+  return page.getByTestId(example).getByPlaceholder(placeholder, { exact: true }).locator('../..')
+}
+
+// The open combobox in an example on a board, and its list.
+export function exampleOpenComboBox(page: Page, example: string) {
+  return page.getByTestId(example).getByRole('combobox', { expanded: true })
+}
+export function exampleListBox(page: Page, example: string) {
+  return page.getByTestId(example).getByRole('listbox')
+}
+
+// A date field in an example on a board, whole (label, field, calendar button and help), by its
+// name: the text box sits a level deeper than in other fields, beside its button.
+export function exampleDateField(page: Page, example: string, name: string) {
+  return page.getByTestId(example).getByRole('textbox', { name, exact: true }).locator('../..')
+}
+
+// The calendar in an example on a board, whole (heading, month and footer), found by its grid.
+export function exampleCalendar(page: Page, example: string) {
+  return page.getByTestId(example).getByRole('grid').locator('..')
 }
