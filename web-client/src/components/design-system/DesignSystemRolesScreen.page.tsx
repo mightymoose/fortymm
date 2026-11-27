@@ -10,4 +10,8 @@ export class DesignSystemRolesScreenPage {
   get buttonsHeading() {
     return screen.getByRole('heading', { level: 2, name: 'Buttons' })
   }
+
+  get viewDrawLink() {
+    return screen.getByRole('link', { name: 'View draw' })
+  }
 }

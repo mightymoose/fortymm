@@ -45,6 +45,12 @@ describe('App', () => {
       expect(app.designSystem.roles.buttonsHeading).toBeInTheDocument()
     })
 
+    it('goes to the Match board from View draw on the Roles board', async ({ user }) => {
+      const app = await AppPage.render('/design-system/roles')
+      await user.click(app.designSystem.roles.viewDrawLink)
+      expect(await app.designSystem.match.findMatchComponentsHeading()).toBeInTheDocument()
+    })
+
     it('shows Fields and choices at /design-system/forms', async () => {
       const app = await AppPage.render('/design-system/forms')
       expect(app.designSystem.forms.fieldsAndChoicesHeading).toBeInTheDocument()

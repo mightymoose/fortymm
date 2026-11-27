@@ -111,17 +111,18 @@ const icons = {
 export type IconName = keyof typeof icons
 
 // An icon. With a label it is an image with that name; without, it is decoration, hidden from
-// assistive technology.
-export function Icon({ name, label }: { name: IconName; label?: string }) {
+// assistive technology. Small icons (16px) are for dense rows and small buttons.
+export function Icon({ name, label, size }: { name: IconName; label?: string; size?: 'sm' }) {
+  const className = size === 'sm' ? 'fm-ic fm-ic--sm' : 'fm-ic'
   if (label) {
     return (
-      <span className="fm-ic" role="img" aria-label={label}>
+      <span className={className} role="img" aria-label={label}>
         <svg viewBox="0 0 24 24">{icons[name]}</svg>
       </span>
     )
   }
   return (
-    <span className="fm-ic">
+    <span className={className}>
       <svg viewBox="0 0 24 24" aria-hidden="true">
         {icons[name]}
       </svg>

@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 import { targets } from './boards.ts'
 import { type Margins } from './locators.ts'
 import { type FoundationsExample, type SwatchGroup } from './main/main.board.ts'
+import { type RolesExample, type RolesRole } from './roles/roles.board.ts'
 
 // The colour swatches on the Foundations board, by group and name.
 const swatches: Record<SwatchGroup, string[]> = {
@@ -126,6 +127,54 @@ const foundationsExamples: FoundationsExample[] = [
   'found-status-markers',
   'found-icons',
 ]
+
+// The buttons in each example on the Roles board, by accessible name, and the links.
+const rolesButtons: Record<RolesExample, string[]> = {
+  'ex-variants': [
+    'Call to table',
+    'Reschedule',
+    'Print score sheet',
+    'Withdraw player…',
+    'Withdraw',
+    'Small',
+    'Default',
+    'Large',
+    'Extra large',
+    'More options',
+    'Close',
+    'Undo last point',
+    'Search commands',
+    '+1 Patel',
+  ],
+  'ex-loading-and-disabled': [
+    'Saving…',
+    'Exporting…',
+    'Printing…',
+    'Start match',
+    'Call to table',
+    'Reschedule',
+    'Print sheet',
+    'Withdraw…',
+  ],
+}
+const rolesLinks: Record<RolesExample, string[]> = {
+  'ex-variants': ['View draw'],
+  'ex-loading-and-disabled': [],
+}
+
+// The roles at a glance on the Roles board that are screenshotted whole, by test id.
+const rolesRoles: RolesRole[] = ['role-card', 'role-notice-examples', 'role-warning', 'role-error']
+
+// How far the toast and the tooltip paint past their boxes: their shadows (see shadowTiles).
+const toastMargins: Margins = { top: 16, right: 24, bottom: 32, left: 24 }
+const tooltipMargins: Margins = { top: 8, right: 12, bottom: 16, left: 12 }
+
+// A control's screenshot is named after its accessible name, under its example's folder, e.g.
+// roles/variants/withdraw-player.png for 'Withdraw player…' in ex-variants.
+function controlScreenshotName(example: RolesExample, name: string) {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+  return ['roles', example.replace(/^ex-/, ''), `${slug}.png`]
+}
 
 // An item's screenshot is named after the first token of its label, under the given folders, e.g.
 // foundations/ink-950.png for 'ink-950 · bg-app', foundations/serving.png for 'serving, winner'.
@@ -301,16 +350,84 @@ for (const target of targets) {
       })
     })
 
-    test('roles board shows Roles at a glance', async ({ page }) => {
-      const { roles } = target.boards(page)
-      await roles.goto()
-      await expect(roles.rolesAtAGlanceHeading).toBeVisible()
-    })
+    test.describe('roles board', () => {
+      test('shows Roles at a glance', async ({ page }) => {
+        const { roles } = target.boards(page)
+        await roles.goto()
+        await expect(roles.rolesAtAGlanceHeading).toBeVisible()
+      })
 
-    test('roles board shows Buttons', async ({ page }) => {
-      const { roles } = target.boards(page)
-      await roles.goto()
-      await expect(roles.buttonsHeading).toBeVisible()
+      test('shows Buttons', async ({ page }) => {
+        const { roles } = target.boards(page)
+        await roles.goto()
+        await expect(roles.buttonsHeading).toBeVisible()
+      })
+
+      for (const [example, names] of Object.entries(rolesButtons) as [RolesExample, string[]][]) {
+        for (const name of names) {
+          test(`matches the ${name} button in ${example}`, async ({ page }) => {
+            const { roles } = target.boards(page)
+            await roles.goto()
+            await expect(roles.button(example, name)).toHaveScreenshot(
+              controlScreenshotName(example, name),
+            )
+          })
+        }
+      }
+
+      for (const [example, names] of Object.entries(rolesLinks) as [RolesExample, string[]][]) {
+        for (const name of names) {
+          test(`matches the ${name} link in ${example}`, async ({ page }) => {
+            const { roles } = target.boards(page)
+            await roles.goto()
+            await expect(roles.link(example, name)).toHaveScreenshot(
+              controlScreenshotName(example, name),
+            )
+          })
+        }
+      }
+
+      for (const example of Object.keys(rolesButtons) as RolesExample[]) {
+        test(`matches the ${example} example`, async ({ page }) => {
+          const { roles } = target.boards(page)
+          await roles.goto()
+          await expect(roles.example(example)).toHaveScreenshot(['roles', 'examples', `${example}.png`])
+        })
+      }
+
+      for (const testId of rolesRoles) {
+        test(`matches the ${testId} role`, async ({ page }) => {
+          const { roles } = target.boards(page)
+          await roles.goto()
+          await expect(roles.role(testId)).toHaveScreenshot(['roles', 'roles', `${testId}.png`])
+        })
+      }
+
+      test('matches the toast role', async ({ page }) => {
+        const { roles } = target.boards(page)
+        await roles.goto()
+        const clip = await roles.findToastArea(toastMargins)
+        await expect(page).toHaveScreenshot(['roles', 'roles', 'role-toast.png'], {
+          clip,
+          fullPage: true,
+        })
+      })
+
+      test('matches the tooltip role', async ({ page }) => {
+        const { roles } = target.boards(page)
+        await roles.goto()
+        const clip = await roles.findTooltipArea(tooltipMargins)
+        await expect(page).toHaveScreenshot(['roles', 'roles', 'role-tooltip.png'], {
+          clip,
+          fullPage: true,
+        })
+      })
+
+      test('matches the whole Roles page', async ({ page }) => {
+        const { roles } = target.boards(page)
+        await roles.goto()
+        await expect(roles.rolesPage).toHaveScreenshot(['roles', 'page.png'])
+      })
     })
 
     test('forms board shows Fields and choices', async ({ page }) => {
