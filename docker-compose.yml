@@ -114,6 +114,22 @@ services:
       - api-public
     profiles: ["public"]
 
+  # Whole-stack Playwright journeys in journeys/: a browser against the running dev servers, reached
+  # on the compose network. Run via ./bin/mise run journeys:test (or verify). No ports.
+  journeys:
+    build:
+      context: .
+      dockerfile: journeys/Dockerfile
+      target: dev
+    volumes:
+      - ./journeys:/app/journeys
+      # Keep the image's node_modules (Linux builds) instead of the host directory.
+      - /app/journeys/node_modules
+      # The web client's page objects (web-client/e2e/pages.ts), which the journeys drive.
+      - ./web-client/e2e:/app/web-client/e2e:ro
+      # Its "type": "module", so Node and tsc load those page objects as ES modules.
+      - ./web-client/package.json:/app/web-client/package.json:ro
+
   # nginx serving the design system reference in requirements/design-system/reference/.
   # Run via ./bin/mise run requirements:design-system:reference:serve (see mise-tasks/requirements/).
   design-system:

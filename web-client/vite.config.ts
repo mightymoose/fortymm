@@ -1,5 +1,6 @@
 import { tanstackRouter } from '@tanstack/router-plugin/vite'
 import react from '@vitejs/plugin-react'
+import { searchForWorkspaceRoot } from 'vite'
 import { defineConfig } from 'vitest/config'
 
 // https://vite.dev/config/
@@ -22,6 +23,11 @@ export default defineConfig({
     // service on the compose network; preview's web-client-public sets API_URL to api-public.
     proxy: {
       '/api': process.env.API_URL ?? 'http://api:8000',
+    },
+    // fortymm-core-wasm is a file: link to ../core/bindings/wasm/pkg, outside the project, so its
+    // .wasm (fetched by init()) would be refused without this.
+    fs: {
+      allow: [searchForWorkspaceRoot(process.cwd()), '../core/bindings/wasm/pkg'],
     },
   },
   // Unit tests (Vitest) sit next to the code they test as *.test.ts(x); e2e/ is Playwright's.

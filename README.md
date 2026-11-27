@@ -20,7 +20,7 @@ and operations proven to preserve every requirement from every valid state.
 ```sh
 ./bin/mise run dev                                 # every dev server (api, web client, design system reference), URLs printed; Ctrl-C stops
 ./bin/mise run dev --detach                        # same, but return once they are healthy
-./bin/mise run verify                              # dev servers up, then lint + typecheck + tests (web client, api) + e2e
+./bin/mise run verify                              # dev servers up, then lint + typecheck + tests (web client, api) + e2e + journeys
 ```
 
 `verify` runs every check, then fails if any did. It reuses servers `dev` already started, and only stops the ones it started.
@@ -37,6 +37,7 @@ The app lives in `web-client/`. Node is installed in the image by mise from `web
 ./bin/mise run web-client:api-client               # regenerate src/api/generated.ts from api/openapi.json (orval)
 ./bin/mise run web-client:e2e                      # Playwright e2e tests (Chromium, in the container)
 ./bin/mise run web-client:e2e -- --grep home       # any playwright test args
+./bin/mise run journeys:test                       # whole-stack Playwright journeys against the dev servers
 ```
 
 Each `web-client:dev` gets its own container and host port, so several can run at once. `./bin/mise run ports` lists them.

@@ -2,7 +2,7 @@
 import '@testing-library/jest-dom/vitest'
 import { cleanup } from '@testing-library/react'
 import { userEvent } from '@testing-library/user-event'
-import { afterAll, afterEach, beforeAll, it as base } from 'vitest'
+import { afterAll, afterEach, beforeAll, it as base, vi } from 'vitest'
 import { server } from './mocks/server.ts'
 
 // Every request goes to MSW; one with no handler fails the test rather than reaching the network.
@@ -10,6 +10,9 @@ beforeAll(() => server.listen({ onUnhandledFrame: 'error' }))
 // Undo any `server.use(...)` a test added.
 afterEach(() => server.resetHandlers())
 afterAll(() => server.close())
+
+// The core loads its .wasm from disk (see src/core/__mocks__/load-core.ts).
+vi.mock('./core/load-core.ts')
 
 // Globals are off, so Testing Library can't register its own afterEach cleanup.
 afterEach(cleanup)
