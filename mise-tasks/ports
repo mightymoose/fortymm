@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#MISE description="List the host ports this checkout's running containers are listening on"
+# Host-side: list the host ports published by this checkout's running containers.
+# Matches on compose's working_dir label, so containers from other checkouts are left out.
+set -euo pipefail
+root="$MISE_PROJECT_ROOT"
+
+ids=$(docker ps -q --filter "label=com.docker.compose.project.working_dir=$root")
+if [ -z "$ids" ]; then
+  echo "Nothing from $root is running." >&2
+  exit 0
+fi
+
+{
+  printf 'SERVICE\tURL\tCONTAINER PORT\tCONTAINER\n'
+  for id in $ids; do
+    service=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' "$id")
+    name=$(docker inspect -f '{{.Name}}' "$id")
+    # "5173/tcp -> 0.0.0.0:32772" and "5173/tcp -> [::]:32772" are the same port; keep one.
+    docker port "$id" | awk -v s="$service" -v n="${name#/}" '{
+      cport = $1; hport = $3; sub(/.*:/, "", hport)
+      if (!seen[cport hport]++) printf "%s\thttp://localhost:%s\t%s\t%s\n", s, hport, cport, n
+    }'
+  done
+} | column -t -s $'\t'

@@ -1,9 +1,2 @@
-# Host-side tasks. Run with ./bin/mise run <task> [args].
-
-[tasks.check-requirements]
-description = "Verify the Dafny requirements (all, or the files given, relative to requirements/)"
-run = "docker compose run --rm check-requirements"
-
-[tasks.dafny]
-description = "Run any dafny command in the requirements container, e.g. `./bin/mise run dafny -- --help`"
-run = "docker compose run --rm --entrypoint /app/bin/mise check-requirements exec -- dafny"
+# Host-side tasks live in mise-tasks/ (one executable file per task; subfolders become
+# `folder:task`). Run them with ./bin/mise run <task> [args]. List them with ./bin/mise tasks.

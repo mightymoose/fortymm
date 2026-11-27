@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#MISE description="Start a web-client dev server on a random host port (printed at startup)"
+# Host-side: start a web-client dev server container on a random host port and follow its logs.
+# Each run gets its own container, so many can run at once. Ctrl-C stops it.
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+
+# Rebuild first so package.json / lockfile changes are picked up (cached otherwise).
+docker compose build web-client >&2
+id=$(docker compose run --detach --rm --service-ports web-client)
+trap 'docker stop "$id" >/dev/null 2>&1 || true' EXIT
+
+port=$(docker port "$id" 5173/tcp | head -n1 | sed 's/.*://')
+echo "web-client dev server: http://localhost:$port  (container $id)"
+echo "(Vite's own log below shows the container port, 5173.)"
+docker logs --follow "$id"

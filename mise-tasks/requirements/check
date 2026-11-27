@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Verify the Dafny requirements (all, or the files given, relative to requirements/)"
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+exec docker compose run --rm check-requirements "$@"
