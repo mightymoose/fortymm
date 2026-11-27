@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Run the whole-stack Playwright journeys (journeys/) against the dev servers, e.g. `./bin/mise run journeys:test -- --grep health`"
+#MISE description="Run the whole-stack Playwright journeys (journeys/) against the api and the built web client (web-client-nginx), e.g. `./bin/mise run journeys:test -- --grep health`"
 # Host-side. Starts the dev servers if they aren't running, and stops them afterwards only if it
 # started them. The HTML report lands in journeys/playwright-report/ (bind-mounted).
 set -euo pipefail
@@ -7,7 +7,9 @@ cd "$MISE_PROJECT_ROOT"
 
 # Only the service's own container counts, not one-off `run` containers (see verify).
 if ! docker compose ps --status running --format '{{.Name}}' web-client | grep -qv -- '-run-'; then
-  trap 'docker compose stop api web-client design-system >/dev/null 2>&1 || true' EXIT
+  trap 'docker compose stop api web-client web-client-nginx design-system >/dev/null 2>&1 || true' EXIT
   ./bin/mise run dev --detach >&2
 fi
+# The journeys run against the built web client: rebuild it, in case dev was already running.
+docker compose up --detach --wait --build web-client-nginx >&2
 docker compose run --rm --build journeys npx playwright test "$@"

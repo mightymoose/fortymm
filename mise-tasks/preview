@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Start everything (public dev server via Tailscale Funnel, no host ports) and follow logs"
+#MISE description="Build and start everything (the built web client on nginx, public via Tailscale Funnel, no host ports) and follow logs"
 # Host-side: start the whole stack, print the public URL, and follow the logs. Ctrl-C stops it.
 # One-time Tailscale setup is in the README.
 set -euo pipefail
@@ -30,6 +30,6 @@ if [ -z "${dns:-}" ]; then
   exit 1
 fi
 
-echo "public dev server: https://$dns  (/api is proxied to the api)"
+echo "public preview (built web client): https://$dns  (/api is proxied to the api)"
 echo "(The name can take a few minutes to work the first time.)"
 "${compose[@]}" logs --follow "${services[@]}"

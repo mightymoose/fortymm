@@ -12,4 +12,10 @@ export class HomePage {
   async goto() {
     await this.page.goto("/");
   }
+
+  // Resolves once the service worker (production builds only) has precached the app and controls
+  // this page, so later loads work with no network.
+  async waitUntilAvailableOffline() {
+    await this.page.waitForFunction('navigator.serviceWorker.controller !== null');
+  }
 };

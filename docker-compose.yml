@@ -22,6 +22,21 @@ x-web-client: &web-client
     start_period: 60s
     start_interval: 1s
 
+# The web client's production build, served by nginx (web-client/nginx.conf.template), which
+# proxies /api to $API_URL. Shared by web-client-nginx and preview's web-client-public.
+x-web-client-nginx: &web-client-nginx
+  build:
+    context: .
+    dockerfile: web-client/Dockerfile
+    target: serve
+    additional_contexts:
+      core-wasm: service:core-wasm
+  healthcheck:
+    test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:5173/"]
+    interval: 30s
+    start_period: 30s
+    start_interval: 1s
+
 # Shared api settings. Each service below adds how it is reached.
 x-api: &api
   build:
@@ -64,6 +79,21 @@ services:
     ports:
       - "5173"
 
+  # The web client's production build on nginx, proxying /api to the api: what the journeys run
+  # against, since the service worker exists only in a build. Started by ./bin/mise run dev
+  # (URL printed). The source is baked into the image, so rebuild it to see changes.
+  web-client-nginx:
+    <<: *web-client-nginx
+    environment:
+      - API_URL=http://api:8000
+    depends_on:
+      # nginx resolves the api's name when it starts, so the api must be up first.
+      api:
+        condition: service_healthy
+    # Container port only: Docker picks a free host port.
+    ports:
+      - "5173"
+
   # FastAPI server. Run via ./bin/mise run api:dev (see mise-tasks/api/). The web client reaches
   # it as http://api:8000 on the compose network.
   api:
@@ -77,7 +107,7 @@ services:
     <<: *api
     profiles: ["public"]
 
-  # Tailscale sidecar: puts the public dev server on the tailnet and on the internet via Funnel.
+  # Tailscale sidecar: puts the public preview (web-client-public) on the tailnet and on the internet via Funnel.
   # Run via ./bin/mise run preview. Setup steps are in the README.
   tailscale:
     image: tailscale/tailscale:latest
@@ -102,20 +132,25 @@ services:
     restart: unless-stopped
     profiles: ["public"]
 
-  # The dev server, reachable only through the tailscale sidecar: no host ports.
-  # Funnel proxies https://fortymm.<tailnet>.ts.net to 127.0.0.1:5173 in the shared namespace.
+  # The preview: the web client's production build, reachable only through the tailscale sidecar
+  # (no host ports). Funnel proxies https://fortymm.<tailnet>.ts.net to 127.0.0.1:5173 in the
+  # shared namespace. The preview task rebuilds it on every run.
   web-client-public:
-    <<: *web-client
+    <<: *web-client-nginx
     network_mode: service:tailscale
     environment:
       - API_URL=http://api-public:8000
     depends_on:
-      - tailscale
-      - api-public
+      tailscale:
+        condition: service_started
+      # nginx resolves the api's name when it starts, so the api must be up first.
+      api-public:
+        condition: service_healthy
     profiles: ["public"]
 
-  # Whole-stack Playwright journeys in journeys/: a browser against the running dev servers, reached
-  # on the compose network. Run via ./bin/mise run journeys:test (or verify). No ports.
+  # Whole-stack Playwright journeys in journeys/: a browser against web-client-nginx (the built web
+  # client, so its service worker too) and the api, reached on the compose network. Run via
+  # ./bin/mise run journeys:test (or verify), which rebuild web-client-nginx first. No ports.
   journeys:
     build:
       context: .

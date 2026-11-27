@@ -37,7 +37,7 @@ The app lives in `web-client/`. Node is installed in the image by mise from `web
 ./bin/mise run web-client:api-client               # regenerate src/api/generated.ts from api/openapi.json (orval)
 ./bin/mise run web-client:e2e                      # Playwright e2e tests (Chromium, in the container)
 ./bin/mise run web-client:e2e -- --grep home       # any playwright test args
-./bin/mise run journeys:test                       # whole-stack Playwright journeys against the dev servers
+./bin/mise run journeys:test                       # whole-stack Playwright journeys against the api and the nginx build
 ```
 
 Each `web-client:dev` gets its own container and host port, so several can run at once. `./bin/mise run ports` lists them.
@@ -60,9 +60,10 @@ finds a breaking change against the spec on `main` (as of where the branch split
 
 ## Preview (Tailscale Funnel)
 
-`./bin/mise run preview` starts everything. For now that's the dev server (with `/api` proxied to the api), behind a Tailscale sidecar that serves it
-on the internet at `https://fortymm.<tailnet>.ts.net` via Funnel. No host ports are published; `web-client:dev` is unchanged.
-The sidecar's config is `tailscale/serve.json` (Funnel on 443 → Vite on `127.0.0.1:5173`).
+`./bin/mise run preview` builds and starts everything: the web client's production build, served by nginx (`web-client/nginx.conf.template`,
+with `/api` proxied to the api), behind a Tailscale sidecar that serves it on the internet at `https://fortymm.<tailnet>.ts.net`
+via Funnel. There is no hot reload: re-run `preview` to pick up changes. No host ports are published; `web-client:dev` is unchanged.
+The sidecar's config is `tailscale/serve.json` (Funnel on 443 → nginx on `127.0.0.1:5173`).
 
 One-time setup in the [Tailscale admin console](https://login.tailscale.com/admin):
 

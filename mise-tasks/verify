@@ -8,7 +8,7 @@ cd "$MISE_PROJECT_ROOT"
 # Only the service's own container counts (the one dev starts, reachable as `web-client`), not
 # one-off `run` containers such as web-client:dev's (named <project>-web-client-run-<id>).
 if ! docker compose ps --status running --format '{{.Name}}' web-client | grep -qv -- '-run-'; then
-  trap 'docker compose stop api web-client design-system >/dev/null 2>&1 || true' EXIT
+  trap 'docker compose stop api web-client web-client-nginx design-system >/dev/null 2>&1 || true' EXIT
   ./bin/mise run dev --detach || exit 1
 fi
 
@@ -24,6 +24,10 @@ in_api() { docker compose run --rm --no-deps api "$@"; }
 in_core() { docker compose run --rm --build core "$@"; }
 # Not one of the dev servers, so dev doesn't build it: build it here.
 in_journeys() { docker compose run --rm --no-deps --build journeys "$@"; }
+# The journeys run against the built web client: rebuild it first, in case dev was already running.
+run_journeys() {
+  docker compose up --detach --wait --build web-client-nginx >&2 && in_journeys npx playwright test
+}
 # oasdiff: does api/openapi.json break clients of the spec on main, as of where this branch split off?
 api_breaking() {
   local base
@@ -49,7 +53,7 @@ check api-client-drift in_web_client -e ORVAL_TARGET=/tmp/generated.ts web-clien
 check e2e       in_web_client -e E2E_BASE_URL=http://web-client:5173 web-client npx playwright test
 # The whole stack in a browser: web client, its /api proxy, the api, and the core on both sides.
 check journeys-typecheck in_journeys npm run typecheck
-check journeys  in_journeys npx playwright test
+check journeys  run_journeys
 check api-lint      in_api ruff check
 check api-format    in_api ruff format --check
 check api-typecheck in_api mypy .
