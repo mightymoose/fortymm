@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { targets } from './boards.ts'
-import { type ControlRole, type Margins } from './locators.ts'
+import { type ControlRole, type Margins, type NamedRole } from './locators.ts'
+import { type ContainersExample } from './containers/containers.board.ts'
 import { type ChoiceRole, type FormsExample } from './forms/forms.board.ts'
 import { type FoundationsExample, type SwatchGroup } from './main/main.board.ts'
 import { type RolesExample, type RolesRole } from './roles/roles.board.ts'
@@ -256,6 +257,63 @@ const formsControls: Partial<Record<FormsExample, [ControlRole, string][]>> = {
   ],
   'ex-switch': [['switch', 'Call players automatically']],
 }
+
+// The named elements in each example on the Containers board, by role and name: cards (by title),
+// match rows ("A vs B"), timeline tracks (by table), the labelled warning and the split view's
+// handle. Then the examples in its Containers section, whole.
+const containersNamed: Partial<Record<ContainersExample, [NamedRole, string][]>> = {
+  'ex-card': [
+    ['region', 'Table 3'],
+    ['region', 'Wójcik-Szymańska, Agnieszka'],
+    ['article', 'Patel, Meera vs Wójcik-Szymańska, Agnieszka'],
+  ],
+  'ex-scroll-area': [['region', 'Check-in']],
+  'ex-split-view': [
+    ['group', 'Table 1'],
+    ['group', 'Table 2'],
+    ['group', 'Table 3'],
+    ['group', 'Table 4'],
+    ['separator', 'Resize schedule and match details'],
+    ['region', 'Patel vs Park'],
+    ['article', 'Patel, Meera vs Park, Ji-ho'],
+    ['group', 'Scheduling conflict'],
+  ],
+}
+const containersExamples: ContainersExample[] = ['ex-card', 'ex-scroll-area', 'ex-split-view']
+
+// The toasts on the Containers board: each one's message, and its screenshot's name. Each is
+// captured with its shadow (toastMargins); the stage's 28px gap is less than the shadow's reach
+// below, so a toast's area also takes in the top of the next one.
+const toasts: Record<string, string> = {
+  'Chen vs Ali called to Table 1': 'undo',
+  'Table 4 marked free': 'no-undo',
+  'Works on the tournament screen, not in this gallery': 'info',
+}
+
+// The inline notices on the Containers board: text from each one, and its screenshot's name.
+const notices: Record<string, string> = {
+  'Lindqvist rests until 12:10.': 'rest',
+  'Scores update live for spectators': 'info',
+  'Schedule updated.': 'success',
+  'Kept at 11:50 by the organizer.': 'warning',
+}
+
+// The alerts on the Containers board: each one's title, and its screenshot's name.
+const alerts: Record<string, string> = {
+  'Okafor-Adeyemi is booked on two tables at 12:00': 'warning',
+  'Table 4 scorer is offline': 'error',
+}
+
+// The statuses in the Containers board's status set, by heading.
+const statuses = ['Live', 'Error', 'Destructive', 'Rest', 'Conflict', 'Disconnected']
+
+// The examples in the Containers board's Feedback section, whole.
+const feedbackExamples: ContainersExample[] = [
+  'ex-toast',
+  'ex-inline-notice',
+  'ex-warning-and-error',
+  'ex-status-set',
+]
 
 // A control's or field's screenshot is named after its accessible name, under its board's and
 // example's folders, e.g. roles/variants/withdraw-player.png for 'Withdraw player…' in ex-variants.
@@ -674,16 +732,111 @@ for (const target of targets) {
       }
     })
 
-    test('containers board shows Containers', async ({ page }) => {
-      const { containers } = target.boards(page)
-      await containers.goto()
-      await expect(containers.containersHeading).toBeVisible()
-    })
+    test.describe('containers board', () => {
+      test('shows Containers', async ({ page }) => {
+        const { containers } = target.boards(page)
+        await containers.goto()
+        await expect(containers.containersHeading).toBeVisible()
+      })
 
-    test('containers board shows Feedback', async ({ page }) => {
-      const { containers } = target.boards(page)
-      await containers.goto()
-      await expect(containers.feedbackHeading).toBeVisible()
+      test('shows Feedback', async ({ page }) => {
+        const { containers } = target.boards(page)
+        await containers.goto()
+        await expect(containers.feedbackHeading).toBeVisible()
+      })
+
+      for (const [example, elements] of Object.entries(containersNamed) as [
+        ContainersExample,
+        [NamedRole, string][],
+      ][]) {
+        for (const [role, name] of elements) {
+          test(`matches the ${name} ${role} in ${example}`, async ({ page }) => {
+            const { containers } = target.boards(page)
+            await containers.goto()
+            await expect(containers.named(example, role, name)).toHaveScreenshot(
+              exampleScreenshotName('containers', example, name),
+            )
+          })
+        }
+      }
+
+      test('matches the whole Containers page', async ({ page }) => {
+        const { containers } = target.boards(page)
+        await containers.goto()
+        await expect(containers.containersPage).toHaveScreenshot(['containers', 'page.png'])
+      })
+
+      for (const example of containersExamples) {
+        test(`matches the ${example} example`, async ({ page }) => {
+          const { containers } = target.boards(page)
+          await containers.goto()
+          await expect(containers.example(example)).toHaveScreenshot([
+            'containers',
+            'examples',
+            `${example}.png`,
+          ])
+        })
+      }
+
+      for (const [message, file] of Object.entries(toasts)) {
+        test(`matches the ${message} toast`, async ({ page }) => {
+          const { containers } = target.boards(page)
+          await containers.goto()
+          const clip = await containers.findToastArea(message, toastMargins)
+          await expect(page).toHaveScreenshot(['feedback', 'toast', `${file}.png`], {
+            clip,
+            fullPage: true,
+          })
+        })
+      }
+
+      for (const [text, file] of Object.entries(notices)) {
+        test(`matches the ${file} inline notice`, async ({ page }) => {
+          const { containers } = target.boards(page)
+          await containers.goto()
+          await expect(containers.notice(text)).toHaveScreenshot([
+            'feedback',
+            'inline-notice',
+            `${file}.png`,
+          ])
+        })
+      }
+
+      for (const [title, file] of Object.entries(alerts)) {
+        test(`matches the ${title} alert`, async ({ page }) => {
+          const { containers } = target.boards(page)
+          await containers.goto()
+          await expect(containers.alert(title)).toHaveScreenshot([
+            'feedback',
+            'warning-and-error',
+            `${file}.png`,
+          ])
+        })
+      }
+
+      for (const heading of statuses) {
+        test(`matches the ${heading} status`, async ({ page }) => {
+          const { containers } = target.boards(page)
+          await containers.goto()
+          await expect(containers.status(heading)).toHaveScreenshot([
+            'feedback',
+            'status-set',
+            `${heading.toLowerCase()}.png`,
+          ])
+        })
+      }
+
+      for (const example of feedbackExamples) {
+        test(`matches the ${example} example`, async ({ page }) => {
+          const { containers } = target.boards(page)
+          await containers.goto()
+          await expect(containers.example(example)).toHaveScreenshot([
+            'feedback',
+            'examples',
+            `${example}.png`,
+          ])
+        })
+      }
     })
 
     test('overlays board shows Overlays', async ({ page }) => {
