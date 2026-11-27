@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { targets } from './boards.ts'
-import { type Margins } from './locators.ts'
+import { type ControlRole, type Margins } from './locators.ts'
+import { type ChoiceRole, type FormsExample } from './forms/forms.board.ts'
 import { type FoundationsExample, type SwatchGroup } from './main/main.board.ts'
 import { type RolesExample, type RolesRole } from './roles/roles.board.ts'
 
@@ -169,11 +170,98 @@ const rolesRoles: RolesRole[] = ['role-card', 'role-notice-examples', 'role-warn
 const toastMargins: Margins = { top: 16, right: 24, bottom: 32, left: 24 }
 const tooltipMargins: Margins = { top: 8, right: 12, bottom: 16, left: 12 }
 
-// A control's screenshot is named after its accessible name, under its example's folder, e.g.
-// roles/variants/withdraw-player.png for 'Withdraw player…' in ex-variants.
-function controlScreenshotName(example: RolesExample, name: string) {
+// The fields in each example on the Forms board, by their controls' accessible names.
+const formsFields: Partial<Record<FormsExample, string[]>> = {
+  'ex-text-field': [
+    'Player name',
+    'Club (optional)',
+    'Table',
+    'Entry fee',
+    'Event',
+    'Note for players',
+  ],
+}
+
+// The code inputs in each example on the Forms board: their name, and the state each one is drawn
+// in, in order (each screenshot is named after its state).
+const formsCodeInputs: Partial<Record<FormsExample, { name: string; states: string[] }>> = {
+  'ex-code-input': { name: 'Tournament code', states: ['found', 'error', 'disabled'] },
+}
+
+// The closed combobox fields in each example on the Forms board, by placeholder, and the examples
+// with an open combobox.
+const formsComboBoxFields: Partial<Record<FormsExample, string[]>> = {
+  'ex-combobox': ['Search players or clubs'],
+}
+const formsOpenComboBoxes: FormsExample[] = ['ex-combobox']
+
+// How far the open combobox and its list paint past their boxes: the focus ring is 4px all round;
+// the list's shadow is --shadow-overlay (see shadowTiles).
+const focusRingMargins: Margins = { top: 4, right: 4, bottom: 4, left: 4 }
+const overlayMargins: Margins = { top: 16, right: 24, bottom: 32, left: 24 }
+
+// The choices in each example on the Forms board, by their controls' roles and accessible names.
+const formsChoices: Partial<Record<FormsExample, Partial<Record<ChoiceRole, string[]>>>> = {
+  'ex-checkbox-radio-and-switch': {
+    checkbox: ['Checked in', 'Needs an umpire', 'All players (12 of 16)', 'Paid online (not enabled)'],
+    radio: ['Best of 3', 'Best of 5', 'Best of 7', 'Timed (not for this event)'],
+    switch: [
+      'Call players automatically',
+      'Show ratings to spectators',
+      'Text players (needs phone numbers)',
+    ],
+  },
+}
+
+// The examples on the Forms board that hold a range field.
+const formsRangeFields: FormsExample[] = ['ex-checkbox-radio-and-switch']
+
+// The date fields in each example on the Forms board, by name, and the examples with a calendar.
+const formsDateFields: Partial<Record<FormsExample, string[]>> = {
+  'ex-date-picker': ['Tournament date'],
+}
+const formsCalendars: FormsExample[] = ['ex-date-picker']
+
+// Every example on the Forms board, whole. Rasterizing depends on where on the page a thing is
+// drawn, so the app matches the board only when every example sits exactly where the board's does.
+const formsExamples: FormsExample[] = [
+  'ex-text-field',
+  'ex-code-input',
+  'ex-combobox',
+  'ex-date-picker',
+  'ex-checkbox-radio-and-switch',
+  'ex-tabs',
+  'ex-segmented',
+  'ex-filter-chips',
+  'ex-switch',
+]
+
+// The controls in each example on the Forms board that are their own whole, by role and name.
+const formsControls: Partial<Record<FormsExample, [ControlRole, string][]>> = {
+  'ex-tabs': [
+    ['tab', 'Overview'],
+    ['tab', 'Schedule'],
+    ['tab', 'Standings'],
+  ],
+  'ex-segmented': [
+    ['radio', 'Timeline'],
+    ['radio', 'List'],
+    ['radio', 'By player'],
+  ],
+  'ex-filter-chips': [
+    ['button', 'All events'],
+    ['button', 'Open singles'],
+    ['button', 'Under 18'],
+    ['button', 'Doubles'],
+  ],
+  'ex-switch': [['switch', 'Call players automatically']],
+}
+
+// A control's or field's screenshot is named after its accessible name, under its board's and
+// example's folders, e.g. roles/variants/withdraw-player.png for 'Withdraw player…' in ex-variants.
+function exampleScreenshotName(board: string, example: string, name: string) {
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-  return ['roles', example.replace(/^ex-/, ''), `${slug}.png`]
+  return [board, example.replace(/^ex-/, ''), `${slug}.png`]
 }
 
 // An item's screenshot is named after the first token of its label, under the given folders, e.g.
@@ -369,7 +457,7 @@ for (const target of targets) {
             const { roles } = target.boards(page)
             await roles.goto()
             await expect(roles.button(example, name)).toHaveScreenshot(
-              controlScreenshotName(example, name),
+              exampleScreenshotName('roles', example, name),
             )
           })
         }
@@ -381,7 +469,7 @@ for (const target of targets) {
             const { roles } = target.boards(page)
             await roles.goto()
             await expect(roles.link(example, name)).toHaveScreenshot(
-              controlScreenshotName(example, name),
+              exampleScreenshotName('roles', example, name),
             )
           })
         }
@@ -430,16 +518,160 @@ for (const target of targets) {
       })
     })
 
-    test('forms board shows Fields and choices', async ({ page }) => {
-      const { forms } = target.boards(page)
-      await forms.goto()
-      await expect(forms.fieldsAndChoicesHeading).toBeVisible()
-    })
+    test.describe('forms board', () => {
+      test('shows Fields and choices', async ({ page }) => {
+        const { forms } = target.boards(page)
+        await forms.goto()
+        await expect(forms.fieldsAndChoicesHeading).toBeVisible()
+      })
 
-    test('forms board shows Selection', async ({ page }) => {
-      const { forms } = target.boards(page)
-      await forms.goto()
-      await expect(forms.selectionHeading).toBeVisible()
+      test('shows Selection', async ({ page }) => {
+        const { forms } = target.boards(page)
+        await forms.goto()
+        await expect(forms.selectionHeading).toBeVisible()
+      })
+
+      for (const [example, names] of Object.entries(formsFields) as [FormsExample, string[]][]) {
+        for (const name of names) {
+          test(`matches the ${name} field in ${example}`, async ({ page }) => {
+            const { forms } = target.boards(page)
+            await forms.goto()
+            await expect(forms.field(example, name)).toHaveScreenshot(
+              exampleScreenshotName('forms', example, name),
+            )
+          })
+        }
+      }
+
+      for (const [example, { name, states }] of Object.entries(formsCodeInputs) as [
+        FormsExample,
+        { name: string; states: string[] },
+      ][]) {
+        states.forEach((state, index) => {
+          test(`matches the ${state} ${name} code input in ${example}`, async ({ page }) => {
+            const { forms } = target.boards(page)
+            await forms.goto()
+            await expect(forms.codeInput(example, name, index)).toHaveScreenshot(
+              exampleScreenshotName('forms', example, `${name} ${state}`),
+            )
+          })
+        })
+      }
+
+      for (const [example, placeholders] of Object.entries(formsComboBoxFields) as [
+        FormsExample,
+        string[],
+      ][]) {
+        for (const placeholder of placeholders) {
+          test(`matches the ${placeholder} combobox in ${example}`, async ({ page }) => {
+            const { forms } = target.boards(page)
+            await forms.goto()
+            await expect(forms.comboBoxField(example, placeholder)).toHaveScreenshot(
+              exampleScreenshotName('forms', example, placeholder),
+            )
+          })
+        }
+      }
+
+      for (const [example, names] of Object.entries(formsDateFields) as [FormsExample, string[]][]) {
+        for (const name of names) {
+          test(`matches the ${name} date field in ${example}`, async ({ page }) => {
+            const { forms } = target.boards(page)
+            await forms.goto()
+            await expect(forms.dateField(example, name)).toHaveScreenshot(
+              exampleScreenshotName('forms', example, name),
+            )
+          })
+        }
+      }
+
+      for (const example of formsCalendars) {
+        test(`matches the calendar in ${example}`, async ({ page }) => {
+          const { forms } = target.boards(page)
+          await forms.goto()
+          await expect(forms.calendar(example)).toHaveScreenshot(
+            exampleScreenshotName('forms', example, 'calendar'),
+          )
+        })
+      }
+
+      for (const example of formsOpenComboBoxes) {
+        test(`matches the open combobox in ${example}`, async ({ page }) => {
+          const { forms } = target.boards(page)
+          await forms.goto()
+          const clip = await forms.findOpenComboBoxArea(example, focusRingMargins)
+          await expect(page).toHaveScreenshot(exampleScreenshotName('forms', example, 'open'), {
+            clip,
+            fullPage: true,
+          })
+        })
+
+        test(`matches the open combobox's list in ${example}`, async ({ page }) => {
+          const { forms } = target.boards(page)
+          await forms.goto()
+          const clip = await forms.findListBoxArea(example, overlayMargins)
+          await expect(page).toHaveScreenshot(exampleScreenshotName('forms', example, 'list'), {
+            clip,
+            fullPage: true,
+          })
+        })
+      }
+
+      for (const [example, roles] of Object.entries(formsChoices) as [
+        FormsExample,
+        Partial<Record<ChoiceRole, string[]>>,
+      ][]) {
+        for (const [role, names] of Object.entries(roles) as [ChoiceRole, string[]][]) {
+          for (const name of names) {
+            test(`matches the ${name} ${role} in ${example}`, async ({ page }) => {
+              const { forms } = target.boards(page)
+              await forms.goto()
+              await expect(forms.choice(example, role, name)).toHaveScreenshot(
+                exampleScreenshotName('forms', example, name),
+              )
+            })
+          }
+        }
+      }
+
+      for (const example of formsRangeFields) {
+        test(`matches the range field in ${example}`, async ({ page }) => {
+          const { forms } = target.boards(page)
+          await forms.goto()
+          await expect(forms.rangeField(example)).toHaveScreenshot(
+            exampleScreenshotName('forms', example, 'range field'),
+          )
+        })
+      }
+
+      for (const [example, controls] of Object.entries(formsControls) as [
+        FormsExample,
+        [ControlRole, string][],
+      ][]) {
+        for (const [role, name] of controls) {
+          test(`matches the ${name} ${role} in ${example}`, async ({ page }) => {
+            const { forms } = target.boards(page)
+            await forms.goto()
+            await expect(forms.control(example, role, name)).toHaveScreenshot(
+              exampleScreenshotName('forms', example, name),
+            )
+          })
+        }
+      }
+
+      test('matches the whole Forms page', async ({ page }) => {
+        const { forms } = target.boards(page)
+        await forms.goto()
+        await expect(forms.formsPage).toHaveScreenshot(['forms', 'page.png'])
+      })
+
+      for (const example of formsExamples) {
+        test(`matches the ${example} example`, async ({ page }) => {
+          const { forms } = target.boards(page)
+          await forms.goto()
+          await expect(forms.example(example)).toHaveScreenshot(['forms', 'examples', `${example}.png`])
+        })
+      }
     })
 
     test('containers board shows Containers', async ({ page }) => {

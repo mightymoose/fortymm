@@ -17,3 +17,9 @@ The reference the app's screenshot tests (Playwright) are checked against. These
 | `support.js` | The canvas editor's runtime (`artifact-type/dc-runtime.js` of the canvas artifact) |
 
 A `.dc.html` is a canvas-editor artboard: markup under `<x-dc>`, `{{...}}` holes filled from the `renderVals()` data in its `<script type="text/x-dc">`, by `support.js`. Open them through the server, not as files: `./bin/mise run requirements:design-system:reference:serve`.
+
+## Local changes
+
+Where the boards disagree with a standard the app follows, our copy is changed to the standard:
+
+- `Forms.dc.html`, date picker: the field reads "Saturday, 11 April 2026", the browser's own British English long date (`Intl.DateTimeFormat('en-GB', { dateStyle: 'full' })`), not the canvas's "Saturday 11 April 2026". The app writes dates in the user's locale; the showcase pins British English.

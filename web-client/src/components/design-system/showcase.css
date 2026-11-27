@@ -17,6 +17,11 @@
 .doc-ex>header p{margin:0 0 8px;font:400 14px/1.6 var(--font-ui);color:var(--fg-3)}
 .doc-stage{min-width:0;display:flex;flex-direction:column;gap:28px}
 .doc-cap{margin:0 0 10px;font:500 13px var(--font-ui);color:var(--fg-3)}
+.doc-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:32px}
+.doc-grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:32px;align-items:start}
+.doc-use{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:36px 40px;margin-top:48px}
+.doc-use h4{margin:16px 0 6px;font:600 15px var(--font-ui);color:var(--fg-1)}
+.doc-use p{margin:0;font:400 14px/1.55 var(--font-ui);color:var(--fg-3)}
 .doc-row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
 .doc-roles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:48px 40px;align-items:start;margin-top:48px}
 .doc-vo{display:inline-flex;font:500 12px var(--font-ui);color:var(--fg-3);box-shadow:inset 0 0 0 1px var(--border-subtle);border-radius:4px;padding:3px 7px;align-self:flex-start;margin:0}
