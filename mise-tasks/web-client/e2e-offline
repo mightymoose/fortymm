@@ -1,9 +1,0 @@
-#!/usr/bin/env bash
-#MISE description="Run the offline Playwright tests (e2e/offline/) against a production build, in the web-client container"
-# Host-side: the service worker exists only in a build, so Playwright builds the app and serves it
-# with `vite preview` inside one throwaway container (see web-client/playwright.offline.config.ts).
-# The HTML report lands in web-client/playwright-report/offline/ (bind-mounted).
-set -euo pipefail
-cd "$MISE_PROJECT_ROOT"
-
-docker compose run --rm --no-deps --build web-client npx playwright test -c playwright.offline.config.ts "$@"

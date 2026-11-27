@@ -1,15 +1,17 @@
-# Preview (web-client-public in docker-compose.yml): serves the production build and proxies /api.
+# The production build, served by web-client-nginx and preview's web-client-public (docker-compose.yml).
+# A template: the nginx image fills in ${API_URL} from the environment at startup (envsubst only
+# replaces variables that are set, so nginx's own $host etc. are left alone).
 server {
-    # Tailscale Funnel proxies to 127.0.0.1:5173 in the shared namespace (tailscale/serve.json).
+    # The same port as the dev server. For preview, Tailscale Funnel proxies to 127.0.0.1:5173.
     listen 5173;
     root /usr/share/nginx/html;
 
-    # The api serves its routes under /api, so requests pass through unchanged.
+    # The api serves its routes under /api, so requests pass through unchanged. API_URL is
+    # http://api:8000 (web-client-nginx) or http://api-public:8000 (web-client-public).
     location /api/ {
-        proxy_pass http://api-public:8000;
+        proxy_pass ${API_URL};
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
     }
 
     # Vite puts a content hash in every file name under assets/, so they never change.

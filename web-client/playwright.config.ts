@@ -6,8 +6,6 @@ const baseURL = process.env.E2E_BASE_URL ?? 'http://localhost:5173'
 
 export default defineConfig({
   testDir: './e2e',
-  // The dev server has no service worker: e2e/offline/ runs against a build (playwright.offline.config.ts).
-  testIgnore: 'offline/**',
   // One screenshot per name for every target and platform: the design system specs check the app
   // against the reference's screenshots (see e2e/design-system/design-system.spec.ts).
   snapshotPathTemplate: '{testDir}/{testFileDir}/__screenshots__/{arg}{ext}',

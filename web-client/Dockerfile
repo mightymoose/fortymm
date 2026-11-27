@@ -33,7 +33,8 @@ FROM dev AS build
 COPY web-client/ ./
 RUN /app/bin/mise exec -- npm run build
 
-# Preview (web-client-public): nginx serves the build and proxies /api (see nginx.conf).
+# web-client-nginx and preview's web-client-public: nginx serves the build and proxies /api to
+# $API_URL (see nginx.conf.template; the image renders templates/ into conf.d/ at startup).
 FROM nginx:1.27-alpine AS serve
-COPY web-client/nginx.conf /etc/nginx/conf.d/default.conf
+COPY web-client/nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /app/web-client/dist /usr/share/nginx/html

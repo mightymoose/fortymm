@@ -33,7 +33,7 @@ export default defineConfig({
     // The verify task's e2e tests reach it on the compose network as http://web-client:5173.
     allowedHosts: ['web-client'],
     // The api serves its routes under /api, so requests pass through unchanged. It is the `api`
-    // service on the compose network. (Preview serves the build from nginx: see nginx.conf.)
+    // service on the compose network. (The nginx build proxies it itself: see nginx.conf.template.)
     proxy: {
       '/api': 'http://api:8000',
     },
