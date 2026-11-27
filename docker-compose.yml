@@ -1,5 +1,16 @@
 name: fortymm
 
+# Shared web-client settings. Each service below adds how it is reached.
+x-web-client: &web-client
+  build:
+    context: .
+    dockerfile: web-client/Dockerfile
+    target: dev
+  volumes:
+    - ./web-client:/app/web-client
+    # Keep the image's node_modules (Linux builds) instead of the host directory.
+    - /app/web-client/node_modules
+
 services:
   # Checks the product requirements in requirements/*.dfy with Dafny + Z3.
   # Run via ./bin/mise run requirements:check (see mise-tasks/requirements/).
@@ -15,18 +26,48 @@ services:
 
   # Vite + React + TypeScript app. Run via ./bin/mise run web-client:dev (see mise-tasks/web-client/).
   web-client:
-    build:
-      context: .
-      dockerfile: web-client/Dockerfile
-      target: dev
-    volumes:
-      - ./web-client:/app/web-client
-      # Keep the image's node_modules (Linux builds) instead of the host directory.
-      - /app/web-client/node_modules
+    <<: *web-client
     # Container port only: Docker picks a free host port, so many dev servers can run at once.
     ports:
       - "5173"
 
+  # Tailscale sidecar: puts the public dev server on the tailnet and on the internet via Funnel.
+  # Run via ./bin/mise run preview. Setup steps are in the README.
+  tailscale:
+    image: tailscale/tailscale:latest
+    hostname: fortymm
+    environment:
+      # From .env (see .env.example). Only needed the first time; the node identity is then
+      # kept in the tailscale-state volume.
+      - TS_AUTHKEY=${TS_AUTHKEY:-}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SERVE_CONFIG=/config/serve.json
+      - TS_USERSPACE=false
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./tailscale/serve.json:/config/serve.json:ro
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    # Stays on the default network, so services sharing its network namespace
+    # (web-client-public) can still reach other services, e.g. a future db, by name.
+    restart: unless-stopped
+    profiles: ["public"]
+
+  # The dev server, reachable only through the tailscale sidecar: no host ports.
+  # Funnel proxies https://fortymm.<tailnet>.ts.net to 127.0.0.1:5173 in the shared namespace.
+  web-client-public:
+    <<: *web-client
+    network_mode: service:tailscale
+    depends_on:
+      - tailscale
+    profiles: ["public"]
+
   # Coming next:
   # db:   postgres
   # api:  python server
+
+volumes:
+  tailscale-state:
