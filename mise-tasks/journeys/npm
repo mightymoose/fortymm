@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Run npm in the journeys container, e.g. `./bin/mise run journeys:npm -- install -D <pkg>`"
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+docker compose run --rm --no-deps journeys npm "$@"

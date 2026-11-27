@@ -4,10 +4,10 @@
  * fortymm
  * OpenAPI spec version: 0.1.0
  */
-export const HealthValue = {
-  server: 'ok',
-} as const;
-export type Health = typeof HealthValue;
+export interface Health {
+  server: 'ok';
+  coreHealthy: boolean;
+}
 
 export interface DocumentHealth {
   data: Health;

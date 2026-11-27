@@ -2,8 +2,7 @@
 #MISE description="Write the api's OpenAPI spec to api/openapi.json (commit it; verify checks it is current)"
 set -euo pipefail
 cd "$MISE_PROJECT_ROOT"
-# Build separately: only the spec may go to stdout, which becomes the file.
-docker compose build api >&2
-spec=$(docker compose run --rm --no-deps -T api python -m scripts.export_openapi)
-printf '%s\n' "$spec" > api/openapi.json
+# Written inside the container (./api is mounted at its working directory), not captured from
+# stdout: `run` re-bakes the core-python build context and prints that build to stdout.
+docker compose run --rm --no-deps -T api sh -c 'python -m scripts.export_openapi > openapi.json'
 echo "wrote api/openapi.json" >&2

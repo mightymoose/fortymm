@@ -5,7 +5,7 @@ import { health, type DocumentHealth } from '../api/generated.ts'
 // Checked at runtime, and against the generated type at compile time: if the api's spec changes,
 // this stops compiling until it matches.
 export const healthDocument = z.object({
-  data: z.object({ server: z.literal('ok') }),
+  data: z.object({ server: z.literal('ok'), coreHealthy: z.boolean() }),
 }) satisfies z.ZodType<DocumentHealth>
 
 export const healthQuery = queryOptions({

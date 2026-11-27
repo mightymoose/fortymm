@@ -1,0 +1,3 @@
+# Tools for the journeys container.
+[tools]
+node = "26.13.1"
