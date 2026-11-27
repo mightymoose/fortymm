@@ -18,6 +18,11 @@ export default defineConfig({
     // Tailscale Funnel serves the dev server at fortymm.<tailnet>.ts.net (see the preview task).
     // The verify task's e2e tests reach it on the compose network as http://web-client:5173.
     allowedHosts: ['.ts.net', 'web-client'],
+    // The api serves its routes under /api, so requests pass through unchanged. It is the `api`
+    // service on the compose network; preview's web-client-public sets API_URL to api-public.
+    proxy: {
+      '/api': process.env.API_URL ?? 'http://api:8000',
+    },
   },
   // Unit tests (Vitest) sit next to the code they test as *.test.ts(x); e2e/ is Playwright's.
   test: {

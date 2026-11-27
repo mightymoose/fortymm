@@ -1,0 +1,57 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "fortymm",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Document_Health_"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Document_Health_": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Health"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "Document[Health]"
+      },
+      "Health": {
+        "properties": {
+          "server": {
+            "type": "string",
+            "const": "ok",
+            "title": "Server"
+          }
+        },
+        "type": "object",
+        "required": [
+          "server"
+        ],
+        "title": "Health"
+      }
+    }
+  }
+}

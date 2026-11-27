@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#MISE description="Start an api (FastAPI) dev server on a random host port (printed at startup)"
+# Host-side: start an api dev server container on a random host port and follow its logs.
+# Each run gets its own container, so many can run at once. Ctrl-C stops it.
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+
+# Rebuild first so pyproject.toml / uv.lock changes are picked up (cached otherwise).
+docker compose build api >&2
+id=$(docker compose run --detach --rm --service-ports api)
+trap 'docker stop "$id" >/dev/null 2>&1 || true' EXIT
+
+port=$(docker port "$id" 8000/tcp | head -n1 | sed 's/.*://')
+echo "api dev server: http://localhost:$port/api/docs  (container $id)"
+echo "(FastAPI's own log below shows the container port, 8000.)"
+docker logs --follow "$id"

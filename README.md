@@ -18,9 +18,9 @@ and operations proven to preserve every requirement from every valid state.
 ## Dev and verify
 
 ```sh
-./bin/mise run dev                                 # every dev server (web client, design system reference), URLs printed; Ctrl-C stops
+./bin/mise run dev                                 # every dev server (api, web client, design system reference), URLs printed; Ctrl-C stops
 ./bin/mise run dev --detach                        # same, but return once they are healthy
-./bin/mise run verify                              # dev servers up, then lint + typecheck + e2e against them
+./bin/mise run verify                              # dev servers up, then lint + typecheck + tests (web client, api) + e2e
 ```
 
 `verify` runs every check, then fails if any did. It reuses servers `dev` already started, and only stops the ones it started.
@@ -41,9 +41,24 @@ The app lives in `web-client/`. Node is installed in the image by mise from `web
 Each `web-client:dev` gets its own container and host port, so several can run at once. `./bin/mise run ports` lists them.
 Dependencies are baked into the image; `web-client:dev` rebuilds it when `package.json` or the lockfile changes.
 
+## API (FastAPI)
+
+The api lives in `api/`. Python and uv are installed in the image by mise from `api/mise.toml`; dependencies are in
+`api/pyproject.toml` and `api/uv.lock` and baked into the image. Every route is under `/api`, and the web client's
+dev server proxies `/api` to the api, so the app calls it on its own origin in dev and preview.
+The spec is committed as `api/openapi.json`. `verify` fails if it is stale, or if [oasdiff](https://github.com/oasdiff/oasdiff)
+finds a breaking change against the spec on `main` (as of where the branch split off).
+
+```sh
+./bin/mise run api:dev                             # dev server on a random host port (docs URL printed at startup)
+./bin/mise run api:test                            # pytest, in the container
+./bin/mise run api:uv -- add <pkg>                 # any uv command in the container
+./bin/mise run api:openapi                         # regenerate api/openapi.json (commit it)
+```
+
 ## Preview (Tailscale Funnel)
 
-`./bin/mise run preview` starts everything. For now that's the dev server, behind a Tailscale sidecar that serves it
+`./bin/mise run preview` starts everything. For now that's the dev server (with `/api` proxied to the api), behind a Tailscale sidecar that serves it
 on the internet at `https://fortymm.<tailnet>.ts.net` via Funnel. No host ports are published; `web-client:dev` is unchanged.
 The sidecar's config is `tailscale/serve.json` (Funnel on 443 → Vite on `127.0.0.1:5173`).
 
