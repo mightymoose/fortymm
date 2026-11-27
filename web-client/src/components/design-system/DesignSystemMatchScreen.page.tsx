@@ -6,4 +6,8 @@ export class DesignSystemMatchScreenPage {
   get matchComponentsHeading() {
     return screen.getByRole('heading', { level: 2, name: 'Match components' })
   }
+
+  findMatchComponentsHeading() {
+    return screen.findByRole('heading', { level: 2, name: 'Match components' })
+  }
 }

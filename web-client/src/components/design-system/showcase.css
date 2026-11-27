@@ -7,7 +7,9 @@
 .doc-toc{display:flex;flex-wrap:wrap;gap:6px 20px;margin-top:8px;font:500 15px var(--font-ui)}
 .doc-toc a{color:var(--fg-2);text-decoration:none}
 .doc-toc a:hover{color:var(--fg-1);text-decoration:underline}
-.doc-cat{margin-top:96px}
+/* Main spaces its one section from the header; the other boards space sections from each other. */
+.doc-head+.doc-cat{margin-top:96px}
+.doc-cat+.doc-cat{margin-top:112px}
 .doc-cat>h2{margin:0;font:600 30px/1.2 var(--font-ui);letter-spacing:-0.01em;color:var(--fg-1)}
 .doc-cat>p{margin:10px 0 0;max-width:700px;font:400 16px/1.55 var(--font-ui);color:var(--fg-3)}
 .doc-ex{margin-top:56px;display:grid;grid-template-columns:250px minmax(0,1fr);gap:20px 56px}
@@ -15,6 +17,9 @@
 .doc-ex>header p{margin:0 0 8px;font:400 14px/1.6 var(--font-ui);color:var(--fg-3)}
 .doc-stage{min-width:0;display:flex;flex-direction:column;gap:28px}
 .doc-cap{margin:0 0 10px;font:500 13px var(--font-ui);color:var(--fg-3)}
+.doc-row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.doc-roles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:48px 40px;align-items:start;margin-top:48px}
+.doc-vo{display:inline-flex;font:500 12px var(--font-ui);color:var(--fg-3);box-shadow:inset 0 0 0 1px var(--border-subtle);border-radius:4px;padding:3px 7px;align-self:flex-start;margin:0}
 .sw{display:flex;flex-direction:column;gap:8px;min-width:0}
 .sw i{display:block;height:64px;border-radius:8px;box-shadow:inset 0 0 0 1px var(--border-subtle)}
 .sw b{font:500 13px/1.3 var(--font-ui);color:var(--fg-1)}

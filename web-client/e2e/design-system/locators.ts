@@ -56,3 +56,9 @@ export async function findAreaAround(page: Page, item: Locator, margins: Margins
     height: box.height + margins.top + margins.bottom,
   }
 }
+
+// A control in an example on a board, found by its role and accessible name, e.g.
+// exampleControl(page, 'ex-variants', 'button', 'Reschedule').
+export function exampleControl(page: Page, example: string, role: 'button' | 'link', name: string) {
+  return page.getByTestId(example).getByRole(role, { name, exact: true })
+}
