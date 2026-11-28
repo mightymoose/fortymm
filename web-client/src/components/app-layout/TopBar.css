@@ -1,0 +1,51 @@
+/* The top bar: a panel (bg-panel on the page's bg-app, flat), like the sidebar it meets; the
+   divider where it meets the page is the screen's (AppLayout.css), so there is none between the
+   top bar and the sidebar.
+
+   It is 56px high at every width: the toggle's 40px row with 8px above and below, the same on
+   phones, where there is no toggle. The toggle's icon sits 20px from the left edge, over the
+   sidebar's icons. Left or centred, and the toggle shown or not, come from the layout's breakpoint
+   (AppLayout.css). */
+.top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: var(--app-layout-brand-justify, flex-start);
+  gap: var(--s-3);
+  box-sizing: border-box;
+  min-height: calc(2 * var(--s-2) + 40px);
+  padding: var(--s-2);
+  background: var(--bg-panel);
+}
+
+/* The sidebar's toggle: an icon-only item, as the sidebar's links are (the kit's .fm-nav a): fg-2,
+   lifted to bg-hover and fg-1 on hover. */
+.top-bar__toggle {
+  display: var(--app-layout-sidebar-display, flex);
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 40px;
+  padding: 0 var(--s-3);
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-change) var(--ease-out),
+    color var(--dur-change) var(--ease-out);
+}
+.top-bar__toggle:hover {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+
+/* The brand: the wordmark in the display face at text-xl, within the toggle's 40px row. In fg-1:
+   it isn't an action, so it isn't orange and has no underline. */
+.top-bar__brand,
+.top-bar__brand:hover {
+  font: 400 var(--text-xl) / 1 var(--font-display);
+  letter-spacing: 0.01em;
+  color: var(--fg-1);
+  text-decoration: none;
+  border-radius: var(--r-sm);
+}

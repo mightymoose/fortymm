@@ -1,0 +1,67 @@
+/* The bottom bar: a panel like the top bar and the sidebar (bg-panel, flat), with a border-subtle
+   divider where it meets the page above it. Fixed to the bottom of the viewport,
+   --app-layout-bottom-bar-height (56px) high, plus the device's bottom safe area (the home
+   indicator), which it pads below its links. Shown only on phones (AppLayout.css decides its
+   display and keeps the page's content clear of it).
+
+   The four items share the bar's width equally (flex: 1 1 0, so a label's length never sizes an
+   item), with --s-1 between them and --s-2 of padding at each end. Each label stays on one line,
+   so "New match" fits its quarter at 320px.
+
+   Each item is the sidebar's (the kit's .fm-nav a), stacked: the icon over the label, at least
+   44px each way to tap; hover lifts it to bg-hover and fg-1; the current page is the selected
+   item, accent-soft with accent-text. */
+.bottom-bar {
+  position: fixed;
+  z-index: 1;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: var(--app-layout-bottom-bar-display, none);
+  align-items: center;
+  gap: var(--s-1);
+  box-sizing: border-box;
+  height: calc(var(--app-layout-bottom-bar-height, 56px) + env(safe-area-inset-bottom, 0px));
+  padding: 0 var(--s-2) env(safe-area-inset-bottom, 0px);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+}
+.bottom-bar__item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  box-sizing: border-box;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 48px;
+  padding: 0 var(--s-2);
+  white-space: nowrap;
+  border-radius: var(--r-md);
+  color: var(--fg-2);
+  font: 500 var(--text-xs) / 1 var(--font-ui);
+  text-decoration: none;
+  transition:
+    background-color var(--dur-change) var(--ease-out),
+    color var(--dur-change) var(--ease-out);
+}
+.bottom-bar__item:hover {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+.bottom-bar__item[aria-current='page'] {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+/* "New match", at the bar's end: its one primary action, the primary button's colours (accent,
+   on-accent; accent-hover under the pointer). On its own page it is the current page, the tinted
+   pill like the others. */
+.bottom-bar__item--action:not([aria-current='page']) {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.bottom-bar__item--action:not([aria-current='page']):hover {
+  background: var(--accent-hover);
+  color: var(--on-accent);
+}
