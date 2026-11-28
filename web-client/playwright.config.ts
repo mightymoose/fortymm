@@ -5,7 +5,7 @@ import { defineConfig, devices } from '@playwright/test'
 const baseURL = process.env.E2E_BASE_URL ?? 'http://localhost:5173'
 
 // The specs that need a secure context (see the chromium-secure-context project).
-const secureContextSpecs = ['**/device-key.spec.ts']
+const secureContextSpecs = ['**/device-key.spec.ts', '**/device-avatar.spec.ts']
 
 export default defineConfig({
   testDir: './e2e',

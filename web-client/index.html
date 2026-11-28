@@ -5,6 +5,14 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FortyMM</title>
+    <!-- The page's background (bg-app, ink-950 in src/design-system/tokens.css) from the first
+         paint. The stylesheets arrive with the app's script (on the dev server, only once it has
+         run), and until then the page would flash white. -->
+    <style>
+      html {
+        background: #0b0d12;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

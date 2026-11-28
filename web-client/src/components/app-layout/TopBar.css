@@ -5,8 +5,9 @@
    It is 56px high at every width: the toggle's 40px row with 8px above and below, the same on
    phones, where there is no toggle. The toggle's icon sits 20px from the left edge, over the
    sidebar's icons. Left or centred, and the toggle shown or not, come from the layout's breakpoint
-   (AppLayout.css). */
+   (AppLayout.css). The avatar is placed apart from them, at the far end, so it moves neither. */
 .top-bar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: var(--app-layout-brand-justify, flex-start);
@@ -48,4 +49,26 @@
   color: var(--fg-1);
   text-decoration: none;
   border-radius: var(--r-sm);
+}
+
+/* The device's avatar (the kit's 36px .fm-avatar), and at non-phone widths its whole username
+   after it (AppLayout.css's breakpoint): at the far end of the bar, centred in it, the toggle's
+   12px inset from the edge. Out of the flow, so the brand stays centred on phones and after the
+   toggle wider. */
+.top-bar__account {
+  position: absolute;
+  inset-inline-end: var(--s-3);
+  top: 50%;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  transform: translateY(-50%);
+}
+
+/* The username: secondary text (fg-2), so it doesn't compete with the brand. */
+.top-bar__username {
+  display: var(--app-layout-username-display, inline);
+  font: 500 var(--text-sm) / 1 var(--font-ui);
+  color: var(--fg-2);
+  white-space: nowrap;
 }
