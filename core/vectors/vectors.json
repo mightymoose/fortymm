@@ -1,0 +1,161 @@
+{
+  "about": "FortyMM core golden vectors. Format choices are in core/FORMAT.md. Hex is lower case. uncompressed_public_key is the form WebCrypto exports; public_key is the 33-byte form records carry.",
+  "invalid_uncompressed_public_keys": [
+    {
+      "name": "off-the-curve",
+      "public_key": "040217e617f0b6443928278f96999e69a23a4f2c152bdf6d6cdf66e5b80282d4ed194a7debcb97712d2dda3ca85aa8765a56f45fc758599652f2897c65306e5795"
+    },
+    {
+      "name": "wrong-prefix",
+      "public_key": "050217e617f0b6443928278f96999e69a23a4f2c152bdf6d6cdf66e5b80282d4ed194a7debcb97712d2dda3ca85aa8765a56f45fc758599652f2897c65306e5794"
+    },
+    {
+      "name": "all-zero",
+      "public_key": "0400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "truncated",
+      "public_key": "040217e617f0b6443928278f96999e69a23a4f2c152bdf6d6cdf66e5b80282d4ed194a7debcb97712d2dda3ca85aa8765a56f45fc758599652f2897c65306e57"
+    },
+    {
+      "name": "compressed",
+      "public_key": "020217e617f0b6443928278f96999e69a23a4f2c152bdf6d6cdf66e5b80282d4ed"
+    },
+    {
+      "name": "empty",
+      "public_key": ""
+    }
+  ],
+  "invalid_username_suffix_lengths": [
+    0,
+    1,
+    3,
+    17
+  ],
+  "keys": [
+    {
+      "account_id": "adb1453c7a19fbc4e92a4efdbd5397599f105100ea03f36d77d64ba63a31591e",
+      "name": "alice",
+      "own_player_id": "e2286f7cd2dc62c15a00bdb33f6e78167112a99a9f072d066e4e9dd3fc9d1c25",
+      "public_key": "020217e617f0b6443928278f96999e69a23a4f2c152bdf6d6cdf66e5b80282d4ed",
+      "uncompressed_public_key": "040217e617f0b6443928278f96999e69a23a4f2c152bdf6d6cdf66e5b80282d4ed194a7debcb97712d2dda3ca85aa8765a56f45fc758599652f2897c65306e5794"
+    },
+    {
+      "account_id": "39d7396b7764545d96f2d3a45fd2a83c7c7a0b635acb8fcfcec65de67b98bc3b",
+      "name": "bob",
+      "own_player_id": "9cc056975c22de85464507a2c3b12ed9837736737e7c4c72fece0566d9491ba9",
+      "public_key": "03d65a93977caa3d1b081852ff57a79e465f1660577304baead505dd3a48589cf3",
+      "uncompressed_public_key": "04d65a93977caa3d1b081852ff57a79e465f1660577304baead505dd3a48589cf350185e895372df6221ea3a137557e473fddb6755f05bd507c3c533fce9c91285"
+    },
+    {
+      "account_id": "0b4ac48036a1f999932e7f740f82fbd1077a4e6e7e2884bd62dc263a08c0a42f",
+      "name": "carol",
+      "own_player_id": "a3e679c4cba0f858584306bb3fc4455b78308708d672c36e8c6cf44b46204c8e",
+      "public_key": "0351a7580833898ea1b183cbd7350a4099078c6ef1c1e18e970cd7683035f25e7d",
+      "uncompressed_public_key": "0451a7580833898ea1b183cbd7350a4099078c6ef1c1e18e970cd7683035f25e7d0110522712b0b5a7cff081685486984a94e6831edac46e7360fa9d834a7a81a1"
+    },
+    {
+      "account_id": "c9ce6e96675d0037220c7f8c89d15e034585121e35134e23808df4ffe50ef5ba",
+      "name": "server",
+      "own_player_id": "fa492fa747af36a8a61498a58273e702034b12f6fc77db9a38d520bc89672b47",
+      "public_key": "025b36890dacbd7c9a96bb74a1ee28b3d2d75b72e09a20ef25cf8e6fd8a9f0350d",
+      "uncompressed_public_key": "045b36890dacbd7c9a96bb74a1ee28b3d2d75b72e09a20ef25cf8e6fd8a9f0350d0e14bed8d4682a34d83538bdff5b96e89a6666ec0db5745d02fa1210072df75a"
+    }
+  ],
+  "labels": {
+    "account": "666f7274796d6d2e6163636f756e742e763100",
+    "own_player": "666f7274796d6d2e6f776e2d706c617965722e763100"
+  },
+  "usernames": [
+    {
+      "player_id": "e2286f7cd2dc62c15a00bdb33f6e78167112a99a9f072d066e4e9dd3fc9d1c25",
+      "suffix_length": 4,
+      "username": "tiptoeing-pinto-hng5"
+    },
+    {
+      "player_id": "e2286f7cd2dc62c15a00bdb33f6e78167112a99a9f072d066e4e9dd3fc9d1c25",
+      "suffix_length": 5,
+      "username": "tiptoeing-pinto-hng5f"
+    },
+    {
+      "player_id": "e2286f7cd2dc62c15a00bdb33f6e78167112a99a9f072d066e4e9dd3fc9d1c25",
+      "suffix_length": 16,
+      "username": "tiptoeing-pinto-hng5f0k0n1vszx35"
+    },
+    {
+      "player_id": "9cc056975c22de85464507a2c3b12ed9837736737e7c4c72fece0566d9491ba9",
+      "suffix_length": 4,
+      "username": "knightly-macaw-39r5"
+    },
+    {
+      "player_id": "9cc056975c22de85464507a2c3b12ed9837736737e7c4c72fece0566d9491ba9",
+      "suffix_length": 5,
+      "username": "knightly-macaw-39r5w"
+    },
+    {
+      "player_id": "9cc056975c22de85464507a2c3b12ed9837736737e7c4c72fece0566d9491ba9",
+      "suffix_length": 16,
+      "username": "knightly-macaw-39r5wf2mvj3qz970"
+    },
+    {
+      "player_id": "a3e679c4cba0f858584306bb3fc4455b78308708d672c36e8c6cf44b46204c8e",
+      "suffix_length": 4,
+      "username": "tranquil-eider-fhnc"
+    },
+    {
+      "player_id": "a3e679c4cba0f858584306bb3fc4455b78308708d672c36e8c6cf44b46204c8e",
+      "suffix_length": 5,
+      "username": "tranquil-eider-fhnc1"
+    },
+    {
+      "player_id": "a3e679c4cba0f858584306bb3fc4455b78308708d672c36e8c6cf44b46204c8e",
+      "suffix_length": 16,
+      "username": "tranquil-eider-fhnc1rjd32khbd45"
+    },
+    {
+      "player_id": "fa492fa747af36a8a61498a58273e702034b12f6fc77db9a38d520bc89672b47",
+      "suffix_length": 4,
+      "username": "luminous-yak-73n5"
+    },
+    {
+      "player_id": "fa492fa747af36a8a61498a58273e702034b12f6fc77db9a38d520bc89672b47",
+      "suffix_length": 5,
+      "username": "luminous-yak-73n5f"
+    },
+    {
+      "player_id": "fa492fa747af36a8a61498a58273e702034b12f6fc77db9a38d520bc89672b47",
+      "suffix_length": 16,
+      "username": "luminous-yak-73n5f2nc0smxfstj"
+    },
+    {
+      "player_id": "0000000000000000000000000000000000000000000000000000000000000000",
+      "suffix_length": 4,
+      "username": "able-aardvark-0000"
+    },
+    {
+      "player_id": "0000000000000000000000000000000000000000000000000000000000000000",
+      "suffix_length": 5,
+      "username": "able-aardvark-00000"
+    },
+    {
+      "player_id": "0000000000000000000000000000000000000000000000000000000000000000",
+      "suffix_length": 16,
+      "username": "able-aardvark-0000000000000000"
+    },
+    {
+      "player_id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "suffix_length": 4,
+      "username": "jesting-walleye-bpfs"
+    },
+    {
+      "player_id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "suffix_length": 5,
+      "username": "jesting-walleye-bpfsr"
+    },
+    {
+      "player_id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "suffix_length": 16,
+      "username": "jesting-walleye-bpfsr882b35ch9xt"
+    }
+  ]
+}
