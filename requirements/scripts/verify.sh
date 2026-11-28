@@ -13,6 +13,6 @@ if [ "${#files[@]}" -eq 0 ]; then
   exit 1
 fi
 
-exec dafny verify \
-  --allow-warnings \
-  "${files[@]}"
+# No --allow-warnings: Dafny reports `assume` and {:verify false} as warnings, and a spec that
+# skips its own proofs must fail.
+exec dafny verify "${files[@]}"
