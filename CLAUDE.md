@@ -10,6 +10,12 @@ Nothing runs on the host except `./bin/mise` and `docker`. No `node`, `npm`, `da
 - Need a new command? Add a mise task that runs it in the right container; don't run the tool on the host.
 - After changing a part's `mise.toml` or dependency manifest, rebuild its image: `docker compose build <service>`.
 
+## Always work in a worktree
+
+Several sessions work on this repo at once, so never switch branches or edit in the main checkout. Start each piece of work in its own worktree, `git worktree add .claude/worktrees/<name> -b <branch>`, and work there.
+
+`docker-compose.yml` pins `name: fortymm`, so in a worktree export `COMPOSE_PROJECT_NAME=<name>` before any `docker compose` or `./bin/mise run` command. Otherwise it builds and runs the main checkout's images and containers.
+
 ## Services
 
 - `check-requirements` — verifies the Dafny specs in `requirements/`. `./bin/mise run requirements:check`, `./bin/mise run requirements:dafny -- <args>`
