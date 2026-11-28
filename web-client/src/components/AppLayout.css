@@ -1,14 +1,16 @@
 /* The layout: the top bar across the top, then the sidebar and the screen.
 
    The phone/non-phone breakpoint is 768px, written here and nowhere else (a media query can't read
-   a custom property). Narrower is a phone: no sidebar and no toggle for it, the brand centred, and
-   the bottom bar, fixed to the bottom, as the navigation. At 768px and wider, the sidebar and its
-   toggle show, the brand sits on the left after the toggle, and the bottom bar is not displayed.
+   a custom property). Narrower is a phone: no sidebar and no toggle for it, the brand centred, the
+   device's avatar alone, and the bottom bar, fixed to the bottom, as the navigation. At 768px and
+   wider, the sidebar and its toggle show, the brand sits on the left after the toggle, the whole
+   username shows beside the avatar, and the bottom bar is not displayed.
    The top bar, the sidebar and the bottom bar read what the breakpoint decides from the custom
    properties set here, so no other file has a media query for it. */
 .app-layout {
   --app-layout-sidebar-display: none;
   --app-layout-brand-justify: center;
+  --app-layout-username-display: none;
   --app-layout-bottom-bar-display: flex;
   /* How far from the viewport's bottom the end of the page's content stays: on phones, above the
      bottom bar (its height and the safe area); wider, above the safe area alone. */
@@ -36,6 +38,7 @@ body:has(.app-layout) .fm-toast-region {
   .app-layout {
     --app-layout-sidebar-display: flex;
     --app-layout-brand-justify: flex-start;
+    --app-layout-username-display: inline;
     --app-layout-bottom-bar-display: none;
     --app-layout-bottom-clear: env(safe-area-inset-bottom, 0px);
 
