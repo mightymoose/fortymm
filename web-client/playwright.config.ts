@@ -4,6 +4,9 @@ import { defineConfig, devices } from '@playwright/test'
 // E2E_BASE_URL is set, Playwright starts its own Vite dev server inside that container.
 const baseURL = process.env.E2E_BASE_URL ?? 'http://localhost:5173'
 
+// The specs that need a secure context (see the chromium-secure-context project).
+const secureContextSpecs = ['**/device-key.spec.ts']
+
 export default defineConfig({
   testDir: './e2e',
   // One screenshot per name for every target and platform: the design system specs check the app
@@ -23,7 +26,29 @@ export default defineConfig({
     baseURL,
     trace: 'on-first-retry',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    {
+      name: 'chromium',
+      testIgnore: secureContextSpecs,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      // WebCrypto (the device key, src/device/device-key.ts) needs a secure context. localhost is
+      // one; the verify task's http://web-client:5173 is not, so Chromium is told to treat that
+      // origin as secure, as an https deployment is. Only full Chromium honours the flag (the
+      // default headless shell ignores it), and it renders differently from the headless shell
+      // the design system screenshots were taken in, so only the specs that need it run here.
+      name: 'chromium-secure-context',
+      testMatch: secureContextSpecs,
+      use: {
+        ...devices['Desktop Chrome'],
+        channel: 'chromium',
+        launchOptions: {
+          args: [`--unsafely-treat-insecure-origin-as-secure=${new URL(baseURL).origin}`],
+        },
+      },
+    },
+  ],
   // Point at a running dev server (the verify task sets E2E_BASE_URL), or start one here.
   webServer: process.env.E2E_BASE_URL
     ? undefined
