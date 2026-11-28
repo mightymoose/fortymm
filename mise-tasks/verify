@@ -24,10 +24,13 @@ in_api() { docker compose run --rm --no-deps api "$@"; }
 in_core() { docker compose run --rm --build core "$@"; }
 # Not one of the dev servers, so dev doesn't build it: build it here.
 in_journeys() { docker compose run --rm --no-deps --build journeys "$@"; }
-# The journeys run against the built web client: rebuild it first, in case dev was already running.
-run_journeys() {
-  docker compose up --detach --wait --build web-client-nginx >&2 && in_journeys npx playwright test
+# The e2e tests and journeys run against the built web client: rebuild it first, in case dev was
+# already running or the source changed since.
+nginx_up() { docker compose up --detach --wait --build web-client-nginx >&2; }
+run_e2e() {
+  nginx_up && in_web_client -e E2E_BASE_URL=http://web-client-nginx:5173 web-client npx playwright test
 }
+run_journeys() { nginx_up && in_journeys npx playwright test; }
 # oasdiff: does api/openapi.json break clients of the spec on main, as of where this branch split off?
 api_breaking() {
   local base
@@ -49,8 +52,8 @@ check typecheck in_web_client web-client npm run typecheck
 check unit      in_web_client web-client npm test
 # Drift: the committed src/api/generated.ts must match what orval generates from api/openapi.json.
 check api-client-drift in_web_client -e ORVAL_TARGET=/tmp/generated.ts web-client sh -c 'npx orval >/dev/null && diff -u src/api/generated.ts /tmp/generated.ts && echo "generated.ts is current" || { echo "src/api/generated.ts is stale: run ./bin/mise run web-client:api-client" >&2; exit 1; }'
-# The tests reach the running dev server by its compose service name.
-check e2e       in_web_client -e E2E_BASE_URL=http://web-client:5173 web-client npx playwright test
+# The web client's own pages, built and on nginx, against the real api (not the dev server's mocks).
+check e2e       run_e2e
 # The whole stack in a browser: web client, its /api proxy, the api, and the core on both sides.
 check journeys-typecheck in_journeys npm run typecheck
 check journeys  run_journeys

@@ -1,7 +1,9 @@
 import { defineConfig, devices } from '@playwright/test'
 
-// Runs in the web-client container (see mise-tasks/web-client/e2e and mise-tasks/verify). Unless
-// E2E_BASE_URL is set, Playwright starts its own Vite dev server inside that container.
+// Runs in the web-client container (see mise-tasks/web-client/e2e and mise-tasks/verify), against a
+// production build and the real api: never the dev server, whose msw mocks would answer instead.
+// Unless E2E_BASE_URL is set, Playwright builds the app and serves it with `vite preview` inside
+// that container, which proxies /api to the api service.
 const baseURL = process.env.E2E_BASE_URL ?? 'http://localhost:5173'
 
 // The specs that need a secure context (see the chromium-secure-context project).
@@ -34,7 +36,7 @@ export default defineConfig({
     },
     {
       // WebCrypto (the device key, src/device/device-key.ts) needs a secure context. localhost is
-      // one; the verify task's http://web-client:5173 is not, so Chromium is told to treat that
+      // one; the verify task's http://web-client-nginx:5173 is not, so Chromium is told to treat that
       // origin as secure, as an https deployment is. Only full Chromium honours the flag (the
       // default headless shell ignores it), and it renders differently from the headless shell
       // the design system screenshots were taken in, so only the specs that need it run here.
@@ -49,8 +51,16 @@ export default defineConfig({
       },
     },
   ],
-  // Point at a running dev server (the verify task sets E2E_BASE_URL), or start one here.
+  // Point at a running build (the verify task sets E2E_BASE_URL to web-client-nginx), or build and
+  // serve one here. The build goes to /tmp, not the bind-mounted dist/. No typecheck: verify has its
+  // own. Building (with the core's wasm) takes longer than Playwright's default minute.
   webServer: process.env.E2E_BASE_URL
     ? undefined
-    : { command: 'npm run dev', url: baseURL, reuseExistingServer: !process.env.CI },
+    : {
+        command:
+          'npx vite build --outDir /tmp/e2e-build --emptyOutDir && npx vite preview --outDir /tmp/e2e-build',
+        url: baseURL,
+        timeout: 180_000,
+        reuseExistingServer: !process.env.CI,
+      },
 })
