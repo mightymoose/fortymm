@@ -6,6 +6,15 @@ rust-version = "1.100"
 description = "FortyMM shared core, compiled into the api (Python) and the web client (WebAssembly)"
 publish = false
 
+[dependencies]
+# SHA-256 for every computed id, and P-256 point arithmetic to check and compress the public key
+# each platform exports. Pure Rust, so every build (wasm included) hashes for itself.
+sha2 = { version = "0.10", default-features = false }
+p256 = { version = "0.13", default-features = false, features = ["arithmetic"] }
+
+[dev-dependencies]
+serde_json = "1"
+
 # The bindings: one crate per host. `cargo test` and `cargo build` without -p act on the
 # library alone; core/Dockerfile's wasm and python stages build the bindings.
 [workspace]

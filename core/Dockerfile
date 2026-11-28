@@ -23,14 +23,17 @@ RUN /app/bin/mise exec -- cargo fetch --locked
 ENV CARGO_TARGET_DIR=/opt/core-target
 CMD ["cargo", "test", "--locked", "--workspace"]
 
-# The web client's package (wasm-bindgen glue, .wasm and .d.ts) in /out/pkg. web-client/Dockerfile
-# copies it in through the core-wasm build context (docker-compose.yml).
+# The web client's package (wasm-bindgen glue, .wasm and .d.ts) in /out/pkg, with the golden
+# vectors beside them for the web client's tests. web-client/Dockerfile copies it in through the
+# core-wasm build context (docker-compose.yml).
 FROM dev AS wasm
 RUN /app/bin/mise exec -- wasm-pack build bindings/wasm --release --target web --out-dir /out/pkg \
- && rm /out/pkg/.gitignore
+ && rm /out/pkg/.gitignore \
+ && cp vectors/vectors.json /out/pkg/vectors.json
 
-# The api's wheel in /out/wheels. api/Dockerfile copies it in through the core-python build
-# context (docker-compose.yml).
+# The api's wheel in /out/wheels, and the golden vectors in /out/vectors.json for the api's
+# tests. api/Dockerfile copies them in through the core-python build context (docker-compose.yml).
 FROM dev AS python
 RUN /app/bin/mise exec -- maturin build --locked --release \
-      --manifest-path bindings/python/Cargo.toml --out /out/wheels
+      --manifest-path bindings/python/Cargo.toml --out /out/wheels \
+ && cp vectors/vectors.json /out/vectors.json

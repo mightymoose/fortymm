@@ -26,4 +26,6 @@ RUN /app/bin/mise exec -- uv sync --locked --no-install-project
 # image is rebuilt.
 COPY --from=core-python /out/wheels /tmp/core-wheels
 RUN /app/bin/mise exec -- uv pip install --no-deps /tmp/core-wheels/*.whl && rm -rf /tmp/core-wheels
+# The core's golden vectors, which tests/test_core.py replays through the module.
+COPY --from=core-python /out/vectors.json /opt/fortymm-core/vectors.json
 CMD ["fastapi", "dev", "app/main.py", "--host", "0.0.0.0", "--port", "8000"]
