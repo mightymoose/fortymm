@@ -1,12 +1,12 @@
 import type { Locator, Page } from "@playwright/test";
 
-export class HomePage {
+export class DashboardPage {
   private readonly page: Page;
   public readonly heading: Locator;
 
   constructor(page: Page) {
     this.page = page;
-    this.heading = page.getByRole('heading', { level: 1, name: 'FortyMM' });
+    this.heading = page.getByRole('heading', { level: 1, name: 'Dashboard' });
   }
 
   async goto() {

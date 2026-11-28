@@ -3,9 +3,101 @@ import { AppPage } from './App.page.tsx'
 import { it } from './setupTests.ts'
 
 describe('App', () => {
-  it('shows the home screen at /', async () => {
+  it('shows the dashboard at /', async () => {
     const app = await AppPage.render('/')
-    expect(app.home.heading).toBeInTheDocument()
+    expect(app.dashboard.heading).toBeInTheDocument()
+  })
+
+  it('shows the matches list at /matches', async () => {
+    const app = await AppPage.render('/matches')
+    expect(app.matches.heading).toBeInTheDocument()
+  })
+
+  it('shows the new match screen at /matches/new', async () => {
+    const app = await AppPage.render('/matches/new')
+    expect(app.newMatch.heading).toBeInTheDocument()
+  })
+
+  it('shows the user list at /users', async () => {
+    const app = await AppPage.render('/users')
+    expect(app.users.heading).toBeInTheDocument()
+  })
+
+  it('shows the admin screen at /admin', async () => {
+    const app = await AppPage.render('/admin')
+    expect(app.admin.heading).toBeInTheDocument()
+  })
+
+  it('shows the settings screen at /settings', async () => {
+    const app = await AppPage.render('/settings')
+    expect(app.settings.heading).toBeInTheDocument()
+  })
+
+  describe('layout', () => {
+    it('shows a screen inside the layout’s <main>', async () => {
+      const app = await AppPage.render('/matches')
+      expect(await app.layout.findMain()).toContainElement(app.matches.heading)
+    })
+
+    it('collapses the sidebar from the top bar’s toggle', async ({ user }) => {
+      const app = await AppPage.render('/')
+      await user.click(await app.layout.findSidebarToggle())
+      expect(await app.layout.findSidebarToggle()).toHaveAttribute('aria-expanded', 'false')
+    })
+
+    it('expands the sidebar again from the toggle', async ({ user }) => {
+      const app = await AppPage.render('/')
+      await user.click(await app.layout.findSidebarToggle())
+      await user.click(await app.layout.findSidebarToggle())
+      expect(await app.layout.findSidebarToggle()).toHaveAttribute('aria-expanded', 'true')
+    })
+
+    it('keeps the sidebar collapsed from page to page', async ({ user }) => {
+      const app = await AppPage.render('/')
+      await user.click(await app.layout.findSidebarToggle())
+      await user.click(await app.layout.findSidebarLink('Users'))
+      await app.users.findHeading()
+      expect(await app.layout.findSidebarToggle()).toHaveAttribute('aria-expanded', 'false')
+    })
+
+    it.for([
+      { name: 'Matches', screen: 'matches' },
+      { name: 'Users', screen: 'users' },
+      { name: 'Admin', screen: 'admin' },
+      { name: 'Settings', screen: 'settings' },
+    ] as const)('goes to $name from the sidebar', async ({ name, screen }, { user }) => {
+      const app = await AppPage.render('/')
+      await user.click(await app.layout.findSidebarLink(name))
+      expect(await app[screen].findHeading()).toBeInTheDocument()
+    })
+
+    it('goes to the dashboard from the sidebar', async ({ user }) => {
+      const app = await AppPage.render('/settings')
+      await user.click(await app.layout.findSidebarLink('Dashboard'))
+      expect(await app.dashboard.findHeading()).toBeInTheDocument()
+    })
+
+    it('goes to the dashboard from the top bar’s brand', async ({ user }) => {
+      const app = await AppPage.render('/settings')
+      await user.click(await app.layout.findBrand())
+      expect(await app.dashboard.findHeading()).toBeInTheDocument()
+    })
+
+    it('goes to the new match screen from the bottom bar', async ({ user }) => {
+      const app = await AppPage.render('/')
+      await user.click(await app.layout.findBottomBarLink('New match'))
+      expect(await app.newMatch.findHeading()).toBeInTheDocument()
+    })
+
+    it('leaves the design system boards out of the layout', async () => {
+      const app = await AppPage.render('/design-system')
+      expect(app.layout.sidebar()).toBeNull()
+    })
+
+    it('leaves the health screen out of the layout', async () => {
+      const app = await AppPage.render('/health')
+      expect(app.layout.sidebar()).toBeNull()
+    })
   })
 
   it('shows the health screen at /health', async () => {
@@ -21,7 +113,7 @@ describe('App', () => {
   it('goes home from the not-found screen', async ({ user }) => {
     const app = await AppPage.render('/no-such-page')
     await user.click(app.notFound.homeLink)
-    expect(await app.home.findHeading()).toBeInTheDocument()
+    expect(await app.dashboard.findHeading()).toBeInTheDocument()
   })
 
   describe('design system', () => {

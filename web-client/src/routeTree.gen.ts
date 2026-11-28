@@ -9,8 +9,12 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as IndexRouteImport } from './routes/index'
+import { Route as AppRouteImport } from './routes/_app'
 import { Route as HealthRouteImport } from './routes/health'
+import { Route as AppIndexRouteImport } from './routes/_app/index'
+import { Route as AppAdminRouteImport } from './routes/_app/admin'
+import { Route as AppSettingsRouteImport } from './routes/_app/settings'
+import { Route as AppUsersRouteImport } from './routes/_app/users'
 import { Route as DesignSystemIndexRouteImport } from './routes/design-system/index'
 import { Route as DesignSystemContainersRouteImport } from './routes/design-system/containers'
 import { Route as DesignSystemFormsRouteImport } from './routes/design-system/forms'
@@ -19,16 +23,37 @@ import { Route as DesignSystemMoreRouteImport } from './routes/design-system/mor
 import { Route as DesignSystemOverlaysRouteImport } from './routes/design-system/overlays'
 import { Route as DesignSystemRolesRouteImport } from './routes/design-system/roles'
 import { Route as DesignSystemStatesRouteImport } from './routes/design-system/states'
+import { Route as AppMatchesIndexRouteImport } from './routes/_app/matches/index'
+import { Route as AppMatchesNewRouteImport } from './routes/_app/matches/new'
 
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const AppRoute = AppRouteImport.update({
+  id: '/_app',
   getParentRoute: () => rootRouteImport,
 } as any)
 const HealthRoute = HealthRouteImport.update({
   id: '/health',
   path: '/health',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AppIndexRoute = AppIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAdminRoute = AppAdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSettingsRoute = AppSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppUsersRoute = AppUsersRouteImport.update({
+  id: '/users',
+  path: '/users',
+  getParentRoute: () => AppRoute,
 } as any)
 const DesignSystemIndexRoute = DesignSystemIndexRouteImport.update({
   id: '/design-system/',
@@ -70,10 +95,23 @@ const DesignSystemStatesRoute = DesignSystemStatesRouteImport.update({
   path: '/design-system/states',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppMatchesIndexRoute = AppMatchesIndexRouteImport.update({
+  id: '/matches/',
+  path: '/matches/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppMatchesNewRoute = AppMatchesNewRouteImport.update({
+  id: '/matches/new',
+  path: '/matches/new',
+  getParentRoute: () => AppRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
+  '/': typeof AppIndexRoute
   '/health': typeof HealthRoute
+  '/admin': typeof AppAdminRoute
+  '/settings': typeof AppSettingsRoute
+  '/users': typeof AppUsersRoute
   '/design-system/containers': typeof DesignSystemContainersRoute
   '/design-system/forms': typeof DesignSystemFormsRoute
   '/design-system/match': typeof DesignSystemMatchRoute
@@ -82,10 +120,14 @@ export interface FileRoutesByFullPath {
   '/design-system/roles': typeof DesignSystemRolesRoute
   '/design-system/states': typeof DesignSystemStatesRoute
   '/design-system/': typeof DesignSystemIndexRoute
+  '/matches/new': typeof AppMatchesNewRoute
+  '/matches/': typeof AppMatchesIndexRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute
   '/health': typeof HealthRoute
+  '/admin': typeof AppAdminRoute
+  '/settings': typeof AppSettingsRoute
+  '/users': typeof AppUsersRoute
   '/design-system/containers': typeof DesignSystemContainersRoute
   '/design-system/forms': typeof DesignSystemFormsRoute
   '/design-system/match': typeof DesignSystemMatchRoute
@@ -93,12 +135,18 @@ export interface FileRoutesByTo {
   '/design-system/overlays': typeof DesignSystemOverlaysRoute
   '/design-system/roles': typeof DesignSystemRolesRoute
   '/design-system/states': typeof DesignSystemStatesRoute
+  '/': typeof AppIndexRoute
   '/design-system': typeof DesignSystemIndexRoute
+  '/matches/new': typeof AppMatchesNewRoute
+  '/matches': typeof AppMatchesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
+  '/_app': typeof AppRouteWithChildren
   '/health': typeof HealthRoute
+  '/_app/admin': typeof AppAdminRoute
+  '/_app/settings': typeof AppSettingsRoute
+  '/_app/users': typeof AppUsersRoute
   '/design-system/containers': typeof DesignSystemContainersRoute
   '/design-system/forms': typeof DesignSystemFormsRoute
   '/design-system/match': typeof DesignSystemMatchRoute
@@ -106,13 +154,19 @@ export interface FileRoutesById {
   '/design-system/overlays': typeof DesignSystemOverlaysRoute
   '/design-system/roles': typeof DesignSystemRolesRoute
   '/design-system/states': typeof DesignSystemStatesRoute
+  '/_app/': typeof AppIndexRoute
   '/design-system/': typeof DesignSystemIndexRoute
+  '/_app/matches/new': typeof AppMatchesNewRoute
+  '/_app/matches/': typeof AppMatchesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/health'
+    | '/admin'
+    | '/settings'
+    | '/users'
     | '/design-system/containers'
     | '/design-system/forms'
     | '/design-system/match'
@@ -121,10 +175,14 @@ export interface FileRouteTypes {
     | '/design-system/roles'
     | '/design-system/states'
     | '/design-system/'
+    | '/matches/new'
+    | '/matches/'
   fileRoutesByTo: FileRoutesByTo
   to:
-    | '/'
     | '/health'
+    | '/admin'
+    | '/settings'
+    | '/users'
     | '/design-system/containers'
     | '/design-system/forms'
     | '/design-system/match'
@@ -132,11 +190,17 @@ export interface FileRouteTypes {
     | '/design-system/overlays'
     | '/design-system/roles'
     | '/design-system/states'
+    | '/'
     | '/design-system'
+    | '/matches/new'
+    | '/matches'
   id:
     | '__root__'
-    | '/'
+    | '/_app'
     | '/health'
+    | '/_app/admin'
+    | '/_app/settings'
+    | '/_app/users'
     | '/design-system/containers'
     | '/design-system/forms'
     | '/design-system/match'
@@ -144,11 +208,14 @@ export interface FileRouteTypes {
     | '/design-system/overlays'
     | '/design-system/roles'
     | '/design-system/states'
+    | '/_app/'
     | '/design-system/'
+    | '/_app/matches/new'
+    | '/_app/matches/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
+  AppRoute: typeof AppRouteWithChildren
   HealthRoute: typeof HealthRoute
   DesignSystemContainersRoute: typeof DesignSystemContainersRoute
   DesignSystemFormsRoute: typeof DesignSystemFormsRoute
@@ -162,11 +229,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/': {
-      id: '/'
-      path: '/'
+    '/_app': {
+      id: '/_app'
+      path: ''
       fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+      preLoaderRoute: typeof AppRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/health': {
@@ -175,6 +242,34 @@ declare module '@tanstack/react-router' {
       fullPath: '/health'
       preLoaderRoute: typeof HealthRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_app/': {
+      id: '/_app/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof AppIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/admin': {
+      id: '/_app/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AppAdminRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/settings': {
+      id: '/_app/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof AppSettingsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/users': {
+      id: '/_app/users'
+      path: '/users'
+      fullPath: '/users'
+      preLoaderRoute: typeof AppUsersRouteImport
+      parentRoute: typeof AppRoute
     }
     '/design-system/': {
       id: '/design-system/'
@@ -232,11 +327,45 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DesignSystemStatesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/matches/': {
+      id: '/_app/matches/'
+      path: '/matches'
+      fullPath: '/matches/'
+      preLoaderRoute: typeof AppMatchesIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/matches/new': {
+      id: '/_app/matches/new'
+      path: '/matches/new'
+      fullPath: '/matches/new'
+      preLoaderRoute: typeof AppMatchesNewRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
+interface AppRouteChildren {
+  AppAdminRoute: typeof AppAdminRoute
+  AppSettingsRoute: typeof AppSettingsRoute
+  AppUsersRoute: typeof AppUsersRoute
+  AppIndexRoute: typeof AppIndexRoute
+  AppMatchesNewRoute: typeof AppMatchesNewRoute
+  AppMatchesIndexRoute: typeof AppMatchesIndexRoute
+}
+
+const AppRouteChildren: AppRouteChildren = {
+  AppAdminRoute: AppAdminRoute,
+  AppSettingsRoute: AppSettingsRoute,
+  AppUsersRoute: AppUsersRoute,
+  AppIndexRoute: AppIndexRoute,
+  AppMatchesNewRoute: AppMatchesNewRoute,
+  AppMatchesIndexRoute: AppMatchesIndexRoute,
+}
+
+const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
-  IndexRoute: IndexRoute,
+  AppRoute: AppRouteWithChildren,
   HealthRoute: HealthRoute,
   DesignSystemContainersRoute: DesignSystemContainersRoute,
   DesignSystemFormsRoute: DesignSystemFormsRoute,

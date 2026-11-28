@@ -1,0 +1,65 @@
+/* The layout: the top bar across the top, then the sidebar and the screen.
+
+   The phone/non-phone breakpoint is 768px, written here and nowhere else (a media query can't read
+   a custom property). Narrower is a phone: no sidebar and no toggle for it, the brand centred, and
+   the bottom bar, fixed to the bottom, as the navigation. At 768px and wider, the sidebar and its
+   toggle show, the brand sits on the left after the toggle, and the bottom bar is not displayed.
+   The top bar, the sidebar and the bottom bar read what the breakpoint decides from the custom
+   properties set here, so no other file has a media query for it. */
+.app-layout {
+  --app-layout-sidebar-display: none;
+  --app-layout-brand-justify: center;
+  --app-layout-bottom-bar-display: flex;
+  /* How far from the viewport's bottom the end of the page's content stays: on phones, above the
+     bottom bar (its height and the safe area); wider, above the safe area alone. */
+  --app-layout-bottom-bar-height: 56px;
+  --app-layout-bottom-clear: calc(
+    var(--app-layout-bottom-bar-height) + env(safe-area-inset-bottom, 0px)
+  );
+
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    'top'
+    'content';
+  min-height: 100svh;
+  background: var(--bg-app);
+}
+/* Toasts (the kit's .fm-toast-region, 24px from the viewport's bottom: the new-version toast,
+   AppUpdate's, and any other, wherever it is rendered): on phones, above the bottom bar, so
+   neither covers the other; wider, above the safe area. */
+body:has(.app-layout) .fm-toast-region {
+  bottom: calc(24px + 56px + env(safe-area-inset-bottom, 0px));
+}
+@media (min-width: 768px) {
+  .app-layout {
+    --app-layout-sidebar-display: flex;
+    --app-layout-brand-justify: flex-start;
+    --app-layout-bottom-bar-display: none;
+    --app-layout-bottom-clear: env(safe-area-inset-bottom, 0px);
+
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      'top top'
+      'side content';
+  }
+  body:has(.app-layout) .fm-toast-region {
+    bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  }
+}
+.app-layout > .top-bar {
+  grid-area: top;
+}
+.app-layout > .sidebar {
+  grid-area: side;
+}
+/* The screen: the rest of the page, on the page's bg-app, with the app's margins. Its top edge is
+   the divider below the top bar, and the sidebar's right edge the one beside it, so the top bar
+   and the sidebar meet as one panel with no line between them. */
+.app-layout__content {
+  grid-area: content;
+  min-width: 0;
+  border-top: 1px solid var(--border-subtle);
+  padding: var(--s-6) var(--s-4) calc(var(--s-6) + var(--app-layout-bottom-clear, 0px));
+}

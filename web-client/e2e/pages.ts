@@ -2,4 +2,5 @@
 // directory). Keep them importing only types from @playwright/test: journeys has its own copy.
 export { DevicePage } from './device.page.ts'
 export { HealthPage } from './health.page.ts'
-export { HomePage } from './home.page.ts'
+export { AppLayoutPage } from './app-layout.page.ts'
+export { DashboardPage } from './dashboard.page.ts'
