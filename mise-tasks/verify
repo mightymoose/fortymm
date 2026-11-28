@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Start the dev servers, then run lint, typecheck and tests for the web client and api, and the e2e tests and journeys against the servers"
+#MISE description="Start the dev servers, then run lint, typecheck and tests for the web client and api, the e2e tests and journeys against the servers, and the Dafny requirements"
 # Host-side. Runs every check even if one fails, then exits non-zero if any did.
 # Leaves the dev servers as it found them: stops them at the end only if it started them.
 set -uo pipefail
@@ -66,6 +66,8 @@ check api-breaking  api_breaking
 check core-lint     in_core cargo clippy --locked --workspace --all-targets -- -D warnings
 check core-format   in_core cargo fmt --check
 check core-test     in_core cargo test --locked --workspace
+# The Dafny requirements in requirements/. Not a dev server, so dev doesn't build its image: build it here.
+check requirements  docker compose run --rm --build check-requirements
 
 if [ ${#failed[@]} -gt 0 ]; then
   echo "verify failed: ${failed[*]}" >&2
